@@ -7,6 +7,7 @@ import {
   useCallback,
 } from 'react';
 import styles from './UserListComponent.module.css';
+import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
 import { useCache } from '../utils/CacheContext';
 import { RewardNameContext } from './RewardNameContext';
@@ -16,7 +17,7 @@ const UserListComponent: FunctionComponent = () => {
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const fetchCalled = useRef(false); // Ref to track if fetchUsers has been called
-  const { cache } = useCache();
+  const { cache, setCache } = useCache();
 
   const fetchUsers = useCallback(async () => {
     //Load users from Cache or parameter
@@ -24,11 +25,14 @@ const UserListComponent: FunctionComponent = () => {
     setError(null);
 
     try {
-      const allUsers = cache['allUsers'] as User[];
+      const cachedUsers = cache['allUsers'];
+      let allUsers: User[];
 
-      if (!allUsers || allUsers.length === 0) {
-        setLoading(false);
-        return;
+      if (Array.isArray(cachedUsers)) {
+        allUsers = cachedUsers as User[];
+      } else {
+        allUsers = await getUsers();
+        setCache('allUsers', allUsers);
       }
 
       // Fetch wallets for each user
@@ -70,7 +74,7 @@ const UserListComponent: FunctionComponent = () => {
     } finally {
       setLoading(false);
     }
-  }, [cache]);
+  }, [cache, setCache]);
 
   useEffect(() => {
     if (!fetchCalled.current) {
