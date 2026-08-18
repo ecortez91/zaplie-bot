@@ -71,8 +71,6 @@ const ConnectionsSetting: FunctionComponent = () => {
     }
     setLoading(true);
     try {
-      // forceRefresh: acquireTokenSilent can serve a cached, already-expired
-      // idToken; the backend verifies exp and would reject it with a 401.
       const tokenResponse = await instance.acquireTokenSilent({
         ...loginRequest,
         account,
@@ -83,8 +81,7 @@ const ConnectionsSetting: FunctionComponent = () => {
         return;
       }
       setIdentities(mine);
-    } catch (error) {
-      console.error('Error fetching connections:', error);
+    } catch {
       if (requestId !== latestRequestRef.current) {
         return;
       }
@@ -113,8 +110,7 @@ const ConnectionsSetting: FunctionComponent = () => {
       });
       const authorizeUrl = await getGithubAuthorizeUrl(tokenResponse.idToken);
       window.location.href = authorizeUrl;
-    } catch (error) {
-      console.error('Error starting GitHub connect:', error);
+    } catch {
       toast.error('Could not start the GitHub connection.');
       setConnecting(false);
     }
@@ -151,7 +147,39 @@ const ConnectionsSetting: FunctionComponent = () => {
           </span>
 
           <div className={connectionStyles.providerCopy}>
-            <h3 className={connectionStyles.providerName}>GitHub</h3>
+            <div className={connectionStyles.providerTitleRow}>
+              <h3 className={connectionStyles.providerName}>GitHub</h3>
+              {loading ? (
+                <span
+                  className={`${connectionStyles.badge} ${connectionStyles.badgeNeutral}`}
+                >
+                  Checking…
+                </span>
+              ) : loadError ? (
+                <span
+                  className={`${connectionStyles.badge} ${connectionStyles.badgeDanger}`}
+                >
+                  Unavailable
+                </span>
+              ) : githubIdentity ? (
+                <span
+                  className={`${connectionStyles.badge} ${connectionStyles.badgeConnected}`}
+                >
+                  <img
+                    src={CheckmarkIcon}
+                    alt=""
+                    className={connectionStyles.badgeIcon}
+                  />
+                  Connected
+                </span>
+              ) : (
+                <span
+                  className={`${connectionStyles.badge} ${connectionStyles.badgeNeutral}`}
+                >
+                  Not connected
+                </span>
+              )}
+            </div>
             {loading ? (
               <div className={connectionStyles.loadingLines} aria-hidden="true">
                 <span className={connectionStyles.loadingLine} />
@@ -198,16 +226,7 @@ const ConnectionsSetting: FunctionComponent = () => {
             >
               Retry
             </button>
-          ) : githubIdentity ? (
-            <span className={connectionStyles.connectedBadge}>
-              <img
-                src={CheckmarkIcon}
-                alt=""
-                className={connectionStyles.connectedIcon}
-              />
-              Connected
-            </span>
-          ) : (
+          ) : githubIdentity ? null : (
             <button
               type="button"
               onClick={handleConnect}
