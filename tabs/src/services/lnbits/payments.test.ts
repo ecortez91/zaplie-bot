@@ -147,15 +147,76 @@ describe('lnbits payments', () => {
     test('posts the recipient user id, never a wallet key', async () => {
       mockApiRequest.mockResolvedValueOnce({ payment_hash: 'hash-1' });
 
-      await sendZap('user-2', 21, 'Nice work');
+      await sendZap('user-2', 21, 'Nice work', 'zap-request-00000001');
 
       expect(mockApiRequest).toHaveBeenCalledWith('/zaps', {
         method: 'POST',
+        headers: { 'Idempotency-Key': 'zap-request-00000001' },
         body: JSON.stringify({
           recipientUserId: 'user-2',
           amount: 21,
           memo: 'Nice work',
         }),
+      });
+    });
+
+    // The generated key has to satisfy the gateway's own key pattern, or every
+    // zap the portal sends without an explicit key would be rejected with 400.
+    // jsdom has no Web Crypto, so each source is stubbed in turn.
+    describe('generated keys', () => {
+      const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+      const stubCrypto = (value: unknown) =>
+        Object.defineProperty(globalThis, 'crypto', {
+          value,
+          configurable: true,
+          writable: true,
+        });
+
+      afterEach(() => {
+        if (original) Object.defineProperty(globalThis, 'crypto', original);
+        else delete (globalThis as { crypto?: unknown }).crypto;
+      });
+
+      const sentKey = () =>
+        (mockApiRequest.mock.calls[0][1] as { headers: Record<string, string> })
+          .headers['Idempotency-Key'];
+
+      test('prefers randomUUID and the gateway accepts it', async () => {
+        stubCrypto({
+          randomUUID: () => '123e4567-e89b-12d3-a456-426614174000',
+        });
+        mockApiRequest.mockResolvedValueOnce({ payment_hash: 'hash-1' });
+
+        await sendZap('user-2', 21, 'Nice work');
+
+        expect(sentKey()).toBe('123e4567-e89b-12d3-a456-426614174000');
+        expect(sentKey()).toMatch(/^[A-Za-z0-9._~-]{16,128}$/);
+      });
+
+      test('falls back to random bytes the gateway accepts', async () => {
+        stubCrypto({
+          getRandomValues: (bytes: Uint8Array) => {
+            bytes.forEach((_, index) => {
+              bytes[index] = index;
+            });
+            return bytes;
+          },
+        });
+        mockApiRequest.mockResolvedValueOnce({ payment_hash: 'hash-1' });
+
+        await sendZap('user-2', 21, 'Nice work');
+
+        expect(sentKey()).toBe('000102030405060708090a0b0c0d0e0f');
+        expect(sentKey()).toMatch(/^[A-Za-z0-9._~-]{16,128}$/);
+      });
+
+      test('refuses to mint a key with no Web Crypto', async () => {
+        stubCrypto(undefined);
+
+        await expect(sendZap('user-2', 21, 'Nice work')).rejects.toThrow(
+          'no Web Crypto',
+        );
+        expect(mockApiRequest).not.toHaveBeenCalled();
       });
     });
   });

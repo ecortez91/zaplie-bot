@@ -92,15 +92,35 @@ const payInvoice = async (
     },
   );
 
+// randomUUID only exists in a secure context, so fall back to random bytes
+// rather than throw on a path that moves money. Both shapes satisfy the
+// gateway's own key pattern; a weaker source is refused outright, because a
+// guessable key would let one zap replay another's recorded result.
+const newIdempotencyKey = (): string => {
+  const webCrypto = globalThis.crypto;
+  if (typeof webCrypto?.randomUUID === 'function') {
+    return webCrypto.randomUUID();
+  }
+  if (typeof webCrypto?.getRandomValues === 'function') {
+    const bytes = webCrypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(
+      '',
+    );
+  }
+  throw new Error('Cannot generate a zap idempotency key: no Web Crypto');
+};
+
 // One call so the gateway picks the sender's Allowance wallet and the
 // recipient's Private wallet; the browser never learns either wallet key.
 const sendZap = async (
   recipientUserId: string,
   amount: number,
   memo: string,
+  idempotencyKey: string = newIdempotencyKey(),
 ): Promise<PaymentResult> =>
   apiRequest<PaymentResult>('/zaps', {
     method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify({ recipientUserId, amount, memo }),
   });
 
