@@ -14,12 +14,11 @@ const validId = (value) => typeof value === 'string' && ID_PATTERN.test(value);
 
 // Only a real JSON number is an amount. `Number()` would turn `true` into 1 and
 // `['5']` into 5, which are not integer amount inputs.
-const parseAmount = (value) => {
+const parseAmount = (value, maxSats) => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
     return null;
   }
-  const max = defaultService.maxZapAmountSats();
-  return value > 0 && value <= max ? value : null;
+  return value > 0 && value <= maxSats ? value : null;
 };
 
 // Pagination is validated, never clamped: a caller-supplied `10.5` or `1e3` is a
@@ -164,7 +163,7 @@ const createLnbitsRouter = ({
   }));
 
   router.post('/wallets/:walletId/invoices', asyncRoute(async (req, res) => {
-    const amount = parseAmount(req.body?.amount);
+    const amount = parseAmount(req.body?.amount, service.maxZapAmountSats());
     const memo = parseMemo(req.body?.memo);
     if (!validId(req.params.walletId) || amount === null || memo === null) {
       res.status(400).json({ error: 'invalid invoice request' });
@@ -200,7 +199,7 @@ const createLnbitsRouter = ({
   }));
 
   router.post('/zaps', asyncRoute(async (req, res) => {
-    const amount = parseAmount(req.body?.amount);
+    const amount = parseAmount(req.body?.amount, service.maxZapAmountSats());
     const memo = parseMemo(req.body?.memo);
     const idempotencyKey = req.get('Idempotency-Key');
     if (
