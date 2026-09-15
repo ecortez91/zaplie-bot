@@ -13,10 +13,11 @@ closing the gaps.
 
 === Unit Tests — Bot (repo root)
 
-- Framework: Jest 29 (`jest.config.ts` — note: only `clearMocks` is configured;
-  the ts-jest transform is not yet wired, and the root `npm test` script is
-  intentionally unwired)
-- Test files: `src/services/lnbitsService.test.ts`
+- Framework: Jest 29 with the `ts-jest` preset (`jest.config.ts`); `npm test`
+  runs the suite with coverage and CI enforces a coverage ratchet
+- Test files: `src/**/*.test.ts`, for example
+  `src/services/lnbitsService.test.ts`, `src/services/paymentExtra.test.ts`
+  and `src/commands/sendZapCommand.test.ts`
 - Run directly:
 
 [source,bash]
