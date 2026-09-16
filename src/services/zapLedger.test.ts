@@ -1,4 +1,4 @@
-import { expect, describe, test } from '@jest/globals';
+import { expect, describe, jest, test } from '@jest/globals';
 import { ZapLedger, zapKey } from './zapLedger';
 
 const key = (
@@ -70,17 +70,6 @@ describe('ZapLedger', () => {
     expect(ledger.tryAcquire(key('alice'))).toBe(false);
   });
 
-  test('an unknown entry does not expire, unlike a paid one', () => {
-    const ledger = new ZapLedger(-1); // any age is already past the TTL
-    ledger.tryAcquire(key('alice'));
-    ledger.markPaid(key('alice'), 'hash-alice');
-    ledger.tryAcquire(key('bob'));
-    ledger.markUnknown(key('bob'));
-
-    expect(ledger.get(key('alice'))).toBeUndefined();
-    expect(ledger.get(key('bob'))?.state).toBe('unknown');
-  });
-
   test('the same card id in two conversations does not collide', () => {
     const ledger = new ZapLedger();
     const inConvA = key('alice');
@@ -88,6 +77,23 @@ describe('ZapLedger', () => {
 
     expect(ledger.tryAcquire(inConvA)).toBe(true);
     expect(ledger.tryAcquire(inConvB)).toBe(true);
+  });
+
+  test('a missing tenant id still yields a stable key', () => {
+    expect(
+      zapKey({
+        tenantId: undefined,
+        conversationId: 'conv-1',
+        cardId: 'card-1',
+        recipientId: 'alice',
+      }),
+    ).toBe('no-tenant|conv-1|card-1|alice');
+  });
+
+  test('releasing a slot that was never acquired is a no-op', () => {
+    const ledger = new ZapLedger();
+    ledger.releaseIfProcessing(key('nobody'));
+    expect(ledger.get(key('nobody'))).toBeUndefined();
   });
 
   test('the same card id in two tenants does not collide', () => {
@@ -115,5 +121,43 @@ describe('ZapLedger', () => {
     const afterRestart = new ZapLedger();
     expect(afterRestart.get(key('alice'))).toBeUndefined();
     expect(afterRestart.tryAcquire(key('alice'))).toBe(true);
+  });
+});
+
+describe('ZapLedger over time', () => {
+  const twoDaysMs = 48 * 60 * 60 * 1000;
+
+  test('a paid slot stays locked no matter how old it is', () => {
+    const ledger = new ZapLedger();
+    ledger.tryAcquire(key('alice'));
+    ledger.markPaid(key('alice'), 'hash-alice');
+
+    // A zap card in a Teams thread can still be clicked days later, so the
+    // paid state must outlive any clock, not just a grace period.
+    const nowSpy = jest
+      .spyOn(Date, 'now')
+      .mockReturnValue(Date.now() + twoDaysMs);
+    try {
+      expect(ledger.get(key('alice'))?.state).toBe('paid');
+      expect(ledger.tryAcquire(key('alice'))).toBe(false);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  test('an unknown slot stays locked no matter how old it is', () => {
+    const ledger = new ZapLedger();
+    ledger.tryAcquire(key('bob'));
+    ledger.markUnknown(key('bob'));
+
+    const nowSpy = jest
+      .spyOn(Date, 'now')
+      .mockReturnValue(Date.now() + twoDaysMs);
+    try {
+      expect(ledger.get(key('bob'))?.state).toBe('unknown');
+      expect(ledger.tryAcquire(key('bob'))).toBe(false);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
