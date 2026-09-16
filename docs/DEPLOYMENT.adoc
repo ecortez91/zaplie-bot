@@ -148,11 +148,7 @@ Deploy `dist/` with Azure Functions Core Tools or your preferred pipeline
 | Bot
 
 | `LNBITS_INITIAL_ALLOWANCE`
-| Sats granted/topped-up to each user's Allowance wallet
-| Bot
-
-| `LNBITS_HOST_WALLET_ID`, `LNBITS_HOST_USER_ID`, `LNBITS_INKEY`
-| Source wallet for the scheduled allowance top-up
+| Sats granted to each user's Allowance wallet when it is created
 | Bot
 
 | `LNBITS_POINTS_LABEL`
@@ -216,10 +212,10 @@ Deploy `dist/` with Azure Functions Core Tools or your preferred pipeline
   and a clean deploy wipes them. The value depends on the App Service OS —
   `/home/data/zaplie` on Linux, `+D:\home\data\zaplie+` on Windows (the `home`
   share is the persistent one in both cases). Consumers: the portal backend's
-  `data.json` honours it as of this change; the bot's zap ledger and
-  weekly-allowance guard honour it in the durable bot-state work, and the
-  portal's remaining stores (identities, connections, pending rewards,
-  secrets, webhook keys, GitHub App credentials) follow with the portal work.
+  `data.json` honours it as of this change; the bot's zap ledger honours it
+  in the durable bot-state work, and the portal's remaining stores
+  (identities, connections, pending rewards, secrets, webhook keys, GitHub
+  App credentials) follow with the portal work.
   Set it now on both — a component that does not read it yet simply ignores it.
 | Bot, Portal backend
 
@@ -246,10 +242,11 @@ Complete these once per new environment, right after the first deployment:
   role (value `Zaplie.Admin`) to at least one user. The portal's
   org-configuration endpoints reject every write until a signed-in user
   carries this role.
-. *Prepare LNbits.* No extension is needed: the bot provisions users through
-  the core Users API, which requires an LNbits admin account. Create the host
-  (treasury) wallet that funds allowances and rewards. Copy its ids/keys into
-  `LNBITS_HOST_WALLET_ID`, `LNBITS_HOST_USER_ID`, `LNBITS_INKEY` and
+. *Prepare LNbits.* No extension is needed today (recurring allowance funding
+  through the LNbits allowance extension is tracked separately): the bot
+  provisions users through
+  the core Users API, which requires an LNbits admin account. Create the
+  treasury wallet that funds automation rewards and copy its admin key into
   `REWARDS_TREASURY_ADMINKEY`.
 . *Rotate the burned LNbits credentials.* Historic CI builds injected
   `REACT_APP_LNBITS_PASSWORD` and `REACT_APP_LNBITS_ADMINKEY` into the

@@ -36,7 +36,7 @@ the bot, then try again.
 === Where do received Zaps go?
 
 Into your *Private* wallet (visible on the Wallet tab). Zaps you send are drawn
-from your *Allowance* wallet, which is periodically topped up.
+from your *Allowance* wallet, which is funded when your account is created.
 
 === Can I withdraw my Sats?
 
