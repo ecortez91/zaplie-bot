@@ -52,7 +52,7 @@
                         },
                         {
                             "title": "Show Leaderboard",
-                            "description": "Show who has zapped the most recently"
+                            "description": "Show who has sent the most sats recently"
                         }
                     ]
                 }

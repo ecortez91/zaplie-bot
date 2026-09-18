@@ -160,9 +160,10 @@ Deploy `dist/` with Azure Functions Core Tools or your preferred pipeline
 | Bot, Tabs
 
 | `LEADERBOARD_WINDOW_DAYS`, `LEADERBOARD_TOP_N`
-| `show leaderboard` window in days (whole number, at least `1`, default
-  `7` like the portal) and rows shown (default `10`); an invalid value
-  makes the command reply "unavailable" and log the variable name
+| `show leaderboard` window in days (default `7` like the portal) and rows
+  shown (default `10`); each accepts a whole number from `1` to
+  `999999999`; an invalid value makes the command reply "unavailable" and
+  log the variable name
 | Bot
 
 | `REACT_APP_AAD_CLIENT_ID`, `REACT_APP_TENANT_ID`

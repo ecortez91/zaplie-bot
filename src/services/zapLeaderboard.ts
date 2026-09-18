@@ -93,8 +93,10 @@ const readWholeNumber = (
 };
 
 /**
- * Reads the leaderboard settings at call time so tests and operators can
- * change them without a restart. Invalid values throw so the command fails
+ * Reads the leaderboard settings at call time, so tests can vary them per
+ * case. A deployed change takes effect on the next process start, because
+ * the env files are loaded once at import. Invalid values throw so the
+ * command fails
  * closed instead of ranking with a silently corrected number. The window has
  * no "all time" option on purpose: LNbits returns at most 100 payments per
  * wallet, so an unbounded window would silently undercount.
