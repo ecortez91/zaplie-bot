@@ -8,6 +8,8 @@ const {
 } = require('./lnbitsUserDirectory');
 
 const TOKEN_CACHE_MS = 5 * 60 * 1000;
+// A stalled LNbits connection must not pin an Express request open for ever.
+const REQUEST_TIMEOUT_MS = 10 * 1000;
 const WALLET_CACHE_MS = 30 * 1000;
 const SENSITIVE_FIELD = /(adminkey|inkey|admin.?key|invoice.?key|password|preimage|secret|token)/i;
 
@@ -64,11 +66,20 @@ const lnbitsRequest = async (path, options = {}) => {
     headers.Authorization = `Bearer ${await getAccessToken(config)}`;
   }
 
-  const response = await fetch(`${config.nodeUrl}${path}`, {
-    method: options.method || 'GET',
-    headers,
-    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-  });
+  let response;
+  try {
+    response = await fetch(`${config.nodeUrl}${path}`, {
+      method: options.method || 'GET',
+      headers,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    });
+  } catch (error) {
+    if (error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      throw new LnbitsGatewayError('LNbits request timed out', 502);
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     if (!options.walletKey && !options.adminKey && response.status === 401) {

@@ -162,3 +162,17 @@ test('rejects malformed or excessive zap amounts before calling LNbits', async (
   assert.equal(response.status, 400);
   assert.equal(calls.length, callsBefore);
 });
+
+test('rejects non-numeric amounts that would otherwise coerce to a number', async () => {
+  for (const amount of [true, ['5'], '25', null, 25.5]) {
+    const callsBefore = calls.length;
+    const response = await request('/api/lnbits/zaps', {
+      method: 'POST',
+      token: 'valid-token',
+      body: { recipientUserId: 'user-2', amount, memo: 'coerced' },
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(calls.length, callsBefore);
+  }
+});

@@ -11,15 +11,17 @@ const BOLT11_PATTERN = /^ln[a-z0-9]+$/i;
 
 const validId = (value) => typeof value === 'string' && ID_PATTERN.test(value);
 
+// Only a real JSON number is an amount. `Number()` would turn `true` into 1 and
+// `['5']` into 5, which are not integer amount inputs.
 const parseAmount = (value) => {
-  const amount = Number(value);
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+    return null;
+  }
   const configuredMax = Number(process.env.REWARDS_MAX_AMOUNT_SATS);
   const max = Number.isSafeInteger(configuredMax) && configuredMax > 0
     ? configuredMax
     : 1_000_000;
-  return Number.isSafeInteger(amount) && amount > 0 && amount <= max
-    ? amount
-    : null;
+  return value > 0 && value <= max ? value : null;
 };
 
 const parseMemo = (value) =>
