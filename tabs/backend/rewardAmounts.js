@@ -26,14 +26,16 @@ const migrateRewardAmounts = (rewardAmounts) => {
 // another. Shared with the LNbits gateway's ZAP_MAX_AMOUNT_SATS.
 const positiveIntFromEnv = (name, fallback) => {
   const configured = process.env[name];
-  if (configured === undefined || configured === '') {
+  // Whitespace-only is unset, not malformed — matching src/services/envNumbers.ts
+  // in the bot. One variable set once on both apps cannot be valid for one and a
+  // startup failure for the other.
+  if (configured === undefined || configured.trim() === '') {
     return fallback;
   }
   // Decimal digits only: `Number()` would accept `0x10` and `1e3`, which are
   // not what an operator typing a sats ceiling meant.
-  const value = /^\d+$/.test(String(configured).trim())
-    ? Number.parseInt(String(configured).trim(), 10)
-    : NaN;
+  const trimmed = configured.trim();
+  const value = /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : NaN;
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer`);
   }

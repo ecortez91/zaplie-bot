@@ -194,74 +194,98 @@ test('rejects pagination values that are not plain integers', async () => {
 // REWARDS_MAX_AMOUNT_SATS bounds automated rewards only; reusing it here gave
 // this route a 1,000,000 default that contradicted its documented meaning.
 
+// Both cap variables are process-wide, so each case sets exactly the state it
+// describes and restores whatever the parent process had. Deleting an inherited
+// value would silently change every case that runs after it.
+const CAP_VARS = ['ZAP_MAX_AMOUNT_SATS', 'REWARDS_MAX_AMOUNT_SATS'];
+
+const withCaps = (caps, assertions) => {
+  const original = CAP_VARS.map((name) => [name, process.env[name]]);
+  try {
+    for (const name of CAP_VARS) {
+      delete process.env[name];
+    }
+    for (const [name, value] of Object.entries(caps)) {
+      process.env[name] = value;
+    }
+    assertions();
+  } finally {
+    for (const [name, value] of original) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+};
+
 test('with neither cap configured the ceiling is 1,000,000', () => {
-  assert.equal(parseAmount(1_000_000), 1_000_000);
-  assert.equal(parseAmount(1_000_001), null);
+  withCaps({}, () => {
+    assert.equal(parseAmount(1_000_000), 1_000_000);
+    assert.equal(parseAmount(1_000_001), null);
+  });
 });
 
 // Separating the caps must not loosen a deployment that never asked for it:
 // env/.env.dev.example ships REWARDS_MAX_AMOUNT_SATS=10000, and such a
 // deployment keeps its 10,000-sat zap ceiling until it names a zap cap.
 test('an unset zap cap inherits the configured reward cap', () => {
-  process.env.REWARDS_MAX_AMOUNT_SATS = '10000';
-  try {
+  withCaps({ REWARDS_MAX_AMOUNT_SATS: '10000' }, () => {
     assert.equal(parseAmount(10000), 10000);
     assert.equal(parseAmount(10001), null);
-  } finally {
-    delete process.env.REWARDS_MAX_AMOUNT_SATS;
-  }
+  });
 });
 
 test('ZAP_MAX_AMOUNT_SATS takes precedence over the reward cap', () => {
-  process.env.REWARDS_MAX_AMOUNT_SATS = '10000';
-  process.env.ZAP_MAX_AMOUNT_SATS = '500';
-  try {
-    assert.equal(parseAmount(500), 500);
-    assert.equal(parseAmount(501), null);
-  } finally {
-    delete process.env.REWARDS_MAX_AMOUNT_SATS;
-    delete process.env.ZAP_MAX_AMOUNT_SATS;
-  }
+  withCaps(
+    { REWARDS_MAX_AMOUNT_SATS: '10000', ZAP_MAX_AMOUNT_SATS: '500' },
+    () => {
+      assert.equal(parseAmount(500), 500);
+      assert.equal(parseAmount(501), null);
+    },
+  );
 });
 
 test('a zap cap above the reward cap is honoured, not clamped to it', () => {
-  process.env.REWARDS_MAX_AMOUNT_SATS = '10000';
-  process.env.ZAP_MAX_AMOUNT_SATS = '50000';
-  try {
-    assert.equal(parseAmount(50000), 50000);
-    assert.equal(parseAmount(50001), null);
-  } finally {
-    delete process.env.REWARDS_MAX_AMOUNT_SATS;
-    delete process.env.ZAP_MAX_AMOUNT_SATS;
-  }
+  withCaps(
+    { REWARDS_MAX_AMOUNT_SATS: '10000', ZAP_MAX_AMOUNT_SATS: '50000' },
+    () => {
+      assert.equal(parseAmount(50000), 50000);
+      assert.equal(parseAmount(50001), null);
+    },
+  );
+});
+
+test('a whitespace-only cap is unset, not malformed', () => {
+  withCaps({ ZAP_MAX_AMOUNT_SATS: '   ', REWARDS_MAX_AMOUNT_SATS: '10000' }, () => {
+    assert.equal(parseAmount(10000), 10000);
+    assert.equal(parseAmount(10001), null);
+  });
 });
 
 test('a malformed reward cap fails closed for zaps too', () => {
-  process.env.REWARDS_MAX_AMOUNT_SATS = '1e3';
-  try {
+  withCaps({ REWARDS_MAX_AMOUNT_SATS: '1e3' }, () => {
     assert.throws(() => parseAmount(25), {
       message: 'REWARDS_MAX_AMOUNT_SATS must be a positive integer',
     });
-  } finally {
-    delete process.env.REWARDS_MAX_AMOUNT_SATS;
-  }
+  });
 });
 
 test('a malformed zap cap fails closed instead of widening the ceiling', async () => {
   for (const malformed of ['not-a-number', '-1', '0', '1.5', '0x10', '1e3']) {
-    process.env.ZAP_MAX_AMOUNT_SATS = malformed;
-    try {
+    withCaps({ ZAP_MAX_AMOUNT_SATS: malformed }, () => {
       assert.throws(
         () => createLnbitsRouter({ service, extractBearerToken, verifyMsalPayload }),
         { message: 'ZAP_MAX_AMOUNT_SATS must be a positive integer' },
       );
-    } finally {
-      delete process.env.ZAP_MAX_AMOUNT_SATS;
-    }
+    });
   }
 });
 
 test('a narrowed zap cap is enforced over HTTP', async () => {
+  const originalCaps = CAP_VARS.map((name) => [name, process.env[name]]);
+  CAP_VARS.forEach((name) => delete process.env[name]);
   process.env.ZAP_MAX_AMOUNT_SATS = '250';
   let cappedServer;
   try {
@@ -291,7 +315,13 @@ test('a narrowed zap cap is enforced over HTTP', async () => {
     assert.equal((await send(250)).status, 200);
     assert.deepEqual(calls.at(-1)[1].amount, 250);
   } finally {
-    delete process.env.ZAP_MAX_AMOUNT_SATS;
+    for (const [name, value] of originalCaps) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
     if (cappedServer) {
       await new Promise((resolve) => cappedServer.close(resolve));
     }
