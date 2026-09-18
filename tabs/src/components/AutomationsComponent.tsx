@@ -205,42 +205,45 @@ const AutomationsComponent: FunctionComponent = () => {
         return;
       }
 
-      // allSettled, not all: treasury stats come from LNbits and fail far more
-      // often than the other two. One rejection used to hide the
-      // GitHub-connected banner and the API-keys list behind a generic toast.
-      const [connection, statsData, keys] = await Promise.allSettled([
-        getGithubConnection(idToken),
-        getAutomationsStats(idToken),
-        isAdmin ? getWebhookKeys(idToken) : Promise.resolve([]),
-      ]);
+      // Three independent chains, not Promise.all/allSettled: the treasury
+      // stats call is LNbits-backed and both the slowest and the likeliest to
+      // fail. Bundling it used to hide the GitHub-connected banner and the
+      // API-keys list behind one generic toast, and would still make them wait
+      // on it. Each panel now lands as soon as its own request settles.
+      void getGithubConnection(idToken)
+        .then(connection => {
+          setAppInstalled(connection.connected);
+        })
+        .catch(err => {
+          console.error('Error fetching GitHub connection:', err);
+          toast.error('Could not load connection status.');
+        });
 
-      if (connection.status === 'fulfilled') {
-        setAppInstalled(connection.value.connected);
-      } else {
-        console.error('Error fetching GitHub connection:', connection.reason);
-        toast.error('Could not load connection status.');
-      }
+      void getAutomationsStats(idToken)
+        .then(statsData => {
+          setStats(statsData);
+          setStatsError(false);
+        })
+        .catch(err => {
+          console.error('Error fetching automations stats:', err);
+          // Drop the previous summary too: the render path checks `stats`
+          // first, so stale recipients and history would otherwise sit there
+          // looking current while the refresh that replaced them had failed.
+          setStats(null);
+          setStatsError(true);
+        })
+        .finally(() => {
+          setStatsLoading(false);
+        });
 
-      if (statsData.status === 'fulfilled') {
-        setStats(statsData.value);
-        setStatsError(false);
-      } else {
-        console.error('Error fetching automations stats:', statsData.reason);
-        // Drop the previous summary too: the render path checks `stats` first,
-        // so stale recipients and history would otherwise sit there looking
-        // current while the refresh that replaced them had actually failed.
-        setStats(null);
-        setStatsError(true);
-      }
-
-      if (keys.status === 'fulfilled') {
-        setWebhookKeys(keys.value);
-      } else {
-        console.error('Error fetching webhook keys:', keys.reason);
-        toast.error('Could not load the API keys.');
-      }
-
-      setStatsLoading(false);
+      void (isAdmin ? getWebhookKeys(idToken) : Promise.resolve([]))
+        .then(keys => {
+          setWebhookKeys(keys);
+        })
+        .catch(err => {
+          console.error('Error fetching webhook keys:', err);
+          toast.error('Could not load the API keys.');
+        });
     };
     loadConnections();
     // eslint-disable-next-line react-hooks/exhaustive-deps
