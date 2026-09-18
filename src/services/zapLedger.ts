@@ -6,6 +6,14 @@ import { DataDirError, resolveDataDir } from './dataDir';
 const STORE_VERSION = 1;
 const STORE_FILENAME = 'bot-zap-ledger.json';
 const DEFAULT_LOCK_RETRY_MS = 20;
+// Windows enforces mandatory sharing, so a concurrent lock-free reader holding
+// the canonical store open can make MoveFileEx(REPLACE_EXISTING) fail with
+// EPERM/EACCES/EBUSY. Those handles are held for a single readFileSync, so a
+// few short retries clear a sharing violation that would otherwise strand a
+// settled payment in `processing`.
+const RENAME_SHARING_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const RENAME_RETRY_ATTEMPTS = 5;
+const RENAME_RETRY_MS = 20;
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const IDENTIFIER_PATTERN = /^\S{1,256}$/;
@@ -187,6 +195,31 @@ const validateDuration = (name: string, value: number): number => {
 
 const wait = (milliseconds: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, milliseconds));
+
+// The rename itself stays atomic: a retry only re-attempts the same single
+// replacement, so a reader still sees either the previous canonical file or
+// the next one. Writers already hold the exclusive store lock, so no other
+// writer can slip in between attempts.
+const replaceStoreFile = async (
+  tempPath: string,
+  storePath: string,
+): Promise<void> => {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.promises.rename(tempPath, storePath);
+      return;
+    } catch (error) {
+      const transient =
+        isErrnoException(error) &&
+        error.code !== undefined &&
+        RENAME_SHARING_CODES.has(error.code);
+      if (!transient || attempt >= RENAME_RETRY_ATTEMPTS) {
+        throw error;
+      }
+      await wait(RENAME_RETRY_MS);
+    }
+  }
+};
 
 export class ZapLedger {
   readonly storePath: string;
@@ -424,7 +457,7 @@ export class ZapLedger {
       await handle.sync();
       await handle.close();
       handle = undefined;
-      await fs.promises.rename(tempPath, this.storePath);
+      await replaceStoreFile(tempPath, this.storePath);
     } catch (error) {
       if (handle) {
         await handle.close().catch(() => undefined);

@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, test } from '@jest/globals';
+import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import {
   resolveZapLedgerStorePath,
   ZapLedger,
@@ -235,6 +235,69 @@ describe('ZapLedger durability and concurrency', () => {
       state: 'paid',
       paymentHash: 'hash-alice',
     });
+  });
+
+  test('a Windows sharing violation on rename is retried, not left processing', async () => {
+    const storePath = newStorePath();
+    const ledger = new ZapLedger({ storePath });
+    await ledger.tryAcquire(key('alice'));
+
+    const rename = fs.promises.rename;
+    const sharingViolation = Object.assign(
+      new Error('EPERM: operation not permitted, rename'),
+      { code: 'EPERM' },
+    );
+    let attempts = 0;
+    const spy = jest
+      .spyOn(fs.promises, 'rename')
+      .mockImplementation(async (from, to) => {
+        attempts += 1;
+        // Windows denies the replacement while a reader still holds the
+        // canonical store open; the handle is gone by the next attempt.
+        if (attempts === 1) {
+          throw sharingViolation;
+        }
+        return rename(from, to);
+      });
+
+    try {
+      await ledger.markPaid(key('alice'), 'hash-alice');
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(attempts).toBeGreaterThan(1);
+    const afterRestart = new ZapLedger({ storePath });
+    await expect(afterRestart.get(key('alice'))).resolves.toMatchObject({
+      state: 'paid',
+      paymentHash: 'hash-alice',
+    });
+  });
+
+  test('a persistent rename failure fails closed instead of losing the outcome', async () => {
+    const storePath = newStorePath();
+    const ledger = new ZapLedger({ storePath });
+    await ledger.tryAcquire(key('alice'));
+
+    const spy = jest.spyOn(fs.promises, 'rename').mockRejectedValue(
+      Object.assign(new Error('EPERM: operation not permitted, rename'), {
+        code: 'EPERM',
+      }),
+    );
+
+    try {
+      await expect(ledger.markPaid(key('alice'), 'hash-alice')).rejects.toThrow(
+        'Zap ledger data could not be persisted',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    const afterRestart = new ZapLedger({ storePath });
+    await expect(afterRestart.get(key('alice'))).resolves.toMatchObject({
+      state: 'processing',
+    });
+    await expect(afterRestart.tryAcquire(key('alice'))).resolves.toBe(false);
   });
 
   test('invalid payment hashes leave the durable processing barrier intact', async () => {

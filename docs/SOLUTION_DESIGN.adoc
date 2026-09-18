@@ -345,7 +345,9 @@ and manifest packaging across local/dev environments.
 
 == Known Limitations
 
-- Bot state is in-memory; a restart clears conversation/user state.
+- Conversation and user state are in-memory; a restart clears them. Zap
+  submission records are the exception: they persist under
+  `ZAPLIE_DATA_DIR` so a restart cannot pay a recipient twice.
 - The reward-name API is guarded by a placeholder shared secret and a JSON
   file rather than a real datastore.
 - The Azure Functions are anonymous at the platform level and receive LNbits
