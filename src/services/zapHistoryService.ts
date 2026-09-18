@@ -10,18 +10,16 @@
 // and cross-reference by checking_id against the receiving side to confirm it
 // landed in a Private wallet.
 
-import { getUsers, getUserWallets, getPayments } from './lnbitsService';
+import {
+  getUsers,
+  getUserWallets,
+  getPayments,
+  getAllPaymentsPage,
+  PaginatedPaymentsUnsupportedError,
+} from './lnbitsService';
+import { isAllowanceWallet, isPrivateWallet } from './walletNames';
 
 const adminKey = process.env.LNBITS_ADMINKEY as string;
-
-const WALLET_NAME_ALLOWANCE = 'Allowance';
-const WALLET_NAME_PRIVATE = 'Private';
-
-const isAllowanceWallet = (walletName: string): boolean =>
-  walletName?.toLowerCase() === WALLET_NAME_ALLOWANCE.toLowerCase();
-
-const isPrivateWallet = (walletName: string): boolean =>
-  walletName?.toLowerCase() === WALLET_NAME_PRIVATE.toLowerCase();
 
 const parseTransactionTime = (timestamp: number | string): Date | null => {
   if (typeof timestamp === 'number') {
@@ -43,13 +41,16 @@ const cleanCheckingId = (checkingId: string | undefined): string =>
 // instead: still parallel, but with a ceiling that does not depend on team size.
 export const MAX_CONCURRENT_LNBITS_REQUESTS = 8;
 
-// `getPayments` defaults to LNbits' 100-payment page, which is well short of a
-// busy wallet's history: the leaderboard sums every zap a member has sent, so a
-// short page would quietly undercount them. Ask for the same depth the portal
-// uses (tabs/src/utils/walletUtilities.ts requests 10000). There is no cursor
-// on this endpoint, so a wallet that fills the page is logged rather than
-// silently truncated.
-export const PAYMENTS_PER_WALLET_LIMIT = 10000;
+// Page size for payment reads. Both paths below page until a short page comes
+// back, so this is a request-size knob, not a ceiling on history: nothing is
+// dropped for being old. That matters more than it looks — truncating a
+// *receiving* Private wallet breaks the checking_id cross-reference below, so
+// the sender's zap disappears from the totals with nothing logged anywhere.
+export const PAYMENTS_PAGE_SIZE = 1000;
+
+// A stop so a paging bug cannot spin forever against a live instance. Hitting
+// it is reported through `partial`, never swallowed.
+export const MAX_PAYMENT_PAGES = 100;
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -73,6 +74,26 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+// A read that either produced a value or failed. Team-wide reads settle each
+// item instead of rejecting the whole batch, so one rate-limited wallet costs
+// that wallet rather than the entire leaderboard — but the failure is counted
+// and surfaced, never quietly treated as "no payments".
+// A single shape rather than a discriminated union: this project compiles with
+// `strict` off, where narrowing on a literal boolean discriminant is unreliable.
+interface Settled<R> {
+  ok: boolean;
+  value?: R;
+  error?: unknown;
+}
+
+const settle = async <R>(work: () => Promise<R>): Promise<Settled<R>> => {
+  try {
+    return { ok: true, value: await work() };
+  } catch (error) {
+    return { ok: false, error };
+  }
+};
+
 export interface ZapActivity {
   from: User | null;
   to: User | null;
@@ -87,26 +108,164 @@ export interface GetRecentZapsOptions {
   userAadObjectId?: string; // matches zaps where the user is either sender or receiver
 }
 
+// What a team-wide read could not see. `partial` is the bit callers must act
+// on: it means the numbers below are a floor, not a total, so the assistant can
+// hedge instead of stating an incomplete ranking as fact.
+export interface ZapReadCoverage {
+  partial: boolean;
+  skippedUsers: number; // users whose wallet list could not be read
+  skippedWallets: number; // wallets whose payments could not be read
+  truncated: boolean; // paging stopped at MAX_PAYMENT_PAGES
+}
+
+export interface ZapActivityResult extends ZapReadCoverage {
+  zaps: ZapActivity[];
+}
+
 const DEFAULT_LIMIT = 50;
 
-export async function getRecentZaps(
+// Page the instance-wide payments endpoint until it runs out. One request per
+// page for the whole team, rather than one (or more) per wallet.
+const readAllPaymentsPaged = async (): Promise<{
+  payments: Transaction[];
+  truncated: boolean;
+}> => {
+  const payments: Transaction[] = [];
+  for (let page = 0; page < MAX_PAYMENT_PAGES; page += 1) {
+    const batch = await getAllPaymentsPage(
+      PAYMENTS_PAGE_SIZE,
+      page * PAYMENTS_PAGE_SIZE,
+    );
+    payments.push(...batch);
+    if (batch.length < PAYMENTS_PAGE_SIZE) {
+      return { payments, truncated: false };
+    }
+  }
+  console.warn(
+    `getRecentZaps: stopped after ${MAX_PAYMENT_PAGES} pages of payments; ` +
+      'results are incomplete.',
+  );
+  return { payments, truncated: true };
+};
+
+// Fallback for instances without the paginated all-payments endpoint: page each
+// wallet with its own invoice key, bounded by the same concurrency pool. A
+// wallet that fails is skipped and counted, not scored as zero.
+const readWalletPaymentsPaged = async (
+  wallets: Wallet[],
+): Promise<{
+  payments: Transaction[];
+  skippedWallets: number;
+  truncated: boolean;
+}> => {
+  let truncated = false;
+  const results = await mapWithConcurrency(
+    wallets,
+    MAX_CONCURRENT_LNBITS_REQUESTS,
+    wallet =>
+      settle(async () => {
+        const collected: Transaction[] = [];
+        for (let page = 0; page < MAX_PAYMENT_PAGES; page += 1) {
+          const batch = await getPayments(
+            wallet.inkey,
+            PAYMENTS_PAGE_SIZE,
+            page * PAYMENTS_PAGE_SIZE,
+          );
+          const rows = batch || [];
+          collected.push(...rows);
+          if (rows.length < PAYMENTS_PAGE_SIZE) return collected;
+        }
+        truncated = true;
+        console.warn(
+          `getRecentZaps: stopped after ${MAX_PAYMENT_PAGES} pages for wallet ` +
+            `${wallet.id}; its older payments are not counted.`,
+        );
+        return collected;
+      }),
+  );
+
+  const payments: Transaction[] = [];
+  let skippedWallets = 0;
+  for (const [index, result] of results.entries()) {
+    if (result.ok) {
+      payments.push(...(result.value || []));
+    } else {
+      skippedWallets += 1;
+      console.error(
+        `getRecentZaps: failed to fetch payments for wallet ${wallets[index].id}:`,
+        result.error,
+      );
+    }
+  }
+  return { payments, skippedWallets, truncated };
+};
+
+// Prefer the instance-wide paginated read: a handful of requests instead of one
+// per wallet, and no per-wallet truncation to break the checking_id
+// cross-reference. Instances without that endpoint page each wallet instead.
+const readPayments = async (
+  relevantWallets: Wallet[],
+): Promise<{
+  payments: Transaction[];
+  skippedWallets: number;
+  truncated: boolean;
+}> => {
+  try {
+    const paged = await readAllPaymentsPaged();
+    return {
+      payments: paged.payments,
+      skippedWallets: 0,
+      truncated: paged.truncated,
+    };
+  } catch (error) {
+    if (!(error instanceof PaginatedPaymentsUnsupportedError)) throw error;
+    console.warn(
+      'getRecentZaps: falling back to per-wallet payment paging:',
+      error,
+    );
+    return readWalletPaymentsPaged(relevantWallets);
+  }
+};
+
+export async function getZapActivity(
   options: GetRecentZapsOptions = {},
-): Promise<ZapActivity[]> {
+): Promise<ZapActivityResult> {
   const { limit = DEFAULT_LIMIT, sinceTimestamp, userAadObjectId } = options;
+
+  const empty = {
+    zaps: [] as ZapActivity[],
+    partial: false,
+    skippedUsers: 0,
+    skippedWallets: 0,
+    truncated: false,
+  };
 
   const users = await getUsers(adminKey, null);
   if (!users || users.length === 0) {
-    return [];
+    return empty;
   }
 
-  const walletsByUser = await mapWithConcurrency(
+  // One user's unreadable wallet list must not reject the whole ranking, but it
+  // does mean that user's zaps are missing — count it rather than hide it.
+  const walletResults = await mapWithConcurrency(
     users,
     MAX_CONCURRENT_LNBITS_REQUESTS,
-    async user => ({
-      user,
-      wallets: (await getUserWallets(adminKey, user.id)) || [],
-    }),
+    user => settle(async () => (await getUserWallets(adminKey, user.id)) || []),
   );
+
+  let skippedUsers = 0;
+  const walletsByUser: { user: User; wallets: Wallet[] }[] = [];
+  for (const [index, result] of walletResults.entries()) {
+    if (result.ok) {
+      walletsByUser.push({ user: users[index], wallets: result.value || [] });
+    } else {
+      skippedUsers += 1;
+      console.error(
+        `getRecentZaps: failed to fetch wallets for user ${users[index].id}:`,
+        result.error,
+      );
+    }
+  }
 
   const walletToUser = new Map<string, User>();
   const allowanceWallets: Wallet[] = [];
@@ -128,37 +287,11 @@ export async function getRecentZaps(
 
   const allowanceWalletIds = new Set(allowanceWallets.map(w => w.id));
 
-  const paymentsPerWallet = await mapWithConcurrency(
-    relevantWallets,
-    MAX_CONCURRENT_LNBITS_REQUESTS,
-    async wallet => {
-      try {
-        const payments = (await getPayments(
-          wallet.inkey,
-          PAYMENTS_PER_WALLET_LIMIT,
-        )) as Transaction[] | null;
-        if (payments && payments.length >= PAYMENTS_PER_WALLET_LIMIT) {
-          console.warn(
-            `getRecentZaps: wallet ${wallet.id} returned the full ` +
-              `${PAYMENTS_PER_WALLET_LIMIT}-payment page; older payments are ` +
-              'not counted. Paginate this read before the history grows further.',
-          );
-        }
-        return payments || [];
-      } catch (error) {
-        console.error(
-          `getRecentZaps: failed to fetch payments for wallet ${wallet.id}:`,
-          error,
-        );
-        return [] as Transaction[];
-      }
-    },
-  );
-
-  // tsconfig targets es2017, so flatten without Array.prototype.flat (es2019).
-  const allPayments: Transaction[] = ([] as Transaction[]).concat(
-    ...paymentsPerWallet,
-  );
+  const {
+    payments: allPayments,
+    skippedWallets,
+    truncated,
+  } = await readPayments(relevantWallets);
 
   // Internal transfers write both the debit and credit side under the same
   // checking_id (one side prefixed with "internal_") — index both so either
@@ -232,12 +365,30 @@ export async function getRecentZaps(
 
   activity.sort((a, b) => b.time.getTime() - a.time.getTime());
 
-  return activity.slice(0, limit);
+  return {
+    zaps: activity.slice(0, limit),
+    partial: skippedUsers > 0 || skippedWallets > 0 || truncated,
+    skippedUsers,
+    skippedWallets,
+    truncated,
+  };
+}
+
+// Back-compatible view for callers that only want the zaps. Prefer
+// getZapActivity() where the caller can tell the user that a read was partial.
+export async function getRecentZaps(
+  options: GetRecentZapsOptions = {},
+): Promise<ZapActivity[]> {
+  return (await getZapActivity(options)).zaps;
 }
 
 export interface ZapLeaderboardEntry {
   user: User;
   zappedSats: number;
+}
+
+export interface ZapLeaderboard extends ZapReadCoverage {
+  entries: ZapLeaderboardEntry[];
 }
 
 // Ranks recognition given, not money held: a Private wallet is the owner's own
@@ -253,11 +404,16 @@ export interface ZapLeaderboardEntry {
 // bot therefore excludes outgoing payments the portal would still count, such as
 // a withdrawal to an external invoice. Expect small differences until the two
 // converge.
-export async function getZapLeaderboard(): Promise<ZapLeaderboardEntry[]> {
-  const zaps = await getRecentZaps({ limit: Number.MAX_SAFE_INTEGER });
+export async function getZapLeaderboard(
+  options: { sinceTimestamp?: number } = {},
+): Promise<ZapLeaderboard> {
+  const activity = await getZapActivity({
+    limit: Number.MAX_SAFE_INTEGER,
+    sinceTimestamp: options.sinceTimestamp,
+  });
 
   const totalsByUserId = new Map<string, ZapLeaderboardEntry>();
-  for (const zap of zaps) {
+  for (const zap of activity.zaps) {
     // A sending wallet that resolves to no user cannot be ranked.
     if (!zap.from) continue;
     const entry = totalsByUserId.get(zap.from.id);
@@ -271,9 +427,15 @@ export async function getZapLeaderboard(): Promise<ZapLeaderboardEntry[]> {
     }
   }
 
-  return Array.from(totalsByUserId.values()).sort(
-    (a, b) =>
-      b.zappedSats - a.zappedSats ||
-      a.user.displayName.localeCompare(b.user.displayName),
-  );
+  return {
+    entries: Array.from(totalsByUserId.values()).sort(
+      (a, b) =>
+        b.zappedSats - a.zappedSats ||
+        a.user.displayName.localeCompare(b.user.displayName),
+    ),
+    partial: activity.partial,
+    skippedUsers: activity.skippedUsers,
+    skippedWallets: activity.skippedWallets,
+    truncated: activity.truncated,
+  };
 }

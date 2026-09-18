@@ -8,9 +8,16 @@ import {
   getRecentZaps,
   getZapLeaderboard,
   MAX_CONCURRENT_LNBITS_REQUESTS,
-  PAYMENTS_PER_WALLET_LIMIT,
+  PAYMENTS_PAGE_SIZE,
+  getZapActivity,
 } from './zapHistoryService';
-import { getUsers, getUserWallets, getPayments } from './lnbitsService';
+import {
+  getUsers,
+  getUserWallets,
+  getPayments,
+  getAllPaymentsPage,
+  PaginatedPaymentsUnsupportedError,
+} from './lnbitsService';
 import { expect, describe, test, beforeEach, jest } from '@jest/globals';
 
 jest.mock('./lnbitsService');
@@ -20,6 +27,27 @@ const mockGetUserWallets = getUserWallets as jest.MockedFunction<
   typeof getUserWallets
 >;
 const mockGetPayments = getPayments as jest.MockedFunction<typeof getPayments>;
+const mockGetAllPaymentsPage = getAllPaymentsPage as jest.MockedFunction<
+  typeof getAllPaymentsPage
+>;
+
+// Every payment on the instance, which is what the paginated endpoint returns:
+// the union of the per-wallet fixtures, each row appearing once.
+const allFixturePayments = (): Transaction[] =>
+  Object.values(walletsByInkey).reduce<Transaction[]>(
+    (rows, walletRows) => rows.concat(walletRows),
+    [],
+  );
+
+// Force the per-wallet fallback: the instance has no paginated all-payments
+// endpoint, or these credentials may not read it. The error is built from the
+// mocked class so the `instanceof` check in the module under test still sees it
+// as the availability signal rather than a real failure.
+const useWalletFallback = () => {
+  mockGetAllPaymentsPage.mockRejectedValue(
+    new PaginatedPaymentsUnsupportedError(404),
+  );
+};
 
 const alice: User = {
   id: 'user-alice',
@@ -95,7 +123,14 @@ const setupUsersAndWallets = () => {
     return [];
   });
   mockGetPayments.mockImplementation(
-    async (inKey: string) => (walletsByInkey[inKey] || []) as any,
+    async (inKey: string, _limit?: number, offset = 0) =>
+      // One short page: the fixtures are far smaller than a page, so paging
+      // stops after the first read.
+      (offset === 0 ? walletsByInkey[inKey] || [] : []) as any,
+  );
+  // Default to the primary path — one paginated read of every payment.
+  mockGetAllPaymentsPage.mockImplementation(async (_limit, offset) =>
+    offset === 0 ? allFixturePayments() : [],
   );
 };
 
@@ -424,7 +459,7 @@ describe('getZapLeaderboard', () => {
     const result = await getZapLeaderboard();
 
     expect(
-      result.map(entry => [entry.user.displayName, entry.zappedSats]),
+      result.entries.map(entry => [entry.user.displayName, entry.zappedSats]),
     ).toEqual([
       ['Alice', 120],
       ['Bob', 50],
@@ -456,7 +491,8 @@ describe('getZapLeaderboard', () => {
 
     const result = await getZapLeaderboard();
 
-    expect(result).toEqual([]);
+    expect(result.entries).toEqual([]);
+    expect(result.partial).toBe(false);
   });
 
   test('breaks ties on display name so equal totals keep a stable order', async () => {
@@ -495,7 +531,7 @@ describe('getZapLeaderboard', () => {
 
     const result = await getZapLeaderboard();
 
-    expect(result.map(entry => entry.user.displayName)).toEqual([
+    expect(result.entries.map(entry => entry.user.displayName)).toEqual([
       'Alice',
       'Bob',
     ]);
@@ -566,14 +602,17 @@ describe('LNbits request fan-out', () => {
       paymentReadsInFlight -= 1;
       return [];
     });
+    // The pool matters on the fallback path, which is the one that still issues
+    // a request per wallet.
+    useWalletFallback();
 
     await getRecentZaps();
 
     expect(mockGetUserWallets).toHaveBeenCalledTimes(teamSize);
     expect(mockGetPayments).toHaveBeenCalledTimes(teamSize * 2);
-    // Every wallet read must ask for the deep page, or totals undercount.
+    // Every wallet read must ask for a full page, or totals undercount.
     for (const call of mockGetPayments.mock.calls) {
-      expect(call[1]).toBe(PAYMENTS_PER_WALLET_LIMIT);
+      expect(call[1]).toBe(PAYMENTS_PAGE_SIZE);
     }
     expect(peakWalletReads).toBeLessThanOrEqual(MAX_CONCURRENT_LNBITS_REQUESTS);
     expect(peakPaymentReads).toBeLessThanOrEqual(
@@ -582,5 +621,231 @@ describe('LNbits request fan-out', () => {
     // Still parallel, not one-at-a-time.
     expect(peakWalletReads).toBeGreaterThan(1);
     expect(peakPaymentReads).toBeGreaterThan(1);
+  });
+});
+
+describe('incomplete reads are reported, never scored as zero', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    for (const key of Object.keys(walletsByInkey)) {
+      delete walletsByInkey[key];
+    }
+    setupUsersAndWallets();
+  });
+
+  const aliceZapsBob = () => {
+    walletsByInkey[aliceAllowance.inkey] = [
+      tx({
+        checking_id: 'zap1',
+        amount: -100000,
+        memo: 'Great work!',
+        time: 1750000000,
+        wallet_id: aliceAllowance.id,
+      }),
+    ];
+    walletsByInkey[bobPrivate.inkey] = [
+      tx({
+        checking_id: 'internal_zap1',
+        amount: 100000,
+        memo: 'Great work!',
+        time: 1750000000,
+        wallet_id: bobPrivate.id,
+      }),
+    ];
+  };
+
+  test('a failed wallet payment read flags partial instead of scoring zero', async () => {
+    aliceZapsBob();
+    useWalletFallback();
+    // Bob's Allowance read fails; Alice's zap is still counted, but the result
+    // must say the ranking is incomplete rather than assert Bob sent nothing.
+    mockGetPayments.mockImplementation(async (inKey: string) => {
+      if (inKey === bobAllowance.inkey) {
+        throw new Error('429 Too Many Requests');
+      }
+      return (walletsByInkey[inKey] || []) as any;
+    });
+
+    const result = await getZapLeaderboard();
+
+    expect(result.entries.map(e => e.user.displayName)).toEqual(['Alice']);
+    expect(result.partial).toBe(true);
+    expect(result.skippedWallets).toBe(1);
+    expect(result.skippedUsers).toBe(0);
+  });
+
+  test('a failed user wallet read skips that user rather than rejecting', async () => {
+    aliceZapsBob();
+    mockGetUserWallets.mockImplementation(async (_adminKey, userId) => {
+      if (userId === bob.id) throw new Error('500 Internal Server Error');
+      return [aliceAllowance, alicePrivate];
+    });
+
+    const result = await getZapLeaderboard();
+
+    expect(result.partial).toBe(true);
+    expect(result.skippedUsers).toBe(1);
+    // Bob's Private wallet is unknown, so the cross-reference cannot confirm
+    // where the zap landed — the total is a floor, and says so.
+    expect(result.entries.length).toBeLessThanOrEqual(1);
+  });
+
+  test('a complete read is not flagged partial', async () => {
+    aliceZapsBob();
+
+    const result = await getZapLeaderboard();
+
+    expect(result.partial).toBe(false);
+    expect(result.skippedUsers).toBe(0);
+    expect(result.skippedWallets).toBe(0);
+    expect(result.truncated).toBe(false);
+  });
+});
+
+describe('payment paging', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    for (const key of Object.keys(walletsByInkey)) {
+      delete walletsByInkey[key];
+    }
+    setupUsersAndWallets();
+  });
+
+  test('pages the instance-wide read until a short page comes back', async () => {
+    // A zap whose receiving side sits beyond the first page. Before paging, the
+    // receiver row was cut off, the checking_id cross-reference failed, and the
+    // sender's zap vanished from the totals with nothing logged.
+    const filler = (index: number) =>
+      tx({
+        checking_id: `filler-${index}`,
+        amount: -1,
+        time: 1749000000,
+        wallet_id: alicePrivate.id,
+      });
+    const senderRow = tx({
+      checking_id: 'zap-far',
+      amount: -100000,
+      memo: 'Thanks',
+      time: 1750000000,
+      wallet_id: aliceAllowance.id,
+    });
+    const receiverRow = tx({
+      checking_id: 'internal_zap-far',
+      amount: 100000,
+      memo: 'Thanks',
+      time: 1750000000,
+      wallet_id: bobPrivate.id,
+    });
+
+    const firstPage = [
+      senderRow,
+      ...Array.from({ length: PAYMENTS_PAGE_SIZE - 1 }, (_u, i) => filler(i)),
+    ];
+    mockGetAllPaymentsPage.mockImplementation(async (_limit, offset) => {
+      if (offset === 0) return firstPage;
+      if (offset === PAYMENTS_PAGE_SIZE) return [receiverRow];
+      return [];
+    });
+
+    const result = await getZapLeaderboard();
+
+    expect(mockGetAllPaymentsPage).toHaveBeenCalledTimes(2);
+    expect(result.entries.map(e => [e.user.displayName, e.zappedSats])).toEqual(
+      [['Alice', 100]],
+    );
+    expect(result.partial).toBe(false);
+  });
+
+  test('reads every payment in one instance-wide call set, not one per wallet', async () => {
+    walletsByInkey[aliceAllowance.inkey] = [];
+    const result = await getZapActivity();
+
+    expect(mockGetAllPaymentsPage).toHaveBeenCalledTimes(1);
+    expect(mockGetPayments).not.toHaveBeenCalled();
+    expect(result.partial).toBe(false);
+  });
+
+  test('falls back to per-wallet paging when the endpoint is unavailable', async () => {
+    walletsByInkey[aliceAllowance.inkey] = [
+      tx({
+        checking_id: 'zap1',
+        amount: -100000,
+        time: 1750000000,
+        wallet_id: aliceAllowance.id,
+      }),
+    ];
+    walletsByInkey[bobPrivate.inkey] = [
+      tx({
+        checking_id: 'internal_zap1',
+        amount: 100000,
+        time: 1750000000,
+        wallet_id: bobPrivate.id,
+      }),
+    ];
+    useWalletFallback();
+
+    const result = await getZapLeaderboard();
+
+    expect(mockGetPayments).toHaveBeenCalled();
+    expect(result.entries.map(e => [e.user.displayName, e.zappedSats])).toEqual(
+      [['Alice', 100]],
+    );
+    expect(result.partial).toBe(false);
+  });
+
+  test('a non-availability error is not swallowed by the fallback', async () => {
+    mockGetAllPaymentsPage.mockRejectedValue(new Error('boom'));
+
+    await expect(getZapLeaderboard()).rejects.toThrow('boom');
+    expect(mockGetPayments).not.toHaveBeenCalled();
+  });
+});
+
+describe('leaderboard period filter', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    for (const key of Object.keys(walletsByInkey)) {
+      delete walletsByInkey[key];
+    }
+    setupUsersAndWallets();
+  });
+
+  test('counts only zaps sent after sinceTimestamp', async () => {
+    walletsByInkey[aliceAllowance.inkey] = [
+      tx({
+        checking_id: 'old',
+        amount: -500000,
+        time: 1700000000,
+        wallet_id: aliceAllowance.id,
+      }),
+      tx({
+        checking_id: 'new',
+        amount: -100000,
+        time: 1750000000,
+        wallet_id: aliceAllowance.id,
+      }),
+    ];
+    walletsByInkey[bobPrivate.inkey] = [
+      tx({
+        checking_id: 'internal_old',
+        amount: 500000,
+        time: 1700000000,
+        wallet_id: bobPrivate.id,
+      }),
+      tx({
+        checking_id: 'internal_new',
+        amount: 100000,
+        time: 1750000000,
+        wallet_id: bobPrivate.id,
+      }),
+    ];
+
+    const allTime = await getZapLeaderboard();
+    expect(allTime.entries[0].zappedSats).toBe(600);
+
+    const recent = await getZapLeaderboard({ sinceTimestamp: 1740000000 });
+    expect(recent.entries.map(e => [e.user.displayName, e.zappedSats])).toEqual(
+      [['Alice', 100]],
+    );
   });
 });

@@ -469,34 +469,95 @@ const getWalletName = async (inKey: string) => {
   }
 };
 
-// `limit` is the page size LNbits applies to this wallet's payment list. It
-// defaults to the historical 100, but a caller that aggregates a wallet's whole
-// history (see zapHistoryService) must ask for more or it silently undercounts.
-const getPayments = async (inKey: string, limit = 100) => {
-  console.log(`getPayments starting ... (limit: ${limit})`);
+// `limit`/`offset` are the page LNbits applies to this wallet's payment list.
+// `limit` defaults to the historical 100, but a caller that aggregates a
+// wallet's whole history (see zapHistoryService) must page or it undercounts.
+//
+// This throws rather than returning null: a caller that cannot tell "no
+// payments" from "the request failed" reports a zero total as fact, which is
+// exactly the silent undercount #275 was about. Callers decide what a failure
+// means for them.
+const getPayments = async (
+  inKey: string,
+  limit = 100,
+  offset = 0,
+): Promise<Transaction[]> => {
+  console.log(`getPayments starting ... (limit: ${limit}, offset: ${offset})`);
 
-  try {
-    const response = await fetch(
-      `${lnbitsUrl()}/api/v1/payments?limit=${limit}`,
-      {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Api-Key': inKey,
-        },
+  const response = await fetch(
+    `${lnbitsUrl()}/api/v1/payments?limit=${limit}&offset=${offset}`,
+    {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Api-Key': inKey,
       },
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Error getting payments (status: ${response.status} ${response.statusText})`,
     );
-
-    if (!response.ok) {
-      throw new Error(`Error getting payments (status: ${response.status})`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Error:', error);
-    return null;
   }
+
+  return (await response.json()) as Transaction[];
+};
+
+// Raised when the instance has no /payments/all/paginated endpoint, or these
+// credentials may not read it. Callers fall back to per-wallet paging.
+class PaginatedPaymentsUnsupportedError extends Error {
+  constructor(status: number) {
+    super(`Paginated all-payments endpoint unavailable (status: ${status})`);
+    this.name = 'PaginatedPaymentsUnsupportedError';
+  }
+}
+
+// One page of every payment on the instance — the endpoint the portal reads
+// (tabs/src/services/lnbits/payments.ts). One superuser-authenticated request
+// per page replaces a request per wallet, and because the caller can page there
+// is no hidden truncation: a truncated wallet would break the checking_id
+// cross-reference and drop a zap with no error anywhere.
+const getAllPaymentsPage = async (
+  limit: number,
+  offset: number,
+): Promise<Transaction[]> => {
+  const query = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+    sortby: 'time',
+    direction: 'desc',
+  });
+  const response = await adminFetch(
+    `/api/v1/payments/all/paginated?${query.toString()}`,
+    { method: 'GET' },
+  );
+
+  if ([401, 403, 404, 405].includes(response.status)) {
+    throw new PaginatedPaymentsUnsupportedError(response.status);
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Error getting all payments (status: ${response.status} ${response.statusText})`,
+    );
+  }
+
+  const data = await response.json();
+
+  // The paginated endpoint has shipped the array bare and wrapped under several
+  // keys across LNbits versions, so accept each known shape.
+  const payments = Array.isArray(data)
+    ? data
+    : (data?.data ?? data?.payments ?? data?.items);
+
+  if (!Array.isArray(payments)) {
+    throw new Error(
+      `Unexpected payload from /api/v1/payments/all/paginated: ${JSON.stringify(data)}`,
+    );
+  }
+
+  return payments as Transaction[];
 };
 
 const getWalletPayLinks = async (inKey: string, walletId: string) => {
@@ -843,6 +904,8 @@ async function topUpWallet(walletId: string, amount: number): Promise<void> {
 }
 
 export {
+  getAllPaymentsPage,
+  PaginatedPaymentsUnsupportedError,
   getWallets,
   createUser,
   getUser,

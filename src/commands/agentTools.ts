@@ -7,9 +7,10 @@ import { TurnContext } from 'botbuilder';
 import { ToolDefinition } from '../services/foundryAgentService';
 import { getUserWallets } from '../services/lnbitsService';
 import {
-  getRecentZaps,
+  getZapActivity,
   getZapLeaderboard,
 } from '../services/zapHistoryService';
+import { isAllowanceWallet, isPrivateWallet } from '../services/walletNames';
 import { getRecentMeetings, getRelevantPeople } from '../services/graphService';
 import {
   CONNECT_CALENDAR_COMMAND,
@@ -18,13 +19,45 @@ import {
 
 const adminKey = process.env.LNBITS_ADMINKEY as string;
 const rewardLabel = process.env.LNBITS_POINTS_LABEL as string;
-const ALLOWANCE_WALLET_NAME = 'Allowance';
-const PRIVATE_WALLET_NAME = 'Private';
 
 const toSats = (balanceMsat: number): number => Math.floor(balanceMsat / 1000);
 
+// Shares the wallet-name rule with the leaderboard, so a casing difference
+// cannot make a wallet count towards a ranking but vanish from a balance reply.
 const isBalanceWallet = (wallet: Wallet): boolean =>
-  wallet.name === ALLOWANCE_WALLET_NAME || wallet.name === PRIVATE_WALLET_NAME;
+  isAllowanceWallet(wallet.name) || isPrivateWallet(wallet.name);
+
+const SECONDS_PER_DAY = 86400;
+
+// The leaderboard's window is open-ended by default (all-time), unlike the
+// calendar tools' rolling week, so it gets its own parameter rather than
+// reusing DAYS_PARAMETER's "defaults to 7" contract.
+const LEADERBOARD_DAYS_PARAMETER = {
+  type: 'number',
+  description:
+    'Only count zaps sent in the last N days (e.g. 7 for "this week"). ' +
+    'Capped at 365. Omit for all-time totals.',
+};
+
+const leaderboardSinceTimestamp = (days?: number): number | undefined => {
+  if (typeof days !== 'number' || !Number.isFinite(days)) return undefined;
+  const periodDays = Math.min(Math.max(Math.floor(days), 1), 365);
+  return Math.floor(Date.now() / 1000) - periodDays * SECONDS_PER_DAY;
+};
+
+// Team-wide reads can miss a user or a wallet (a rate-limited LNbits response,
+// say). Saying so lets the assistant hedge instead of presenting a ranking with
+// someone silently missing from it as complete.
+const coverageNote = (coverage: {
+  partial: boolean;
+  skippedUsers: number;
+  skippedWallets: number;
+}): string | undefined =>
+  coverage.partial
+    ? `Some LNbits reads failed (${coverage.skippedUsers} user(s), ` +
+      `${coverage.skippedWallets} wallet(s) skipped), so these totals are a ` +
+      'lower bound. Tell the user the ranking may be incomplete.'
+    : undefined;
 
 const DAYS_PARAMETER = {
   type: 'number',
@@ -58,12 +91,20 @@ const getLeaderboardTool: ToolDefinition = {
   description:
     'Get the team leaderboard, ranked by the sats each teammate has zapped to others ' +
     'out of their Allowance wallet. Private wallet balances are never ranked.',
-  parameters: { type: 'object', properties: {}, required: [] },
-  handler: async () => {
-    const entries = await getZapLeaderboard();
+  parameters: {
+    type: 'object',
+    properties: { days: LEADERBOARD_DAYS_PARAMETER },
+    required: [],
+  },
+  handler: async (args: { days?: number }) => {
+    const sinceTimestamp = leaderboardSinceTimestamp(args?.days);
+    const leaderboard = await getZapLeaderboard({ sinceTimestamp });
     return {
       rewardLabel,
-      leaderboard: entries.map(entry => ({
+      periodDays: sinceTimestamp ? Math.floor(args.days as number) : null,
+      partial: leaderboard.partial,
+      incompleteReason: coverageNote(leaderboard),
+      leaderboard: leaderboard.entries.map(entry => ({
         displayName: entry.user.displayName,
         zappedSats: entry.zappedSats,
       })),
@@ -101,13 +142,15 @@ const getRecentActivityTool: ToolDefinition = {
       typeof args.limit === 'number'
         ? Math.min(Math.max(args.limit, 1), 50)
         : 20;
-    const activity = await getRecentZaps({
+    const activity = await getZapActivity({
       limit,
       userAadObjectId: args.onlyInvolvingMe ? user.aadObjectId : undefined,
     });
     return {
       rewardLabel,
-      activity: activity.map(entry => ({
+      partial: activity.partial,
+      incompleteReason: coverageNote(activity),
+      activity: activity.zaps.map(entry => ({
         from: entry.from?.displayName || 'Unknown',
         to: entry.to?.displayName || 'Unknown',
         amountSats: entry.amountSats,
