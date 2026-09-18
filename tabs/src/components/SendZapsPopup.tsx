@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import styles from './SendZapsPopup.module.css';
 import { RewardNameContext } from './RewardNameContext';
 import { useCache } from '../utils/CacheContext';
-import { createInvoice, payInvoice } from '../services/lnbits/payments';
+import { sendZap } from '../services/lnbits/payments';
 import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
 import { useMsal } from '@azure/msal-react';
@@ -10,8 +10,6 @@ import loaderGif from '../images/Loader.gif';
 import ZapIcon from '../images/ZapIcon.svg';
 import checkmarkIcon from '../images/CheckmarkCircleGreen.svg';
 import dismissIcon from '../images/DismissCircleRed.svg';
-
-const adminKey = process.env.REACT_APP_LNBITS_ADMINKEY as string;
 
 interface SendZapsPopupProps {
   onClose: () => void;
@@ -21,6 +19,18 @@ interface SendZapsPopupProps {
 type UserWithWallet = User & { privateWallet: Wallet | null };
 
 const PRESET_AMOUNTS = [5000, 10000, 25000];
+
+const MAX_ZAP_AMOUNT = 1000000;
+
+const parseZapAmount = (value: string): number | null => {
+  if (!/^\d+$/.test(value.trim())) {
+    return null;
+  }
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= MAX_ZAP_AMOUNT
+    ? parsed
+    : null;
+};
 
 const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const [selectedUser, setSelectedUser] = useState<string>('');
@@ -60,7 +70,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
         // Get users from cache or fetch them
         let allUsers = cache['allUsers'] as User[];
         if (!allUsers || allUsers.length === 0) {
-          const fetchedUsers = await getUsers(adminKey, {});
+          const fetchedUsers = await getUsers({});
           if (fetchedUsers && fetchedUsers.length > 0) {
             allUsers = fetchedUsers;
             setCache('allUsers', fetchedUsers);
@@ -77,7 +87,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
 
         if (currentUserData) {
           // Always fetch fresh wallet data to get accurate balance
-          const wallets = await getUserWallets(adminKey, currentUserData.id);
+          const wallets = await getUserWallets(currentUserData.id);
           const allowanceWallet = wallets?.find(w =>
             w.name.toLowerCase().includes('allowance'),
           );
@@ -124,7 +134,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
     if (!user || user.privateWallet) return; // Already has wallet or not found
 
     try {
-      const wallets = await getUserWallets(adminKey, userId);
+      const wallets = await getUserWallets(userId);
       // Prioritize "private" wallet, then any non-allowance wallet
       let targetWallet = wallets?.find(w =>
         w.name.toLowerCase().includes('private'),
@@ -170,12 +180,15 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
       return;
     }
 
-    if (!amount || parseFloat(amount) <= 0) {
-      setError('Please enter a valid amount');
+    // Sats are indivisible, and the gateway caps a single zap, so a decimal or
+    // oversized amount is rejected here rather than becoming a failed payment.
+    const zapAmount = parseZapAmount(amount);
+    if (zapAmount === null) {
+      setError(
+        `Please enter a whole number between 1 and ${MAX_ZAP_AMOUNT.toLocaleString()}`,
+      );
       return;
     }
-
-    const zapAmount = parseFloat(amount);
 
     // Balance validation
     if (zapAmount > currentUserWallets.balance) {
@@ -209,23 +222,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
         paymentMemo = `[Anonymous] ${paymentMemo}`;
       }
 
-      // Create invoice in recipient's private wallet
-      const paymentRequest = await createInvoice(
-        recipient.privateWallet.inkey,
-        recipient.privateWallet.id,
-        zapAmount,
-        paymentMemo,
-      );
-
-      if (!paymentRequest) {
-        throw new Error('Failed to create invoice');
-      }
-
-      // Pay the invoice from sender's allowance wallet
-      const result = await payInvoice(
-        currentUserWallets.allowance.adminkey,
-        paymentRequest,
-      );
+      const result = await sendZap(recipient.id, zapAmount, paymentMemo);
 
       if (result && result.payment_hash) {
         setPaymentHash(result.payment_hash);
@@ -252,7 +249,8 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   };
 
   const selectedUserData = users.find(u => u.id === selectedUser);
-  const isSendDisabled = !selectedUser || !amount || parseFloat(amount) <= 0;
+  const isSendDisabled =
+    !selectedUser || !amount || parseZapAmount(amount) === null;
 
   // Get initials for avatar placeholder
   const getInitials = (name?: string) => {
