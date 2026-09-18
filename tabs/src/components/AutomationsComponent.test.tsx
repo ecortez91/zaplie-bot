@@ -1,0 +1,156 @@
+import React, { act } from 'react';
+import { createRoot, Root } from 'react-dom/client';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  jest,
+  test,
+} from '@jest/globals';
+import AutomationsComponent from './AutomationsComponent';
+import type { AutomationsStats } from '../services/automationsStatsService';
+import type { WebhookKey } from '../services/webhookKeysService';
+
+interface MsalContextStub {
+  instance: Record<string, unknown>;
+  accounts: { homeAccountId: string }[];
+}
+
+const mockUseMsal = jest.fn<MsalContextStub, []>();
+const mockToastError = jest.fn<void, unknown[]>();
+const mockToastSuccess = jest.fn<void, unknown[]>();
+const mockGetGithubConnection = jest.fn<
+  Promise<{ connected: boolean }>,
+  [string]
+>();
+const mockGetAutomationsStats = jest.fn<Promise<AutomationsStats>, [string]>();
+const mockGetWebhookKeys = jest.fn<Promise<WebhookKey[]>, [string]>();
+
+jest.mock('@azure/msal-react', () => ({
+  useMsal: () => mockUseMsal(),
+}));
+
+jest.mock('../services/adminRole', () => ({
+  acquireIdToken: () => Promise.resolve('id-token'),
+  isZaplieAdmin: () => true,
+}));
+
+jest.mock('../apiService', () => ({
+  getAutomations: () => Promise.resolve({ repos: [] }),
+  updateAutomations: () => Promise.resolve({ repos: [] }),
+  getRewardAmounts: () => Promise.resolve({ rewardAmounts: {} }),
+  updateRewardAmounts: () => Promise.resolve({ rewardAmounts: {} }),
+}));
+
+jest.mock('../services/connectionsService', () => ({
+  getGithubConnection: (idToken: string) => mockGetGithubConnection(idToken),
+  getGithubInstallUrl: () => Promise.resolve('https://github.test/install'),
+}));
+
+jest.mock('../services/automationsStatsService', () => ({
+  getAutomationsStats: (idToken: string) => mockGetAutomationsStats(idToken),
+}));
+
+jest.mock('../services/webhookKeysService', () => ({
+  getWebhookKeys: (idToken: string) => mockGetWebhookKeys(idToken),
+  createWebhookKey: () => Promise.resolve({ key: 'zpl_x', id: 'id' }),
+  revokeWebhookKey: () => Promise.resolve(),
+}));
+
+jest.mock('react-toastify', () => ({
+  ToastContainer: () => null,
+  toast: {
+    error: (...args: unknown[]) => mockToastError(...args),
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+  },
+}));
+
+const webhookKey: WebhookKey = {
+  id: '6f0b1e2c-6a4d-4c1a-9a0d-0b6a9c2f1e33',
+  label: 'GitHub Logic App',
+  last4: 'a1b2',
+  createdAt: '2026-08-01T10:00:00.000Z',
+  revokedAt: null,
+};
+
+let container: HTMLDivElement;
+let root: Root;
+
+function mountAutomations(): void {
+  root.render(<AutomationsComponent />);
+}
+
+const renderAutomations = async () => {
+  await act(async () => {
+    mountAutomations();
+  });
+  // Let the two load effects settle.
+  await act(async () => {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+};
+
+describe('AutomationsComponent panel independence', () => {
+  beforeEach(() => {
+    (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    jest.clearAllMocks();
+    mockUseMsal.mockReturnValue({
+      instance: {},
+      accounts: [{ homeAccountId: 'account-1' }],
+    });
+    mockGetGithubConnection.mockResolvedValue({ connected: true });
+    mockGetWebhookKeys.mockResolvedValue([webhookKey]);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  test('still renders the GitHub banner and API keys when stats reject', async () => {
+    mockGetAutomationsStats.mockRejectedValue(
+      new Error('Automations stats response is malformed.'),
+    );
+
+    await renderAutomations();
+
+    // The other two panels loaded independently of the failing stats call.
+    expect(container.textContent).toContain('App installed');
+    expect(container.textContent).toContain('GitHub Logic App');
+    // Stats gets its own, non-blocking error state.
+    expect(container.textContent).toContain(
+      'Recipient activity is unavailable right now.',
+    );
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    // No generic connection toast: the connection call succeeded.
+    expect(mockToastError).not.toHaveBeenCalledWith(
+      'Could not load connection status.',
+    );
+  });
+
+  test('still renders API keys when the GitHub connection rejects', async () => {
+    mockGetAutomationsStats.mockResolvedValue({
+      paidSatsThisMonth: 0,
+      paymentsThisMonth: 0,
+      runsByEventType: {},
+      engagementByAudience: { teammates: [], copilots: [], customers: [] },
+      recentPayments: [],
+    });
+    mockGetGithubConnection.mockRejectedValue(new Error('502 from GitHub'));
+
+    await renderAutomations();
+
+    expect(container.textContent).toContain('GitHub Logic App');
+    expect(mockToastError).toHaveBeenCalledWith(
+      'Could not load connection status.',
+    );
+  });
+});

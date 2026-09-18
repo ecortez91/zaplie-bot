@@ -150,6 +150,7 @@ const AutomationsComponent: FunctionComponent = () => {
   const [appInstalled, setAppInstalled] = useState(false);
   const [stats, setStats] = useState<AutomationsStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState(false);
   const [webhookKeys, setWebhookKeys] = useState<WebhookKey[]>([]);
   const [newKeyLabel, setNewKeyLabel] = useState('');
   const [creatingKey, setCreatingKey] = useState(false);
@@ -191,23 +192,51 @@ const AutomationsComponent: FunctionComponent = () => {
       return;
     }
     setStatsLoading(true);
+    setStatsError(false);
     const loadConnections = async () => {
+      let idToken: string;
       try {
-        const idToken = await acquireIdToken(instance, accounts[0]);
-        const [connection, statsData, keys] = await Promise.all([
-          getGithubConnection(idToken),
-          getAutomationsStats(idToken),
-          isAdmin ? getWebhookKeys(idToken) : Promise.resolve([]),
-        ]);
-        setAppInstalled(connection.connected);
-        setStats(statsData);
-        setWebhookKeys(keys);
+        idToken = await acquireIdToken(instance, accounts[0]);
       } catch (err) {
-        console.error('Error fetching connections state:', err);
+        console.error('Error acquiring a token for automations:', err);
         toast.error('Could not load connection status.');
-      } finally {
+        setStatsError(true);
         setStatsLoading(false);
+        return;
       }
+
+      // allSettled, not all: treasury stats come from LNbits and fail far more
+      // often than the other two. One rejection used to hide the
+      // GitHub-connected banner and the API-keys list behind a generic toast.
+      const [connection, statsData, keys] = await Promise.allSettled([
+        getGithubConnection(idToken),
+        getAutomationsStats(idToken),
+        isAdmin ? getWebhookKeys(idToken) : Promise.resolve([]),
+      ]);
+
+      if (connection.status === 'fulfilled') {
+        setAppInstalled(connection.value.connected);
+      } else {
+        console.error('Error fetching GitHub connection:', connection.reason);
+        toast.error('Could not load connection status.');
+      }
+
+      if (statsData.status === 'fulfilled') {
+        setStats(statsData.value);
+        setStatsError(false);
+      } else {
+        console.error('Error fetching automations stats:', statsData.reason);
+        setStatsError(true);
+      }
+
+      if (keys.status === 'fulfilled') {
+        setWebhookKeys(keys.value);
+      } else {
+        console.error('Error fetching webhook keys:', keys.reason);
+        toast.error('Could not load the API keys.');
+      }
+
+      setStatsLoading(false);
     };
     loadConnections();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -429,7 +458,10 @@ const AutomationsComponent: FunctionComponent = () => {
             ))}
           </div>
         ) : (
-          <p className={styles.emptyState}>
+          <p
+            className={styles.emptyState}
+            role={statsError ? 'alert' : undefined}
+          >
             Recipient activity is unavailable right now.
           </p>
         )}
