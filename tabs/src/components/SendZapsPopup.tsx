@@ -22,12 +22,28 @@ const PRESET_AMOUNTS = [5000, 10000, 25000];
 
 const MAX_ZAP_AMOUNT = 1000000;
 
-// The gateway returns this when a zap was paid but the success could not be
-// recorded (OUTCOME_UNKNOWN_MESSAGE in lnbitsGatewayService.js). Offering
-// "Try Again" there invites exactly the second payment the whole idempotency
-// layer exists to prevent, so that error closes instead of retrying.
+// Three gateway answers mean this key can never succeed again, and none of
+// them means "definitely not paid" (see lnbitsGatewayService.js):
+//
+//   - outcome_unknown - the zap was paid but the success could not be recorded
+//   - failed - the payment was attempted and threw, so the key is poisoned
+//     deliberately; that is fail-closed, not proof the money stayed put
+//   - the key is already bound to a different zap
+//
+// Retrying any of them with the same key 409s forever, and minting a fresh key
+// would risk a second payment for the first two, so the popup closes instead.
+// "Zap request is already in progress" is deliberately absent: retrying that
+// one replays the in-flight attempt's result once it settles, which is safe.
+const TERMINAL_ZAP_ERRORS = [
+  /contact support/i,
+  /cannot be retried safely/i,
+  /already used for another zap/i,
+];
+
 const isDoNotRetryError = (message: string | null) =>
-  Boolean(message && /contact support/i.test(message));
+  Boolean(
+    message && TERMINAL_ZAP_ERRORS.some(pattern => pattern.test(message)),
+  );
 
 const parseZapAmount = (value: string): number | null => {
   if (!/^\d+$/.test(value.trim())) {

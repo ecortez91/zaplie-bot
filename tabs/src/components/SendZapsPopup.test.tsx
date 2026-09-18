@@ -167,23 +167,40 @@ describe('SendZapsPopup idempotency key', () => {
     expect(keysSent()).toEqual(['generated-key-1', 'generated-key-1']);
   });
 
-  test('offers Close, not Try Again, when the gateway says do not retry', async () => {
-    mockSendZap.mockRejectedValueOnce(
-      new Error(
-        'This zap may have been paid but could not be recorded. Do not retry: ' +
-          'contact support to confirm whether it went through.',
-      ),
-    );
+  // Every one of these keys is spent: retrying sends the same key and 409s
+  // forever, and none of them proves the money stayed put.
+  test.each([
+    [
+      'outcome unknown',
+      'This zap may have been paid but could not be recorded. Do not retry: ' +
+        'contact support to confirm whether it went through.',
+    ],
+    ['poisoned key', 'Idempotency key cannot be retried safely'],
+    ['key bound elsewhere', 'Idempotency key was already used for another zap'],
+  ])('offers Close, not Try Again, after a %s', async (_label, message) => {
+    mockSendZap.mockRejectedValueOnce(new Error(message));
     await openAndCompose('21');
     await send();
 
-    // A retry here is the second payment the idempotency layer exists to stop.
     expect(byText(container, 'Try Again')).toBeUndefined();
     const close = byText(container, 'Close');
     expect(close).toBeDefined();
 
     await click(close as Element);
     expect(mockSendZap).toHaveBeenCalledTimes(1);
+  });
+
+  // An in-flight attempt is the one case worth retrying: the same key replays
+  // that attempt's result once it settles.
+  test('still offers Try Again while a zap is already in progress', async () => {
+    mockSendZap.mockRejectedValueOnce(
+      new Error('Zap request is already in progress'),
+    );
+    await openAndCompose('21');
+    await send();
+
+    expect(byText(container, 'Close')).toBeUndefined();
+    expect(byText(container, 'Try Again')).toBeDefined();
   });
 
   test('keeps the key when a memo edit does not change the request sent', async () => {
