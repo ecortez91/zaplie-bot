@@ -38,18 +38,21 @@ const getAccessToken = async (config) => {
     return tokenCache.value;
   }
   if (!tokenRequest) {
-    const request = getLnbitsToken(config).then((value) => {
-      tokenCache = { value, expiresAt: Date.now() + TOKEN_CACHE_MS };
-      return value;
-    });
-    tokenRequest = request;
-    request
-      .catch(() => {})
-      .then(() => {
+    // The clear lives in a finally on the request itself, not in a chained
+    // then: a finally callback runs before the promise the caller awaits
+    // settles, so a caller that retries the instant it sees the rejection
+    // starts a fresh login instead of re-awaiting the rejected one.
+    const request = getLnbitsToken(config)
+      .then((value) => {
+        tokenCache = { value, expiresAt: Date.now() + TOKEN_CACHE_MS };
+        return value;
+      })
+      .finally(() => {
         if (tokenRequest === request) {
           tokenRequest = null;
         }
       });
+    tokenRequest = request;
   }
   return tokenRequest;
 };

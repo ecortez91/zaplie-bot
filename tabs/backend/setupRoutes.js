@@ -10,6 +10,7 @@ const { verifyMsalToken, extractBearerToken } = require('./msalValidator');
 const { requireAdmin } = require('./adminAuth');
 const { signState, verifyState } = require('./githubOAuthState');
 const { getCredentials, saveCredentials } = require('./githubAppCredentials');
+const { requestTimeoutSignal } = require('./httpTimeout');
 
 const router = express.Router();
 
@@ -90,6 +91,7 @@ router.get('/github/callback', async (req, res) => {
           Accept: 'application/vnd.github+json',
           'User-Agent': 'zaplie-setup',
         },
+        signal: requestTimeoutSignal(),
       },
     );
     if (response.status !== 201) {

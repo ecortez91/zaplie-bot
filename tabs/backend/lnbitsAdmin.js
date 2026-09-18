@@ -2,10 +2,9 @@
 // Server-side LNbits access shared by routes that aggregate or move funds.
 // Admin credentials never reach the browser.
 
-// A stalled LNbits connection must not pin an Express request open for ever.
-// Every LNbits call made from this backend is bound by it — the gateway service
-// imports this constant rather than keeping a second copy that could drift.
-const REQUEST_TIMEOUT_MS = 10 * 1000;
+// Re-exported so LNbits call sites keep importing their timeout from the module
+// that owns the raw fetches, while the value itself lives in one place.
+const { REQUEST_TIMEOUT_MS } = require('./httpTimeout');
 
 const requireLnbitsConfig = () => {
   const nodeUrl = process.env.LNBITS_NODE_URL;
