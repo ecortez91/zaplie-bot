@@ -105,7 +105,11 @@ describe('UserListComponent', () => {
       root.render(
         <CacheProvider>
           <RewardNameContext.Provider
-            value={{ rewardName: 'sats', setRewardName: jest.fn() }}
+            value={{
+              rewardName: 'sats',
+              rewardNameLabel: 'sats',
+              setRewardName: jest.fn(),
+            }}
           >
             <UserListComponent />
           </RewardNameContext.Provider>
@@ -130,7 +134,11 @@ describe('UserListComponent', () => {
       root.render(
         <CacheProvider>
           <RewardNameContext.Provider
-            value={{ rewardName: 'sats', setRewardName: jest.fn() }}
+            value={{
+              rewardName: 'sats',
+              rewardNameLabel: 'sats',
+              setRewardName: jest.fn(),
+            }}
           >
             <UserListComponent />
           </RewardNameContext.Provider>
@@ -169,7 +177,11 @@ describe('UserListComponent', () => {
       root.render(
         <CacheProvider>
           <RewardNameContext.Provider
-            value={{ rewardName: 'sats', setRewardName: jest.fn() }}
+            value={{
+              rewardName: 'sats',
+              rewardNameLabel: 'sats',
+              setRewardName: jest.fn(),
+            }}
           >
             <UserListComponent />
           </RewardNameContext.Provider>
@@ -192,7 +204,11 @@ describe('UserListComponent', () => {
       root.render(
         <CacheProvider>
           <RewardNameContext.Provider
-            value={{ rewardName: 'sats', setRewardName: jest.fn() }}
+            value={{
+              rewardName: 'sats',
+              rewardNameLabel: 'sats',
+              setRewardName: jest.fn(),
+            }}
           >
             <UserListWithSeededCache seed={[]} />
           </RewardNameContext.Provider>
@@ -213,7 +229,11 @@ describe('UserListComponent', () => {
       root.render(
         <CacheProvider>
           <RewardNameContext.Provider
-            value={{ rewardName: 'sats', setRewardName: jest.fn() }}
+            value={{
+              rewardName: 'sats',
+              rewardNameLabel: 'sats',
+              setRewardName: jest.fn(),
+            }}
           >
             <UserListWithCachedUsers users={[user]} />
           </RewardNameContext.Provider>
