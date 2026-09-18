@@ -185,6 +185,19 @@ const AutomationsComponent: FunctionComponent = () => {
     setStatsError(false);
     setLoading(true);
     setStatsLoading(true);
+    // In-progress edits belong to the previous account: the same rule key
+    // could otherwise open in edit mode holding the old account's amount, and
+    // saving it would write that stale value.
+    setEditingKey(null);
+    setEditingValue('');
+    setNewRepo('');
+    setNewKeyLabel('');
+    // A handler still in flight for the previous account skips its own
+    // finally, so its flags have to be cleared here or the new account
+    // inherits a permanently disabled "Creating..." or saving control.
+    setCreatingKey(false);
+    setSaving(false);
+    setInstalling(false);
   }, [accountId]);
 
   useEffect(() => {
@@ -357,15 +370,30 @@ const AutomationsComponent: FunctionComponent = () => {
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
       const created = await createWebhookKey(idToken, label);
-      const keys = await getWebhookKeys(idToken);
       // The account changed while this was in flight: putting the plaintext
-      // key back on screen now would show it to whoever is signed in instead.
+      // key on screen now would show it to whoever is signed in instead.
       if (!stillSameAccount(startedAs)) {
         return;
       }
+      // Surface the secret before refreshing the list. The key already exists
+      // server-side and its plaintext is returned exactly once, so a failed
+      // refresh must not cost the admin the only copy.
       setCreatedKey(created.key);
       setNewKeyLabel('');
-      setWebhookKeys(keys);
+      try {
+        const keys = await getWebhookKeys(idToken);
+        if (stillSameAccount(startedAs)) {
+          setWebhookKeys(keys);
+        }
+      } catch (refreshErr) {
+        console.error(
+          'Error refreshing webhook keys after create:',
+          refreshErr,
+        );
+        if (stillSameAccount(startedAs)) {
+          toast.error('Key created, but the list could not be refreshed.');
+        }
+      }
     } catch (err) {
       console.error('Error creating webhook key:', err);
       if (stillSameAccount(startedAs)) {
