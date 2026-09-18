@@ -186,6 +186,34 @@ describe('SendZapsPopup idempotency key', () => {
     expect(mockSendZap).toHaveBeenCalledTimes(1);
   });
 
+  test('keeps the key when a memo edit does not change the request sent', async () => {
+    mockSendZap.mockRejectedValueOnce(new Error('Request timed out'));
+    await openAndCompose('21');
+    await send();
+    // An empty memo is sent as 'Zap payment'.
+    expect(mockSendZap.mock.calls[0][2]).toBe('Zap payment');
+
+    await click(byText(container, 'Try Again') as Element);
+
+    // Typing that same text into the memo box changes the field but not the
+    // request, so the retry must not mint a new key and pay twice.
+    const memo = container.querySelector(
+      'input[placeholder="Description"], textarea[placeholder="Description"]',
+    );
+    await act(async () => {
+      setValue(memo as HTMLElement, 'Zap payment');
+    });
+    await flush();
+    // Guard against the test passing because the field was never found.
+    expect((memo as HTMLInputElement).value).toBe('Zap payment');
+
+    mockSendZap.mockResolvedValueOnce({ payment_hash: 'hash-1' });
+    await send();
+
+    expect(mockSendZap.mock.calls[1][2]).toBe('Zap payment');
+    expect(keysSent()).toEqual(['generated-key-1', 'generated-key-1']);
+  });
+
   test('mints a new key once the zap details change', async () => {
     mockSendZap.mockRejectedValueOnce(new Error('Request timed out'));
     await openAndCompose('21');

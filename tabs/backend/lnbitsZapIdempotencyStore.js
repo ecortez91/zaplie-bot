@@ -285,14 +285,18 @@ const acquireLock = async (lockPath) => {
 };
 
 // Swept inside begin(), under the same lock that already rewrites the file, so
-// no extra lock round-trip. Unsettled records are never swept: a pending or
-// outcome_unknown zap may still have money in flight and must stay for
-// reconciliation however old it is.
+// no extra lock round-trip.
+//
+// Only `succeeded` is ever swept. Everything else is a key that must keep
+// refusing: a `failed` key was poisoned after a payment attempt, so letting it
+// age out would let a long-delayed retry pay for real, and `pending`,
+// `outcome_unknown` or an unrecognised state may still have money in flight.
+// Successes are the overwhelming majority, so this still bounds the file.
 const pruneExpired = (store, nowMs) => {
   const cutoff = nowMs - ttlMs();
   let pruned = 0;
   for (const [scope, record] of Object.entries(store.records)) {
-    if (record?.state === 'pending' || record?.state === 'outcome_unknown') {
+    if (record?.state !== 'succeeded') {
       continue;
     }
     const settledAt = Date.parse(record?.updatedAt ?? '');

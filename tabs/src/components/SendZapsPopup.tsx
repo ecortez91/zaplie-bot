@@ -46,8 +46,14 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   // One key per zap attempt, deliberately outside React state so a re-render
   // cannot change it mid-flight. The gateway can time the browser out while it
   // is still paying, so pressing Send again has to replay the same key or it
-  // pays a second time. Cleared on success and whenever the zap itself changes.
-  const idempotencyKeyRef = useRef<string | null>(null);
+  // pays a second time.
+  //
+  // It is keyed on the request actually sent, not on the raw form fields: an
+  // empty memo goes out as "Zap payment", so typing that into the memo box
+  // between attempts changes the field without changing the request, and
+  // minting a new key there would pay twice. Cleared on success, because the
+  // next Send is a new zap.
+  const zapKeyRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,13 +69,6 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const [sendAnonymously, setSendAnonymously] = useState(false);
   const [selectedValue, setSelectedValue] = useState<string>('');
   const [paymentHash, setPaymentHash] = useState<string | null>(null);
-
-  // Editing the recipient, amount or memo makes it a different zap, and the
-  // gateway rejects a key reused for different details with a 409, so the key
-  // is dropped the moment any of them changes.
-  useEffect(() => {
-    idempotencyKeyRef.current = null;
-  }, [selectedUser, amount, memo, selectedValue, sendAnonymously]);
 
   const { cache, setCache } = useCache();
   const { accounts } = useMsal();
@@ -241,19 +240,26 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
         paymentMemo = `[Anonymous] ${paymentMemo}`;
       }
 
-      if (!idempotencyKeyRef.current) {
-        idempotencyKeyRef.current = newIdempotencyKey();
+      // A genuinely different zap gets its own key; an identical retry does
+      // not. Reusing a key for changed details would be refused with a 409.
+      const fingerprint = JSON.stringify([
+        recipient.id,
+        zapAmount,
+        paymentMemo,
+      ]);
+      if (zapKeyRef.current?.fingerprint !== fingerprint) {
+        zapKeyRef.current = { fingerprint, key: newIdempotencyKey() };
       }
       const result = await sendZap(
         recipient.id,
         zapAmount,
         paymentMemo,
-        idempotencyKeyRef.current,
+        zapKeyRef.current.key,
       );
 
       if (result && result.payment_hash) {
         // Settled: the next Send is a different zap and needs its own key.
-        idempotencyKeyRef.current = null;
+        zapKeyRef.current = null;
         setPaymentHash(result.payment_hash);
         setSuccess(true);
         // Optimistic update for immediate UI feedback
@@ -272,7 +278,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   };
 
   const handleClose = () => {
-    idempotencyKeyRef.current = null;
+    zapKeyRef.current = null;
     setSuccess(false);
     setError(null);
     onClose();

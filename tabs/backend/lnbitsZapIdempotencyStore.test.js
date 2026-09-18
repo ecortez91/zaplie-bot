@@ -25,7 +25,7 @@ const scopeFor = (key) =>
 const hashFor = (amount) =>
   requestDigest({ recipientUserId: 'recipient-1', amount, memo: 'thanks' });
 
-test('settled records past the TTL are swept, unsettled ones never are', async (t) => {
+test('only succeeded records are swept, every other state is kept', async (t) => {
   const storePath = tempStore(t, 'zaplie-zap-ttl-');
   const old = new Date(Date.now() - 90 * 86_400_000).toISOString();
   fs.writeFileSync(
@@ -69,7 +69,9 @@ test('settled records past the TTL are swept, unsettled ones never are', async (
 
   const records = readRecords(storePath);
   assert.equal(records[scopeFor('old-success-000001')], undefined);
-  assert.equal(records[scopeFor('old-failed-0000001')], undefined);
+  // A poisoned key has to keep refusing: ageing it out would let a very
+  // delayed retry pay for real.
+  assert.equal(records[scopeFor('old-failed-0000001')].state, 'failed');
   assert.equal(records[scopeFor('old-pending-000001')].state, 'pending');
   assert.equal(records[scopeFor('old-unknown-000001')].state, 'outcome_unknown');
   assert.equal(records[scopeFor('fresh-request-00001')].state, 'pending');
