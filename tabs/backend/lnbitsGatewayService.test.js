@@ -521,3 +521,42 @@ test('a poisoned key keeps the invoice id needed to reconcile it', async (t) => 
   assert.equal(record.state, 'failed');
   assert.equal(record.payment.invoiceId, 'invoice-1');
 });
+
+test('a zap that cannot even be marked unknown is never recorded as failed', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zaplie-zap-mark-fail-'));
+  const storePath = path.join(tempDir, 'zaps.json');
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const inner = createZapIdempotencyStore({ storePath });
+  let failCalls = 0;
+
+  // Both the success write and the fallback write fail, the worst case.
+  const store = {
+    ...inner,
+    complete: async () => {
+      throw new Error('disk full');
+    },
+    markOutcomeUnknown: async () => {
+      throw new Error('still disk full');
+    },
+    fail: async (args) => {
+      failCalls += 1;
+      return inner.fail(args);
+    },
+  };
+
+  const sendZap = createSendZap(createTestZapDependencies(store));
+
+  await assert.rejects(
+    sendZap(validZap),
+    (error) => error.status === 503 && /contact support/.test(error.message),
+  );
+
+  // `failed` would read as "not paid" and replay as "cannot be retried
+  // safely", but the money has gone. The record must not say that.
+  assert.equal(failCalls, 0);
+  const record = Object.values(
+    JSON.parse(fs.readFileSync(storePath, 'utf8')).records,
+  )[0];
+  assert.equal(record.state, 'pending');
+  assert.equal(record.payment.invoiceId, 'invoice-1');
+});

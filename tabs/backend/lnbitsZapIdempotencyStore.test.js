@@ -210,3 +210,38 @@ test('a lock taken after the staleness check is not deleted', async (t) => {
   assert.equal(fs.existsSync(lockPath), true);
   assert.equal(fs.readFileSync(lockPath, 'utf8'), 'live');
 });
+
+test('release leaves a lock that is no longer the one it took', async (t) => {
+  const storePath = tempStore(t, 'zaplie-zap-release-real-');
+  const lockPath = `${storePath}.lock`;
+  const store = createZapIdempotencyStore({ storePath });
+
+  // Wedge the real release path: hold the lock, swap the file underneath it,
+  // then let the store's own begin() finish and release.
+  let swappedIno = null;
+  const original = fs.promises.open;
+  t.after(() => {
+    fs.promises.open = original;
+  });
+  fs.promises.open = async (...args) => {
+    const handle = await original.apply(fs.promises, args);
+    if (args[0] === lockPath && swappedIno === null) {
+      // A waiter broke this lock and a new holder took the path.
+      const incoming = `${lockPath}.incoming`;
+      fs.writeFileSync(incoming, 'new-holder');
+      fs.unlinkSync(lockPath);
+      fs.renameSync(incoming, lockPath);
+      swappedIno = fs.statSync(lockPath).ino;
+    }
+    return handle;
+  };
+
+  await store.begin({
+    scope: scopeFor('swapped-lock-00001'),
+    requestHash: hashFor(2),
+  });
+
+  assert.notEqual(swappedIno, null);
+  assert.equal(fs.existsSync(lockPath), true);
+  assert.equal(fs.statSync(lockPath).ino, swappedIno);
+});

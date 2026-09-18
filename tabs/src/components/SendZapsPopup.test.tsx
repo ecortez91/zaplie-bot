@@ -167,6 +167,25 @@ describe('SendZapsPopup idempotency key', () => {
     expect(keysSent()).toEqual(['generated-key-1', 'generated-key-1']);
   });
 
+  test('offers Close, not Try Again, when the gateway says do not retry', async () => {
+    mockSendZap.mockRejectedValueOnce(
+      new Error(
+        'This zap may have been paid but could not be recorded. Do not retry: ' +
+          'contact support to confirm whether it went through.',
+      ),
+    );
+    await openAndCompose('21');
+    await send();
+
+    // A retry here is the second payment the idempotency layer exists to stop.
+    expect(byText(container, 'Try Again')).toBeUndefined();
+    const close = byText(container, 'Close');
+    expect(close).toBeDefined();
+
+    await click(close as Element);
+    expect(mockSendZap).toHaveBeenCalledTimes(1);
+  });
+
   test('mints a new key once the zap details change', async () => {
     mockSendZap.mockRejectedValueOnce(new Error('Request timed out'));
     await openAndCompose('21');

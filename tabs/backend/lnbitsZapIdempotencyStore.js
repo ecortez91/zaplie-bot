@@ -192,7 +192,12 @@ const breakStaleLock = async (lockPath, observed) => {
     try {
       await fs.promises.link(graveyard, lockPath);
     } catch {
-      // A new holder already owns the path; its own release tolerates ENOENT.
+      // A newer holder owns the path, so the file now sitting in the graveyard
+      // is somebody's live lock and not ours to delete: unlinking it would
+      // destroy a lock its holder still believes it holds. Leave the file
+      // behind instead. It is inert — release() checks the inode before
+      // unlinking, so a stranded lock file frees nothing and blocks nobody.
+      return;
     }
   }
   try {
@@ -214,8 +219,27 @@ const acquireLock = async (lockPath) => {
   while (Date.now() - startedAt < LOCK_TIMEOUT_MS) {
     try {
       const handle = await fs.promises.open(lockPath, 'wx', 0o600);
+      // Captured while the handle is still open: this is the identity of the
+      // lock we actually took, as opposed to whatever sits at the path later.
+      const held = await handle.stat();
       return async () => {
         await handle.close();
+        // A holder that stalled past STALE_LOCK_MS has had its lock broken and
+        // the path handed to somebody else. Unlinking by path would then delete
+        // the new holder's lock and let a third process straight in, so release
+        // removes the lock only if it is still the one this holder took.
+        let current;
+        try {
+          current = await fs.promises.stat(lockPath);
+        } catch (error) {
+          if (error.code === 'ENOENT') {
+            return;
+          }
+          throw error;
+        }
+        if (current.ino !== held.ino || current.mtimeMs !== held.mtimeMs) {
+          return;
+        }
         try {
           await fs.promises.unlink(lockPath);
         } catch (error) {

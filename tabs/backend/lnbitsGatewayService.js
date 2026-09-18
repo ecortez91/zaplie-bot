@@ -481,6 +481,7 @@ const createSendZap = ({
       }
 
       let paymentAttempted = false;
+      let outcomeUnknown = false;
       try {
         const senderWallets = await listWalletsForZap(sender.id);
         const senderWallet = senderWallets.find(
@@ -531,6 +532,7 @@ const createSendZap = ({
           // nothing recorded, and leaving the record pending would wedge every
           // retry on "already in progress" forever, so mark it unknown and say
           // so instead of guessing either way.
+          outcomeUnknown = true;
           try {
             await idempotencyStore.markOutcomeUnknown({
               scope,
@@ -544,17 +546,25 @@ const createSendZap = ({
             );
           }
           throw new LnbitsGatewayError(OUTCOME_UNKNOWN_MESSAGE, 503, {
-          expose: true,
-        });
+            expose: true,
+          });
         }
         return result;
       } catch (error) {
         try {
-          if (paymentAttempted) {
-            await idempotencyStore.fail({ scope, requestHash });
-          } else {
-            // No payment was attempted, so the key is safe to retry.
-            await idempotencyStore.release({ scope, requestHash });
+          // `outcomeUnknown` means the payment went through and only recording
+          // it failed. Marking that `failed` would be a lie even when
+          // markOutcomeUnknown itself failed: `failed` reads as "not paid" and
+          // replays as "cannot be retried safely", when the money has almost
+          // certainly gone. Leaving the record pending or unknown keeps it
+          // reconcilable, so this path touches the store no further.
+          if (!outcomeUnknown) {
+            if (paymentAttempted) {
+              await idempotencyStore.fail({ scope, requestHash });
+            } else {
+              // No payment was attempted, so the key is safe to retry.
+              await idempotencyStore.release({ scope, requestHash });
+            }
           }
         } catch (persistError) {
           console.error(

@@ -22,6 +22,13 @@ const PRESET_AMOUNTS = [5000, 10000, 25000];
 
 const MAX_ZAP_AMOUNT = 1000000;
 
+// The gateway returns this when a zap was paid but the success could not be
+// recorded (OUTCOME_UNKNOWN_MESSAGE in lnbitsGatewayService.js). Offering
+// "Try Again" there invites exactly the second payment the whole idempotency
+// layer exists to prevent, so that error closes instead of retrying.
+const isDoNotRetryError = (message: string | null) =>
+  Boolean(message && /contact support/i.test(message));
+
 const parseZapAmount = (value: string): number | null => {
   if (!/^\d+$/.test(value.trim())) {
     return null;
@@ -521,9 +528,11 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
             <div className={styles.errorMessage}>{error}</div>
             <button
               className={styles.closeButton}
-              onClick={() => setError(null)}
+              onClick={
+                isDoNotRetryError(error) ? handleClose : () => setError(null)
+              }
             >
-              Try Again
+              {isDoNotRetryError(error) ? 'Close' : 'Try Again'}
             </button>
           </div>
         </div>
