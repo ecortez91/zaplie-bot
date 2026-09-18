@@ -2,7 +2,6 @@ import { FunctionComponent, useState, useEffect, useContext } from 'react';
 import styles from './TotalZapsComponent.module.css';
 /// <reference path = "../global.d.ts" />
 import { RewardNameContext } from './RewardNameContext';
-import { getRewardName } from '../apiService';
 
 export interface ZapSent {
   totalZaps: number;
@@ -36,21 +35,7 @@ const TotalZapsComponent: FunctionComponent<TotalZapsComponentProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [error] = useState<string | null>(null);
 
-  const { rewardName, setRewardName } = useContext(RewardNameContext);
-
-  // Get updated Reward Name from context
-  useEffect(() => {
-    const fetchRewardName = async () => {
-      try {
-        const data = await getRewardName();
-        setRewardName(data.rewardName);
-      } catch (error) {
-        console.error('Error fetching reward name:', error);
-      }
-    };
-
-    fetchRewardName();
-  }, [setRewardName]);
+  const { rewardName } = useContext(RewardNameContext);
 
   const rewardsName = rewardName;
 
