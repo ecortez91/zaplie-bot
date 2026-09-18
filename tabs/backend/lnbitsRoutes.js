@@ -61,6 +61,21 @@ const parseBoundedInt = (value, { fallback, min, max }) => {
     : null;
 };
 
+// A body key the route does not read is a key the caller believed it could set.
+// `aadObjectId` is the one that matters: authorization is derived from the
+// verified token and never from the body, and refusing the key says so out loud
+// instead of accepting the request and quietly ignoring it. The portal client
+// sends exactly these fields.
+const INVOICE_BODY_KEYS = new Set(['amount', 'memo']);
+const PAYMENT_BODY_KEYS = new Set(['paymentRequest']);
+const ZAP_BODY_KEYS = new Set(['recipientUserId', 'amount', 'memo']);
+
+const hasOnlyKeys = (body, allowed) =>
+  typeof body === 'object' &&
+  body !== null &&
+  !Array.isArray(body) &&
+  Object.keys(body).every((key) => allowed.has(key));
+
 const parseMemo = (value) =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 500
     ? value.trim()
@@ -191,7 +206,12 @@ const createLnbitsRouter = ({
   router.post('/wallets/:walletId/invoices', asyncRoute(async (req, res) => {
     const amount = parseAmount(req.body?.amount, maxAmountSats);
     const memo = parseMemo(req.body?.memo);
-    if (!validId(req.params.walletId) || amount === null || memo === null) {
+    if (
+      !hasOnlyKeys(req.body, INVOICE_BODY_KEYS) ||
+      !validId(req.params.walletId) ||
+      amount === null ||
+      memo === null
+    ) {
       res.status(400).json({ error: 'invalid invoice request' });
       return;
     }
@@ -207,6 +227,7 @@ const createLnbitsRouter = ({
   router.post('/wallets/:walletId/payments', asyncRoute(async (req, res) => {
     const paymentRequest = req.body?.paymentRequest;
     if (
+      !hasOnlyKeys(req.body, PAYMENT_BODY_KEYS) ||
       !validId(req.params.walletId) ||
       typeof paymentRequest !== 'string' ||
       paymentRequest.length > 4096 ||
@@ -227,7 +248,12 @@ const createLnbitsRouter = ({
   router.post('/zaps', asyncRoute(async (req, res) => {
     const amount = parseAmount(req.body?.amount, maxAmountSats);
     const memo = parseMemo(req.body?.memo);
-    if (!validId(req.body?.recipientUserId) || amount === null || memo === null) {
+    if (
+      !hasOnlyKeys(req.body, ZAP_BODY_KEYS) ||
+      !validId(req.body?.recipientUserId) ||
+      amount === null ||
+      memo === null
+    ) {
       res.status(400).json({ error: 'invalid zap request' });
       return;
     }

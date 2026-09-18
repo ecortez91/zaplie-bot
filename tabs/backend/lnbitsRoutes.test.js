@@ -108,7 +108,7 @@ test('derives wallet-write authorization from the verified oid', async () => {
   const response = await request('/api/lnbits/wallets/wallet-1/invoices', {
     method: 'POST',
     token: 'valid-token',
-    body: { amount: 25, memo: 'thank you', aadObjectId: 'forged-oid' },
+    body: { amount: 25, memo: 'thank you' },
   });
 
   assert.equal(response.status, 201);
@@ -121,6 +121,26 @@ test('derives wallet-write authorization from the verified oid', async () => {
       aadObjectId: 'caller-oid',
     },
   ]);
+});
+
+// A body field the route does not read is refused rather than ignored: a caller
+// that thinks it can name its own oid gets told no, instead of getting a 201
+// that quietly used somebody else's identity.
+test('write routes refuse body fields they do not read', async () => {
+  const forged = [
+    ['/api/lnbits/wallets/wallet-1/invoices', { amount: 25, memo: 'hi', aadObjectId: 'forged-oid' }],
+    ['/api/lnbits/wallets/wallet-1/invoices', { amount: 25, memo: 'hi', walletId: 'wallet-9' }],
+    ['/api/lnbits/wallets/wallet-1/payments', { paymentRequest: 'lnbc1', aadObjectId: 'forged-oid' }],
+    ['/api/lnbits/zaps', { recipientUserId: 'user-2', amount: 25, memo: 'hi', aadObjectId: 'forged-oid' }],
+  ];
+
+  for (const [path, body] of forged) {
+    const callsBefore = calls.length;
+    const response = await request(path, { method: 'POST', token: 'valid-token', body });
+
+    assert.equal(response.status, 400);
+    assert.equal(calls.length, callsBefore);
+  }
 });
 
 test('wallet reads carry the verified oid so a wallet id alone grants nothing', async () => {

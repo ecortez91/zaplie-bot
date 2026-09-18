@@ -65,6 +65,76 @@ test('a store write survives a filesystem that refuses chmod', posixOnly, () => 
   }
 });
 
+test('every filesystem-limitation errno is warned about, not fatal', posixOnly, () => {
+  // Which errno a mount picks for an unsupported chmod is not contractual;
+  // CIFS, NFS, overlayfs and FUSE drivers differ.
+  for (const code of ['EPERM', 'EACCES', 'EINVAL', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP']) {
+    const dir = path.join(tempDir, `limited-${code}`);
+    fs.mkdirSync(dir, { mode: 0o755 });
+    fs.chmodSync(dir, 0o755);
+    resetChmodWarningsForTests();
+
+    const realChmodSync = fs.chmodSync;
+    const realWarn = console.warn;
+    console.warn = () => {};
+    fs.chmodSync = (target, mode) => {
+      if (path.resolve(target) === path.resolve(dir)) {
+        const error = new Error(`${code}: chmod '${target}'`);
+        error.code = code;
+        throw error;
+      }
+      return realChmodSync(target, mode);
+    };
+
+    try {
+      writeJsonSecure(path.join(dir, 'store.json'), { code });
+      assert.deepEqual(
+        JSON.parse(fs.readFileSync(path.join(dir, 'store.json'), 'utf8')),
+        { code },
+      );
+    } finally {
+      fs.chmodSync = realChmodSync;
+      console.warn = realWarn;
+      resetChmodWarningsForTests();
+    }
+  }
+});
+
+test('a chmod error that is not a mode limitation is not swallowed', posixOnly, () => {
+  // EPERM means the mount will not express the mode. EIO means the directory
+  // itself is broken — writing secrets into it anyway is not best effort, it is
+  // ignoring a fault.
+  const dir = path.join(tempDir, 'broken');
+  fs.mkdirSync(dir, { mode: 0o755 });
+  fs.chmodSync(dir, 0o755);
+  resetChmodWarningsForTests();
+
+  const realChmodSync = fs.chmodSync;
+  const realWarn = console.warn;
+  const warnings = [];
+  fs.chmodSync = (target, mode) => {
+    if (path.resolve(target) === path.resolve(dir)) {
+      const error = new Error(`EIO: i/o error, chmod '${target}'`);
+      error.code = 'EIO';
+      throw error;
+    }
+    return realChmodSync(target, mode);
+  };
+  console.warn = (message) => warnings.push(message);
+
+  try {
+    assert.throws(() => writeJsonSecure(path.join(dir, 'store.json'), { ok: true }), {
+      code: 'EIO',
+    });
+    assert.equal(fs.existsSync(path.join(dir, 'store.json')), false);
+    assert.equal(warnings.length, 0);
+  } finally {
+    fs.chmodSync = realChmodSync;
+    console.warn = realWarn;
+    resetChmodWarningsForTests();
+  }
+});
+
 test('a chmod-capable directory is still narrowed to owner-only', posixOnly, () => {
   const dir = path.join(tempDir, 'posix-like');
   fs.mkdirSync(dir, { mode: 0o755 });
