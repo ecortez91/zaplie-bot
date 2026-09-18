@@ -103,12 +103,24 @@ describe('service response contracts — accepted backend payloads', () => {
       paymentsThisMonth: 3,
       runsByEventType: { pull_request: 2, issues: 1 },
       engagementByAudience: {
-        teammates: [recipient],
+        teammates: [
+          recipient,
+          {
+            // audienceForUser(undefined) returns 'teammates', so this is the
+            // bucket buildRecipient puts an unresolvable recipient in.
+            id: 'unattributed',
+            displayName: 'Unattributed recipient',
+            audience: 'teammates' as const,
+            paymentCount: 1,
+            paidSats: 250,
+            lastPaidAt: null,
+          },
+        ],
         copilots: [],
         customers: [
           {
-            id: 'unattributed',
-            displayName: 'Unattributed recipient',
+            id: 'guest-1',
+            displayName: 'Acme Corp',
             audience: 'customers' as const,
             paymentCount: 1,
             paidSats: 500,
@@ -139,7 +151,7 @@ describe('service response contracts — accepted backend payloads', () => {
           recipient: {
             id: 'unattributed',
             displayName: 'Unattributed recipient',
-            audience: 'customers' as const,
+            audience: 'teammates' as const,
           },
         },
       ],
