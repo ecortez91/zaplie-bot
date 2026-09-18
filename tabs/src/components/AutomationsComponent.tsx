@@ -1,4 +1,4 @@
-import React, { FunctionComponent, useEffect, useState } from 'react';
+import React, { FunctionComponent, useEffect, useRef, useState } from 'react';
 import { useMsal } from '@azure/msal-react';
 import styles from './AutomationsComponent.module.css';
 import {
@@ -159,6 +159,12 @@ const AutomationsComponent: FunctionComponent = () => {
     useState<AutomationAudience>('teammates');
 
   const accountId = accounts[0]?.homeAccountId;
+  // Read after an await to tell whether the account changed mid-flight. A ref,
+  // not the closed-over `accountId`, so a handler started under the previous
+  // account sees the current value rather than the one it captured.
+  const accountIdRef = useRef(accountId);
+  const stillSameAccount = (startedAs: string | undefined) =>
+    accountIdRef.current === startedAs;
 
   // Everything below is account-scoped. Reset it the moment the signed-in
   // account changes, before the reloads start: a slow or hanging request would
@@ -168,6 +174,7 @@ const AutomationsComponent: FunctionComponent = () => {
   // the `accounts` array, which useMsal gives a new identity on every token
   // refresh — that would wipe the one-time plaintext key mid-copy.
   useEffect(() => {
+    accountIdRef.current = accountId;
     setRepos([]);
     setAmounts({});
     setAppInstalled(false);
@@ -345,43 +352,69 @@ const AutomationsComponent: FunctionComponent = () => {
       toast.error('Give the key a label, like "GitHub Logic App".');
       return;
     }
+    const startedAs = accountId;
     setCreatingKey(true);
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
       const created = await createWebhookKey(idToken, label);
+      const keys = await getWebhookKeys(idToken);
+      // The account changed while this was in flight: putting the plaintext
+      // key back on screen now would show it to whoever is signed in instead.
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
       setCreatedKey(created.key);
       setNewKeyLabel('');
-      setWebhookKeys(await getWebhookKeys(idToken));
+      setWebhookKeys(keys);
     } catch (err) {
       console.error('Error creating webhook key:', err);
-      toast.error('Could not create the API key.');
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not create the API key.');
+      }
     } finally {
-      setCreatingKey(false);
+      if (stillSameAccount(startedAs)) {
+        setCreatingKey(false);
+      }
     }
   };
 
   const handleRevokeKey = async (id: string) => {
+    const startedAs = accountId;
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
       await revokeWebhookKey(idToken, id);
-      setWebhookKeys(await getWebhookKeys(idToken));
+      const keys = await getWebhookKeys(idToken);
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
+      setWebhookKeys(keys);
       toast.success('Key revoked. Flows using it stop working immediately.');
     } catch (err) {
       console.error('Error revoking webhook key:', err);
-      toast.error('Could not revoke the API key.');
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not revoke the API key.');
+      }
     }
   };
 
   const persistRepos = async (next: string[]) => {
+    const startedAs = accountId;
     setSaving(true);
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
       const data = await updateAutomations(idToken, next);
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
       setRepos(data.repos);
     } catch (err) {
-      toast.error('Could not update connected repositories.');
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not update connected repositories.');
+      }
     } finally {
-      setSaving(false);
+      if (stillSameAccount(startedAs)) {
+        setSaving(false);
+      }
     }
   };
 
@@ -435,6 +468,7 @@ const AutomationsComponent: FunctionComponent = () => {
       toast.error('Reward amount must be a positive whole number of sats.');
       return;
     }
+    const startedAs = accountId;
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
       // `amounts` only changes on a successful save, so another card's unsaved edit can't bleed in here.
@@ -442,11 +476,16 @@ const AutomationsComponent: FunctionComponent = () => {
         ...amounts,
         [key]: nextAmount,
       });
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
       setAmounts(data.rewardAmounts);
       setEditingKey(null);
       toast.success('Reward amount updated.');
     } catch (err) {
-      toast.error('Could not update the reward amount.');
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not update the reward amount.');
+      }
     }
   };
 
