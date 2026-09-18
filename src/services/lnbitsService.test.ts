@@ -6,6 +6,7 @@ import {
   afterEach,
   jest,
 } from '@jest/globals';
+import { USER_LIST_PAGE_SIZE } from './lnbitsService';
 
 const BASE = 'https://lnbits.test';
 const USERNAME = 'lnbits-admin';
@@ -510,7 +511,7 @@ describe('payment reads', () => {
 });
 
 describe('getUsers', () => {
-  const PAGE = 100;
+  const PAGE = USER_LIST_PAGE_SIZE;
   const rawUser = (n: number) => ({
     id: `u-${String(n).padStart(4, '0')}`,
     external_id: `aad-${n}`,
@@ -611,6 +612,24 @@ describe('getUsers', () => {
 
     await expect(service.getUsers('admin-key', null)).rejects.toThrow(
       /ignored offset on page 2/,
+    );
+  });
+
+  test('rejects a page without a data array instead of treating it as empty', async () => {
+    stubUserPages({ [listUrl(0)]: jsonResponse({ total: 15 }) });
+
+    await expect(service.getUsers('admin-key', null)).rejects.toThrow(
+      /page 1 has no data array/,
+    );
+  });
+
+  test('rejects a page whose total is not a non-negative integer', async () => {
+    stubUserPages({
+      [listUrl(0)]: jsonResponse({ data: usersPage(1, 5), total: -1 }),
+    });
+
+    await expect(service.getUsers('admin-key', null)).rejects.toThrow(
+      /page 1 has an invalid total/,
     );
   });
 });

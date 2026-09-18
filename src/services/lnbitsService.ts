@@ -304,7 +304,7 @@ const toUser = (
 // reached, or on a short page when the server sends no `total`; advance
 // `offset` by the rows received so a server that caps `limit` lower still
 // yields every account.
-const USER_LIST_PAGE_SIZE = 100;
+export const USER_LIST_PAGE_SIZE = 100;
 // Guard against a server that ignores `offset`: 10,000 accounts is far beyond
 // any team this bot serves, so hitting it means something is wrong.
 const USER_LIST_MAX_PAGES = 100;
@@ -333,7 +333,12 @@ const getUsers = async (
       );
     }
     const body = await response.json();
-    const pageUsers: RawLnbitsUser[] = body.data ?? [];
+    if (!Array.isArray(body?.data)) {
+      throw new Error(
+        `Error getting users: page ${page + 1} has no data array`,
+      );
+    }
+    const pageUsers: RawLnbitsUser[] = body.data;
     if (pageUsers.length === 0) {
       break;
     }
@@ -344,7 +349,12 @@ const getUsers = async (
     }
     previousFirstId = pageUsers[0].id;
     rawUsers.push(...pageUsers);
-    const total = typeof body.total === 'number' ? body.total : undefined;
+    const total = body.total ?? undefined;
+    if (total !== undefined && (!Number.isInteger(total) || total < 0)) {
+      throw new Error(
+        `Error getting users: page ${page + 1} has an invalid total (${String(total)})`,
+      );
+    }
     if (
       total !== undefined
         ? rawUsers.length >= total
