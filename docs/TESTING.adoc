@@ -4,9 +4,9 @@
 
 == Overview
 
-Testing is currently unit-test only, using Jest in both the bot and the tabs
-app. There is no end-to-end or integration test suite yet; the Azure Functions
-have no tests. This document records the current state and the strategy for
+Testing is currently unit-test only: Jest in the bot and the tabs app, and
+Node's built-in `node:test` for the tabs backend. There is no end-to-end or
+integration test suite yet; the Azure Functions have no tests. This document records the current state and the strategy for
 closing the gaps.
 
 == Test Types
@@ -47,6 +47,28 @@ npm run coverage:ratchet
 cd tabs
 CI=true npm test -- --watchAll=false   # one-shot
 npm test                               # watch mode
+----
+
+=== Unit Tests — Web Tabs backend (`tabs/backend/`)
+
+- Framework: Node's built-in `node:test` runner with `node:assert/strict`; no
+  extra dependencies
+- Test files: `tabs/backend/*.test.js` (auth middleware, config routes, rate
+  limiting, reward amounts, automation payments, LNbits user directory, SPA
+  fallback route)
+- `server.js` only calls `listen()` when run directly, so each test file can
+  `require('./server')` and bind an ephemeral port
+- Needs no credentials: each file that loads the server sets placeholder
+  `TAB_BACKEND_TOKEN`, `AAD_TENANT_ID` and `AAD_CLIENT_ID` values first; the
+  pure-module tests need nothing
+- Runs in CI as the "Run backend tests" step of the
+  "Unit Tests (Frontend/Tabs)" job
+- Run:
+
+[source,bash]
+----
+cd tabs
+npm run test:backend
 ----
 
 === Azure Functions (`functions/`)

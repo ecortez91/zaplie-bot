@@ -90,6 +90,7 @@ npm run client   # CRA dev server only
 npm run server   # Express backend only
 npm run build    # production build → tabs/build/
 npm test         # react-scripts test (watch mode; use CI=true npm test -- --watchAll=false for one-shot)
+npm run test:backend   # node:test suite for the Express backend (runs in CI)
 ```
 
 ### Azure Functions (`functions/`)
