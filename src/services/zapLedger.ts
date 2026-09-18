@@ -14,6 +14,12 @@ const DEFAULT_LOCK_RETRY_MS = 20;
 const RENAME_SHARING_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 const RENAME_RETRY_ATTEMPTS = 5;
 const RENAME_RETRY_MS = 20;
+// A crash between writing a temporary and renaming it leaves that temporary
+// behind: the catch block that would remove it never runs. Each one is a full
+// ledger snapshot, so repeated crashes would grow without bound on the
+// persistent share. An hour is far longer than any write, so anything older
+// than that belongs to a dead process, never to a write in flight.
+const STALE_TEMP_MS = 60 * 60 * 1000;
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const IDENTIFIER_PATTERN = /^\S{1,256}$/;
@@ -200,6 +206,34 @@ const wait = (milliseconds: number): Promise<void> =>
 // replacement, so a reader still sees either the previous canonical file or
 // the next one. Writers already hold the exclusive store lock, so no other
 // writer can slip in between attempts.
+// Best effort by design: a sweep failure must never fail a write that already
+// landed, so every error here is swallowed. Only this store's own temporaries
+// match, and only ones old enough that no live write could own them.
+const sweepStaleTemporaries = async (storePath: string): Promise<void> => {
+  const directory = path.dirname(storePath);
+  const prefix = `${path.basename(storePath)}.`;
+  try {
+    const names = await fs.promises.readdir(directory);
+    const cutoff = Date.now() - STALE_TEMP_MS;
+    for (const name of names) {
+      if (!name.startsWith(prefix) || !name.endsWith('.tmp')) {
+        continue;
+      }
+      const candidate = path.join(directory, name);
+      try {
+        const stats = await fs.promises.stat(candidate);
+        if (stats.mtimeMs < cutoff) {
+          await fs.promises.unlink(candidate);
+        }
+      } catch {
+        // Another process removed it, or it is not ours to remove.
+      }
+    }
+  } catch {
+    // A directory listing failure is not a reason to fail a settled write.
+  }
+};
+
 const replaceStoreFile = async (
   tempPath: string,
   storePath: string,
@@ -436,7 +470,15 @@ export class ZapLedger {
           );
         }
         if (Date.now() >= deadline) {
-          throw new ZapLedgerError('Zap ledger lock timed out', error);
+          // Deliberate: an orphaned lock is a manual outage, not something to
+          // evict on a timer. Name the recovery procedure so the operator is
+          // not left guessing at a bare timeout.
+          throw new ZapLedgerError(
+            'Zap ledger lock timed out; every zap submission fails until an ' +
+              'operator follows the lock recovery procedure in ' +
+              'docs/DEPLOYMENT.adoc',
+            error,
+          );
         }
         await wait(
           Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now())),
@@ -458,6 +500,8 @@ export class ZapLedger {
       await handle.close();
       handle = undefined;
       await replaceStoreFile(tempPath, this.storePath);
+      // Under the exclusive lock, so no other writer's temporary is in flight.
+      await sweepStaleTemporaries(this.storePath);
     } catch (error) {
       if (handle) {
         await handle.close().catch(() => undefined);

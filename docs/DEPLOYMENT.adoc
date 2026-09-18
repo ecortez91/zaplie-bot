@@ -23,8 +23,9 @@
 
 == Prerequisites
 
-- Node.js 18 (App Service is pinned to `~18`; CI builds with Node 20 — see the
-  MSAL override note in README.md)
+- Node.js 24 (`package.json` `engines`; App Service is pinned to `~24` by
+  `infra/azure.bicep` and CI builds on Node 24 — see the MSAL override note in
+  README.md)
 - Teams Toolkit VS Code extension ≥ 5.0.0 or the TeamsFx CLI (`teamsapp`)
 - An M365 tenant with permission to upload custom Teams apps
 - An LNbits 1.0+ instance (the shared test instance runs 1.5.6); the core Users
@@ -140,10 +141,19 @@ Back up and restore the data directory as an application-consistent unit:
   succeed.
 
 The bot deliberately never evicts `bot-zap-ledger.json.lock` by age: ownership
-is uncertain. After an unclean shutdown, stop/drain every bot process, inspect
-the canonical store, reconcile any `processing` or `unknown` record with
-LNbits, and only then remove an orphaned lock. Store corruption, an unreadable
-data directory, or lock acquisition failure prevents payment.
+is uncertain, and an eviction rule that guessed wrong could re-enable a payment
+that already settled. Treat a crash-left lock as a *manual outage*: while it is
+present, every zap submission fails after the five-second lock timeout with an
+error naming this procedure, and it stays that way until an operator clears it.
+After an unclean shutdown, stop/drain every bot process, inspect the canonical
+store, reconcile any `processing` or `unknown` record with LNbits, and only
+then remove the orphaned lock. Store corruption, an unreadable data directory,
+or lock acquisition failure prevents payment.
+
+Writes sweep this store's own `.tmp` files once they are older than an hour, so
+a crash between writing a temporary and renaming it cannot accumulate ledger
+snapshots on the share; nothing younger is touched, because it may belong to a
+write in flight.
 
 === Azure Functions
 

@@ -31,8 +31,10 @@ resource serverfarm 'Microsoft.Web/serverfarms@2021-02-01' = {
   name: serverfarmsName
   sku: {
     name: webAppSKU
-    // Token-exchange deduplication and the zap-card ledger
-    // (src/services/zapLedger.ts) use in-memory storage.
+    // Token-exchange deduplication is in-memory, so the plan stays at one
+    // instance. The zap-card ledger (src/services/zapLedger.ts) is durable and
+    // coordinates processes through a lock file, but only across a shared
+    // filesystem - scaling out needs shared storage for ZAPLIE_DATA_DIR.
     capacity: 1
   }
 }

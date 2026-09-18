@@ -319,6 +319,32 @@ describe('ZapLedger durability and concurrency', () => {
     await expect(afterRestart.tryAcquire(key('alice'))).resolves.toBe(false);
   });
 
+  test('a crash temporary is swept once it is too old to be in flight', async () => {
+    const storePath = newStorePath();
+    const ledger = new ZapLedger({ storePath });
+    const stale = `${storePath}.999.deadbeef.tmp`;
+    const fresh = `${storePath}.998.feedface.tmp`;
+    const unrelated = path.join(path.dirname(storePath), 'keep-me.tmp');
+    for (const file of [stale, fresh, unrelated]) {
+      fs.writeFileSync(file, '{"version":', { mode: 0o600 });
+    }
+    // Two hours old: no write takes that long, so its owner is gone.
+    const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(stale, longAgo, longAgo);
+    fs.utimesSync(unrelated, longAgo, longAgo);
+
+    await ledger.tryAcquire(key('alice'));
+
+    expect(fs.existsSync(stale)).toBe(false);
+    // A temporary young enough to belong to a live write is left alone, and a
+    // file that is not this store's temporary is never touched.
+    expect(fs.existsSync(fresh)).toBe(true);
+    expect(fs.existsSync(unrelated)).toBe(true);
+    await expect(ledger.get(key('alice'))).resolves.toMatchObject({
+      state: 'processing',
+    });
+  });
+
   test('invalid payment hashes leave the durable processing barrier intact', async () => {
     const storePath = newStorePath();
     const ledger = new ZapLedger({ storePath });
