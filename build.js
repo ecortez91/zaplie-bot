@@ -43,17 +43,32 @@ if (!contentUrl || !websiteUrl) {
   process.exit(1);
 }
 
-// A Teams validDomains entry is a bare host: no scheme, port, path or
-// wildcard. Fall back to the tab URL's host so every environment resolves.
-const hostnameOf = value => {
+const parseUrl = value => {
   try {
-    return new URL(value).hostname;
+    return new URL(value);
   } catch {
-    return '';
+    return undefined;
   }
 };
 
-const tabDomain = envConfig.TAB_DOMAIN || hostnameOf(contentUrl);
+// Teams only loads tab pages over HTTPS, so reject anything else here rather
+// than shipping a manifest the app package contract will refuse.
+for (const [name, value] of [
+  ['content', contentUrl],
+  ['website', websiteUrl],
+]) {
+  const parsed = parseUrl(value);
+  if (!parsed || parsed.protocol !== 'https:') {
+    console.error(
+      `Error: the ${name} URL "${value}" must be an absolute https:// URL.`,
+    );
+    process.exit(1);
+  }
+}
+
+// A Teams validDomains entry is a bare host: no scheme, port, path or
+// wildcard. Fall back to the tab URL's host so every environment resolves.
+const tabDomain = envConfig.TAB_DOMAIN || parseUrl(contentUrl).hostname;
 if (!/^[A-Za-z0-9.-]+$/.test(tabDomain)) {
   console.error(
     'Error: TAB_DOMAIN must be a bare hostname, with no scheme, port or path.',
