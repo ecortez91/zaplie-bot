@@ -18,6 +18,7 @@ interface MsalContextStub {
 }
 
 const mockUseMsal = jest.fn<MsalContextStub, []>();
+const mockAcquireIdToken = jest.fn<Promise<string>, []>();
 const mockToastError = jest.fn<void, unknown[]>();
 const mockToastSuccess = jest.fn<void, unknown[]>();
 const mockGetGithubConnection = jest.fn<
@@ -32,7 +33,7 @@ jest.mock('@azure/msal-react', () => ({
 }));
 
 jest.mock('../services/adminRole', () => ({
-  acquireIdToken: () => Promise.resolve('id-token'),
+  acquireIdToken: () => mockAcquireIdToken(),
   isZaplieAdmin: () => true,
 }));
 
@@ -109,6 +110,7 @@ describe('AutomationsComponent panel independence', () => {
       instance: {},
       accounts: [{ homeAccountId: 'account-1' }],
     });
+    mockAcquireIdToken.mockResolvedValue('id-token');
     mockGetGithubConnection.mockResolvedValue({ connected: true });
     mockGetWebhookKeys.mockResolvedValue([webhookKey]);
     container = document.createElement('div');
@@ -180,5 +182,31 @@ describe('AutomationsComponent panel independence', () => {
 
     expect(container.textContent).not.toContain(webhookKey.label);
     expect(mockToastError).toHaveBeenCalledWith('Could not load the API keys.');
+  });
+
+  test('clears the previous account state when a reload for a new account fails', async () => {
+    // Load one account successfully first, so the assertions below are about
+    // state actually being cleared rather than never having been set.
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+    await renderAutomations();
+    expect(container.textContent).toContain('App installed');
+    expect(container.textContent).toContain(webhookKey.label);
+
+    // Switch account and fail every request for the new one.
+    mockUseMsal.mockReturnValue({
+      instance: {},
+      accounts: [{ homeAccountId: 'account-2' }],
+    });
+    mockGetGithubConnection.mockRejectedValue(new Error('403'));
+    mockGetAutomationsStats.mockRejectedValue(new Error('403'));
+    mockGetWebhookKeys.mockRejectedValue(new Error('403'));
+
+    await renderAutomations();
+
+    expect(container.textContent).toContain('Not connected yet');
+    expect(container.textContent).not.toContain(webhookKey.label);
+    expect(container.textContent).toContain(
+      'Recipient activity is unavailable right now.',
+    );
   });
 });

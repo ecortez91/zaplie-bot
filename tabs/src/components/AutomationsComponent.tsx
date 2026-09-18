@@ -209,6 +209,15 @@ const AutomationsComponent: FunctionComponent = () => {
         }
         console.error('Error acquiring a token for automations:', err);
         toast.error('Could not load connection status.');
+        // No token means none of the three panels can be refreshed, so clear
+        // all of the account-scoped state rather than leaving the previous
+        // account's stats, banner and key labels on screen under an error.
+        // Defence in depth: the sibling load effect shares this token and
+        // already replaces the whole view with its error page, so this is not
+        // separately observable — but it must not depend on that.
+        setStats(null);
+        setAppInstalled(false);
+        setWebhookKeys([]);
         setStatsError(true);
         setStatsLoading(false);
         return;
