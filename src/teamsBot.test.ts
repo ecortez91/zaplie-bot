@@ -32,7 +32,7 @@ process.env.ZAPLIE_DATA_DIR = path.join(
   os.tmpdir(),
   `zaplie-test-ledger-${process.pid}`,
 );
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { TeamsBot } = require('./teamsBot') as typeof import('./teamsBot');
 
 type MockContext = {

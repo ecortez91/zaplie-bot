@@ -264,7 +264,7 @@ export async function SendZap(
     if (error instanceof Error) {
       throw error;
     }
-    throw new Error(String(error));
+    throw new Error(String(error), { cause: error });
   }
 }
 

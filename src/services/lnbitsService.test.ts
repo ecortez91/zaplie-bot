@@ -54,6 +54,7 @@ beforeEach(() => {
   global.fetch = fetchMock;
   // The module caches the access token at module scope; each test gets a fresh copy.
   jest.resetModules();
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   service = require('./lnbitsService');
 });
 

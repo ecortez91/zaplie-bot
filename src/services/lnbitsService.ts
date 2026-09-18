@@ -102,7 +102,7 @@ export async function getAccessToken(
     } catch (error) {
       console.error('Error in getAccessToken:', error);
       // Throw an error to ensure the promise doesn't resolve with undefined
-      throw new Error('Failed to retrieve access token');
+      throw new Error('Failed to retrieve access token', { cause: error });
     } finally {
       // Reset the promise to allow future requests
       accessTokenPromise = null;
