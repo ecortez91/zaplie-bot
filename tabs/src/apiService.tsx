@@ -7,7 +7,7 @@ export interface RewardNameResponse {
   rewardName: string;
 }
 
-const parseRewardNameResponse = (data: unknown): RewardNameResponse => {
+export const parseRewardNameResponse = (data: unknown): RewardNameResponse => {
   if (!data || typeof data !== 'object') {
     throw new Error('The reward name response was invalid.');
   }
@@ -54,7 +54,7 @@ export interface AutomationsResponse {
   repos: string[];
 }
 
-const parseRewardAmountsResponse = (
+export const parseRewardAmountsResponse = (
   data: unknown,
 ): RewardAmountsResponse => {
   if (!data || typeof data !== 'object') {
@@ -74,7 +74,7 @@ const parseRewardAmountsResponse = (
   return { rewardAmounts: rewardAmounts as Record<string, number> };
 };
 
-const parseAutomationsResponse = (
+export const parseAutomationsResponse = (
   data: unknown,
 ): AutomationsResponse => {
   if (!data || typeof data !== 'object') {
