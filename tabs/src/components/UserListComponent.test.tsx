@@ -1,6 +1,8 @@
-import React, { act, useEffect } from 'react';
+import React, { act, useEffect, useState } from 'react';
 import { createRoot, Root } from 'react-dom/client';
-import UserListComponent from './UserListComponent';
+import UserListComponent, {
+  WALLET_FETCH_CONCURRENCY,
+} from './UserListComponent';
 import { RewardNameContext } from './RewardNameContext';
 import { CacheProvider, useCache } from '../utils/CacheContext';
 import { getUsers } from '../services/lnbits/users';
@@ -32,6 +34,22 @@ const user: User = {
   type: 'Teammate',
   privateWallet: null,
   allowanceWallet: null,
+};
+
+// Seeds the shared cache exactly once, so a component that refills the cache
+// does not fight the wrapper for it.
+const UserListWithSeededCache = ({ seed }: { seed: User[] }) => {
+  const { setCache } = useCache();
+  const [seeded, setSeeded] = useState(false);
+
+  useEffect(() => {
+    setCache('allUsers', seed);
+    setSeeded(true);
+    // Seed once: later cache writes come from UserListComponent itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return seeded ? <UserListComponent /> : null;
 };
 
 const UserListWithCachedUsers = ({ users }: { users: User[] }) => {
@@ -100,6 +118,90 @@ describe('UserListComponent', () => {
     expect(container.textContent).toContain('21 sats');
     expect(mockGetUsers).toHaveBeenCalledTimes(1);
     expect(mockGetUserWallets).toHaveBeenCalledWith(user.id);
+  });
+
+  test('renders the error state when the directory request fails', async () => {
+    mockGetUsers.mockRejectedValue(new Error('LNbits directory unavailable'));
+    mockGetUserWallets.mockResolvedValue([]);
+
+    // This test uses React's raw createRoot API, which is not auto-wrapped.
+    // eslint-disable-next-line testing-library/no-unnecessary-act
+    await act(async () => {
+      root.render(
+        <CacheProvider>
+          <RewardNameContext.Provider
+            value={{ rewardName: 'sats', setRewardName: jest.fn() }}
+          >
+            <UserListComponent />
+          </RewardNameContext.Provider>
+        </CacheProvider>,
+      );
+    });
+
+    expect(container.textContent).toBe('LNbits directory unavailable');
+    expect(container.textContent).not.toContain('null');
+    expect(container.textContent).not.toContain('Loading...');
+    expect(container.querySelector('table')).toBeNull();
+    expect(mockGetUserWallets).not.toHaveBeenCalled();
+  });
+
+  test('loads wallets a bounded number of requests at a time', async () => {
+    const manyUsers = Array.from({ length: 12 }, (_, index) => ({
+      ...user,
+      id: `user-${index}`,
+      displayName: `User ${index}`,
+    }));
+    mockGetUsers.mockResolvedValue(manyUsers);
+
+    let inFlight = 0;
+    let peakInFlight = 0;
+    mockGetUserWallets.mockImplementation(async () => {
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      return [];
+    });
+
+    // This test uses React's raw createRoot API, which is not auto-wrapped.
+    // eslint-disable-next-line testing-library/no-unnecessary-act
+    await act(async () => {
+      root.render(
+        <CacheProvider>
+          <RewardNameContext.Provider
+            value={{ rewardName: 'sats', setRewardName: jest.fn() }}
+          >
+            <UserListComponent />
+          </RewardNameContext.Provider>
+        </CacheProvider>,
+      );
+    });
+
+    expect(mockGetUserWallets).toHaveBeenCalledTimes(12);
+    expect(peakInFlight).toBeLessThanOrEqual(WALLET_FETCH_CONCURRENCY);
+    expect(container.textContent).toContain('User 11');
+  });
+
+  test('treats an empty cached directory as a cold cache', async () => {
+    mockGetUsers.mockResolvedValue([user]);
+    mockGetUserWallets.mockResolvedValue([]);
+
+    // This test uses React's raw createRoot API, which is not auto-wrapped.
+    // eslint-disable-next-line testing-library/no-unnecessary-act
+    await act(async () => {
+      root.render(
+        <CacheProvider>
+          <RewardNameContext.Provider
+            value={{ rewardName: 'sats', setRewardName: jest.fn() }}
+          >
+            <UserListWithSeededCache seed={[]} />
+          </RewardNameContext.Provider>
+        </CacheProvider>,
+      );
+    });
+
+    expect(mockGetUsers).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('Ada Lovelace');
   });
 
   test('reuses users from the shared cache without loading the directory again', async () => {
