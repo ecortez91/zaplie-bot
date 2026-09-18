@@ -39,6 +39,7 @@ const makeInstance = (overrides: Record<string, unknown> = {}) => ({
   initialize: jest.fn(async () => undefined),
   handleRedirectPromise: jest.fn(async () => null),
   getAllAccounts: jest.fn(() => []),
+  getActiveAccount: jest.fn(() => null),
   setActiveAccount: jest.fn(),
   addEventCallback: jest.fn(),
   ...overrides,

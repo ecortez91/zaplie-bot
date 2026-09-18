@@ -41,7 +41,16 @@ const readAuthFlow = (): AuthFlow => {
     // Cleared before parsing so a corrupted entry cannot outlive this read.
     sessionStorage.removeItem(AUTH_FLOW_STORAGE_KEY);
     if (serialized) {
-      stored = JSON.parse(serialized) as StoredAuthFlow;
+      // JSON.parse('null') does not throw, and the reads below are outside
+      // this catch, so anything but a plain object falls back to the default.
+      const parsed: unknown = JSON.parse(serialized);
+      if (
+        parsed !== null &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed)
+      ) {
+        stored = parsed as StoredAuthFlow;
+      }
     }
   } catch {
     stored = {};

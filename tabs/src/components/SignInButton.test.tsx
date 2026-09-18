@@ -40,6 +40,7 @@ const mockAuthenticate = jest.mocked(
 const mockLoginRedirect = jest.fn<Promise<void>, [unknown]>();
 const mockLoginPopup = jest.fn<Promise<unknown>, [unknown]>();
 const mockGetAllAccounts = jest.fn<unknown[], []>();
+const mockGetActiveAccount = jest.fn<unknown, []>();
 const mockSetActiveAccount = jest.fn<void, [unknown]>();
 const mockAcquireTokenSilent = jest.fn<Promise<unknown>, [unknown]>();
 
@@ -61,12 +62,14 @@ describe('SignInButton', () => {
         loginRedirect: mockLoginRedirect,
         loginPopup: mockLoginPopup,
         getAllAccounts: mockGetAllAccounts,
+        getActiveAccount: mockGetActiveAccount,
         setActiveAccount: mockSetActiveAccount,
         acquireTokenSilent: mockAcquireTokenSilent,
       },
       inProgress: InteractionStatus.None,
     } as unknown as ReturnType<typeof useMsal>);
     mockGetAllAccounts.mockReturnValue([]);
+    mockGetActiveAccount.mockReturnValue(null);
     mockLoginRedirect.mockResolvedValue(undefined);
     mockLoginPopup.mockResolvedValue(undefined);
     mockAcquireTokenSilent.mockResolvedValue({ idToken: 'not-rendered' });
@@ -183,6 +186,47 @@ describe('SignInButton', () => {
     });
 
     expect(container.querySelector('button')?.disabled).toBe(false);
+  });
+
+  test('uses the active account rather than an arbitrary cached one', async () => {
+    const active = { homeAccountId: 'account-2' };
+    window.history.replaceState({}, '', '/login?inTeams=1');
+    mockTeamsInitialize.mockImplementation(async () => undefined);
+    mockGetContext.mockImplementation(async () => ({}) as never);
+    mockAuthenticate.mockImplementation(async () => 'auth-success');
+    mockGetAllAccounts.mockReturnValue([
+      { homeAccountId: 'account-1' },
+      active,
+    ]);
+    mockGetActiveAccount.mockReturnValue(active);
+
+    await renderButton();
+    await clickSignIn();
+
+    expect(mockAcquireTokenSilent).toHaveBeenCalledWith({
+      scopes: ['User.Read'],
+      account: active,
+    });
+  });
+
+  test('refuses to guess when several accounts are cached and none is active', async () => {
+    window.history.replaceState({}, '', '/login?inTeams=1');
+    mockTeamsInitialize.mockImplementation(async () => undefined);
+    mockGetContext.mockImplementation(async () => ({}) as never);
+    mockAuthenticate.mockImplementation(async () => 'auth-success');
+    mockGetAllAccounts.mockReturnValue([
+      { homeAccountId: 'account-1' },
+      { homeAccountId: 'account-2' },
+    ]);
+    mockGetActiveAccount.mockReturnValue(null);
+
+    await renderButton();
+    await clickSignIn();
+
+    expect(mockAcquireTokenSilent).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      'We could not sign you in. Please try again.',
+    );
   });
 
   test('renders an error instead of leaving the Teams authentication flow', async () => {

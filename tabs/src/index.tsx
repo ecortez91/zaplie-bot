@@ -79,7 +79,10 @@ export const initializeApp = async () => {
     const response = await msalInstance.handleRedirectPromise();
     if (response) {
       msalInstance.setActiveAccount(response.account);
-    } else {
+    } else if (!msalInstance.getActiveAccount()) {
+      // Only pick a default when nothing is active yet: several accounts can
+      // be cached in localStorage, and overwriting the chosen one would let
+      // the LNbits gateway acquire a token for the wrong identity.
       const accounts = msalInstance.getAllAccounts();
       if (accounts.length > 0) {
         msalInstance.setActiveAccount(accounts[0]);

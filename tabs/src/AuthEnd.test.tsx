@@ -109,6 +109,18 @@ describe('AuthEnd', () => {
     );
   });
 
+  test('falls back to the safe default when the stored flow is not an object', async () => {
+    const account = { homeAccountId: 'account-1' };
+    sessionStorage.setItem(AUTH_FLOW_STORAGE_KEY, 'null');
+    mockHandleRedirectPromise.mockResolvedValue({ account });
+
+    await renderAuthEnd();
+
+    expect(mockSetActiveAccount).toHaveBeenCalledWith(account);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(sessionStorage.getItem(AUTH_FLOW_STORAGE_KEY)).toBeNull();
+  });
+
   test('completes Teams authentication without returning an MSAL response', async () => {
     const account = { homeAccountId: 'account-1' };
     sessionStorage.setItem(

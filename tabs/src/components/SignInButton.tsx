@@ -42,7 +42,13 @@ export const SignInButton = () => {
           height: 535,
         });
 
-        const account = instance.getAllAccounts()[0];
+        // AuthEnd set the active account before notifying Teams. The MSAL
+        // cache is localStorage, so several accounts can be cached: only fall
+        // back when there is exactly one and the choice is unambiguous.
+        const accounts = instance.getAllAccounts();
+        const account =
+          instance.getActiveAccount() ??
+          (accounts.length === 1 ? accounts[0] : null);
         if (!account) {
           throw new Error('No authenticated account is available.');
         }
