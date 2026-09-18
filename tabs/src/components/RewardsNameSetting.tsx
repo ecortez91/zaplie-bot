@@ -28,11 +28,13 @@ const RewardsNameSetting: FunctionComponent = () => {
   const { instance, accounts } = useMsal();
   const isAdmin = isZaplieAdmin(accounts[0]);
 
+  // Only mirror the shared value into the field while it is untouched: a
+  // provider retry resolving mid-edit would otherwise wipe the admin's typing.
   useEffect(() => {
-    if (rewardName !== null) {
+    if (rewardName !== null && !isEditing) {
       setCurrency(rewardName);
     }
-  }, [rewardName]);
+  }, [rewardName, isEditing]);
 
   const handleEditClick = () => {
     setJustSaved(false);

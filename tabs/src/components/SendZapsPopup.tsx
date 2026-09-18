@@ -55,7 +55,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const { cache, setCache } = useCache();
   const { accounts } = useMsal();
   const rewardNameContext = useContext(RewardNameContext);
-  const rewardsName = rewardNameContext?.rewardName ?? 'Sats';
+  const rewardsName = rewardNameContext.rewardNameLabel;
 
   useEffect(() => {
     const loadUsers = async () => {

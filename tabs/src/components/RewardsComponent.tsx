@@ -99,7 +99,7 @@ const RewardsComponent: FunctionComponent<{
   };
 
   const rewardNameContext = useContext(RewardNameContext);
-  const rewardName = rewardNameContext.rewardName;
+  const rewardName = rewardNameContext.rewardNameLabel;
 
   // Only render rewards if they exist
   return (

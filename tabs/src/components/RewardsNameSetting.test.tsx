@@ -115,6 +115,7 @@ describe('RewardsNameSetting', () => {
 
     await renderSetting({
       rewardName: null,
+      rewardNameLabel: 'sats',
       setRewardName: jest.fn(),
       isLoading: false,
       error: new Error('Configuration unavailable'),
@@ -136,6 +137,7 @@ describe('RewardsNameSetting', () => {
 
     await renderSetting({
       rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
       setRewardName,
       isLoading: false,
       error: null,
@@ -168,6 +170,7 @@ describe('RewardsNameSetting', () => {
 
     await renderSetting({
       rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
       setRewardName: jest.fn(),
       isLoading: false,
       error: null,
