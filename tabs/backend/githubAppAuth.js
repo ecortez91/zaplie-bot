@@ -4,6 +4,7 @@
 // crypto (the private key GitHub issues is PKCS1, which crypto signs directly).
 const fs = require('fs');
 const crypto = require('crypto');
+const { requestTimeoutSignal } = require('./httpTimeout');
 
 const base64url = (input) => Buffer.from(input).toString('base64url');
 
@@ -48,6 +49,7 @@ const getInstallationToken = async (installationId) => {
         Accept: 'application/vnd.github+json',
         'User-Agent': 'zaplie-connections',
       },
+      signal: requestTimeoutSignal(),
     },
   );
   if (!response.ok) {
@@ -74,6 +76,7 @@ const listInstallationRepos = async (installationId) => {
         Accept: 'application/vnd.github+json',
         'User-Agent': 'zaplie-connections',
       },
+      signal: requestTimeoutSignal(),
     });
     if (!response.ok) {
       throw new Error(`installation repositories request failed: ${response.status}`);

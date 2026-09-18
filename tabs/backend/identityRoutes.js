@@ -8,6 +8,7 @@ const { verifyMsalToken, extractBearerToken } = require('./msalValidator');
 const { signState, verifyState } = require('./githubOAuthState');
 const identityStore = require('./identityStore');
 const { requireLnbitsConfig, getLnbitsToken, lnbitsGet } = require('./lnbitsAdmin');
+const { requestTimeoutSignal } = require('./httpTimeout');
 const { findUniqueUserByAadObjectId } = require('./lnbitsUserDirectory');
 
 const router = express.Router();
@@ -101,6 +102,7 @@ router.get('/github/callback', async (req, res) => {
         code,
         redirect_uri: redirectUri,
       }),
+      signal: requestTimeoutSignal(),
     });
     if (!tokenResponse.ok) {
       throw new Error(`token exchange failed: ${tokenResponse.status}`);
@@ -118,6 +120,7 @@ router.get('/github/callback', async (req, res) => {
         Accept: 'application/vnd.github+json',
         'User-Agent': 'zaplie-identity',
       },
+      signal: requestTimeoutSignal(),
     });
     if (!userResponse.ok) {
       throw new Error(`GitHub user fetch failed: ${userResponse.status}`);

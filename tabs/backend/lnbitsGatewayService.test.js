@@ -7,6 +7,8 @@ const {
   createInvoice,
   createSendZap,
   getWalletBalance,
+  maxZapAmountSats,
+  listUsers,
   listWalletPayments,
   redactSensitive,
   resetCachesForTests,
@@ -139,6 +141,38 @@ test('parallel payment reads share one walk over the LNbits users', async () => 
 
   assert.equal(paths.filter((p) => p === '/users/api/v1/user').length, 1);
   assert.equal(paths.filter((p) => p.endsWith('/wallet')).length, USERS.length);
+});
+
+test('a burst with no cached token triggers one super-user login, not three', async () => {
+  const paths = installLnbitsStub();
+
+  await Promise.all([listUsers(), listUsers(), listUsers()]);
+
+  assert.equal(paths.filter((p) => p === '/api/v1/auth').length, 1);
+  assert.equal(paths.filter((p) => p === '/users/api/v1/user').length, 3);
+});
+
+test('a failed login is retried rather than cached as in flight', async () => {
+  installLnbitsStub();
+  let attempts = 0;
+  const failing = global.fetch;
+  global.fetch = async (url, init) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/api/v1/auth') {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error('LNbits auth failed (status: 502)');
+      }
+    }
+    return failing(url, init);
+  };
+
+  await assert.rejects(listUsers(), { message: 'LNbits auth failed (status: 502)' });
+  assert.deepEqual(
+    (await listUsers()).map((user) => user.id),
+    ['user-1', 'user-2'],
+  );
+  assert.equal(attempts, 2);
 });
 
 test('invoice creation returns the exact stable invoice identifier', async (t) => {
@@ -559,4 +593,78 @@ test('a zap that cannot even be marked unknown is never recorded as failed', asy
   )[0];
   assert.equal(record.state, 'pending');
   assert.equal(record.payment.invoiceId, 'invoice-1');
+});
+
+// Both cap variables are process-wide, so each case sets exactly the state it
+// describes and restores whatever the parent process had. Deleting an inherited
+// value would silently change every case that runs after it.
+const CAP_VARS = ['ZAP_MAX_AMOUNT_SATS', 'REWARDS_MAX_AMOUNT_SATS'];
+
+const withCaps = (caps, assertions) => {
+  const original = CAP_VARS.map((name) => [name, process.env[name]]);
+  try {
+    for (const name of CAP_VARS) {
+      delete process.env[name];
+    }
+    for (const [name, value] of Object.entries(caps)) {
+      process.env[name] = value;
+    }
+    assertions();
+  } finally {
+    for (const [name, value] of original) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+};
+
+test('with neither cap configured the zap ceiling is 1,000,000', () => {
+  withCaps({}, () => assert.equal(maxZapAmountSats(), 1_000_000));
+});
+
+// Giving zaps their own variable must not loosen a deployment that never asked
+// for it: env/.env.dev.example ships REWARDS_MAX_AMOUNT_SATS=10000, which caps
+// zaps today, so such a deployment keeps its 10,000-sat ceiling until it names
+// a zap cap of its own.
+test('an unset zap cap inherits the configured reward cap', () => {
+  withCaps({ REWARDS_MAX_AMOUNT_SATS: '10000' }, () =>
+    assert.equal(maxZapAmountSats(), 10000),
+  );
+});
+
+test('ZAP_MAX_AMOUNT_SATS takes precedence, above or below the reward cap', () => {
+  withCaps({ REWARDS_MAX_AMOUNT_SATS: '10000', ZAP_MAX_AMOUNT_SATS: '500' }, () =>
+    assert.equal(maxZapAmountSats(), 500),
+  );
+  withCaps({ REWARDS_MAX_AMOUNT_SATS: '10000', ZAP_MAX_AMOUNT_SATS: '50000' }, () =>
+    assert.equal(maxZapAmountSats(), 50000),
+  );
+});
+
+test('a whitespace-only cap is unset, not malformed', () => {
+  withCaps({ ZAP_MAX_AMOUNT_SATS: '   ', REWARDS_MAX_AMOUNT_SATS: '10000' }, () =>
+    assert.equal(maxZapAmountSats(), 10000),
+  );
+});
+
+test('a malformed cap fails closed rather than widening the ceiling', () => {
+  // Number() would have read 1e3 and 0x10 as caps nobody typed, and a bare
+  // fallback would have silently restored the 1,000,000 default.
+  for (const malformed of ['not-a-number', '-1', '0', '1.5', '0x10', '1e3']) {
+    withCaps({ ZAP_MAX_AMOUNT_SATS: malformed }, () => {
+      assert.throws(maxZapAmountSats, {
+        message: 'ZAP_MAX_AMOUNT_SATS must be a positive integer',
+        status: 503,
+      });
+    });
+    withCaps({ REWARDS_MAX_AMOUNT_SATS: malformed }, () => {
+      assert.throws(maxZapAmountSats, {
+        message: 'REWARDS_MAX_AMOUNT_SATS must be a positive integer',
+        status: 503,
+      });
+    });
+  }
 });

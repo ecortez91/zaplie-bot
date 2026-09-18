@@ -1,4 +1,5 @@
 const {
+  REQUEST_TIMEOUT_MS,
   getLnbitsToken,
   requireLnbitsConfig,
 } = require('./lnbitsAdmin');
@@ -6,19 +7,19 @@ const {
   findUniqueUserByAadObjectId,
   parseExtra,
 } = require('./lnbitsUserDirectory');
+const { positiveIntFromEnv } = require('./rewardAmounts');
 const {
   createZapIdempotencyStore,
 } = require('./lnbitsZapIdempotencyStore');
 
 const TOKEN_CACHE_MS = 5 * 60 * 1000;
-// A stalled LNbits connection must not pin an Express request open for ever.
-const REQUEST_TIMEOUT_MS = 10 * 1000;
 const WALLET_CACHE_MS = 30 * 1000;
 const SENSITIVE_FIELD = /(adminkey|inkey|admin.?key|invoice.?key|password|preimage|secret|token)/i;
 const USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~-]{16,128}$/;
 
 let tokenCache = null;
+let tokenRequest = null;
 const walletCache = new Map();
 let walletIndex = null;
 
@@ -39,29 +40,58 @@ const requireGatewayConfig = () => ({
   adminKey: process.env.LNBITS_ADMINKEY || '',
 });
 
+// Zaps and self-issued invoices have their own ceiling. REWARDS_MAX_AMOUNT_SATS
+// is documented as the automated-reward cap (default 10000); reading it as the
+// zap cap too meant one variable meant two different things.
+//
+// Precedence: ZAP_MAX_AMOUNT_SATS, else whatever REWARDS_MAX_AMOUNT_SATS is set
+// to, else 1,000,000. The middle step is what stops the separation from being a
+// silent loosening: env/.env.dev.example ships REWARDS_MAX_AMOUNT_SATS=10000,
+// which caps zaps today, so such a deployment keeps its 10,000-sat ceiling until
+// an operator names a different one.
+//
+// Both are read through the reward parser, so a malformed value fails closed as
+// a 503 rather than falling back and widening the cap the operator was trying to
+// tighten.
+const DEFAULT_ZAP_MAX_AMOUNT_SATS = 1_000_000;
+
 const maxZapAmountSats = () => {
-  const configured = process.env.REWARDS_MAX_AMOUNT_SATS;
-  if (configured === undefined || configured === '') {
-    return 1_000_000;
-  }
-  const value = Number(configured);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new LnbitsGatewayError(
-      'REWARDS_MAX_AMOUNT_SATS must be a positive integer',
-      503,
+  try {
+    return (
+      positiveIntFromEnv('ZAP_MAX_AMOUNT_SATS', null) ??
+      positiveIntFromEnv('REWARDS_MAX_AMOUNT_SATS', null) ??
+      DEFAULT_ZAP_MAX_AMOUNT_SATS
     );
+  } catch (error) {
+    throw new LnbitsGatewayError(error.message, 503);
   }
-  return value;
 };
 
+// The cache expiring under load must not turn one super-user login into N of
+// them: everyone who arrives while a login is in flight awaits that same
+// promise, and the slot is cleared on settle so a failure is retried, not cached.
 const getAccessToken = async (config) => {
-  const now = Date.now();
-  if (tokenCache && tokenCache.expiresAt > now) {
+  if (tokenCache && tokenCache.expiresAt > Date.now()) {
     return tokenCache.value;
   }
-  const value = await getLnbitsToken(config);
-  tokenCache = { value, expiresAt: now + TOKEN_CACHE_MS };
-  return value;
+  if (!tokenRequest) {
+    // The clear lives in a finally on the request itself, not in a chained
+    // then: a finally callback runs before the promise the caller awaits
+    // settles, so a caller that retries the instant it sees the rejection
+    // starts a fresh login instead of re-awaiting the rejected one.
+    const request = getLnbitsToken(config)
+      .then((value) => {
+        tokenCache = { value, expiresAt: Date.now() + TOKEN_CACHE_MS };
+        return value;
+      })
+      .finally(() => {
+        if (tokenRequest === request) {
+          tokenRequest = null;
+        }
+      });
+    tokenRequest = request;
+  }
+  return tokenRequest;
 };
 
 const safeJson = async (response) => {
@@ -630,6 +660,7 @@ const getAllPayments = async ({ limit = 1000, offset = 0, direction = 'desc' }) 
 
 const resetCachesForTests = () => {
   tokenCache = null;
+  tokenRequest = null;
   walletCache.clear();
   walletIndex = null;
 };
