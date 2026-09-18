@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { after, before, test } = require('node:test');
 const express = require('express');
-const { createLnbitsRouter, parseAmount } = require('./lnbitsRoutes');
+const { createLnbitsRouter } = require('./lnbitsRoutes');
 
 const calls = [];
 const service = {
@@ -12,6 +12,7 @@ const service = {
       throw error;
     }
   },
+  maxZapAmountSats: () => 5_000,
   listUsers: async () => [{ id: 'user-1' }],
   getWalletBalance: async (walletId, aadObjectId) => {
     calls.push(['balance', { walletId, aadObjectId }]);
@@ -35,7 +36,10 @@ const service = {
   },
   createOwnedInvoice: async (input) => {
     calls.push(['invoice', input]);
-    return 'lnbc1invoice';
+    return {
+      paymentRequest: 'lnbc1invoice',
+      invoiceId: 'invoice-1',
+    };
   },
   payOwnedInvoice: async (input) => {
     calls.push(['payment', input]);
@@ -89,6 +93,7 @@ const request = (path, options = {}) =>
         ? { Authorization: `Bearer ${options.token}` }
         : {}),
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...options.headers,
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
@@ -112,6 +117,10 @@ test('derives wallet-write authorization from the verified oid', async () => {
   });
 
   assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), {
+    paymentRequest: 'lnbc1invoice',
+    invoiceId: 'invoice-1',
+  });
   assert.deepEqual(calls.at(-1), [
     'invoice',
     {
@@ -171,12 +180,41 @@ test('wallet payment history stays tenant-wide for the feed', async () => {
   ]);
 });
 
-test('rejects malformed or excessive zap amounts before calling LNbits', async () => {
+test('requires an idempotency key and passes it with authenticated zap data', async () => {
+  const missingKey = await request('/api/lnbits/zaps', {
+    method: 'POST',
+    token: 'valid-token',
+    body: { recipientUserId: 'user-2', amount: 20, memo: 'thank you' },
+  });
+  assert.equal(missingKey.status, 400);
+
+  const response = await request('/api/lnbits/zaps', {
+    method: 'POST',
+    token: 'valid-token',
+    headers: { 'Idempotency-Key': 'zap-request-00000001' },
+    body: { recipientUserId: 'user-2', amount: 20, memo: 'thank you' },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls.at(-1), [
+    'zap',
+    {
+      recipientUserId: 'user-2',
+      amount: 20,
+      memo: 'thank you',
+      aadObjectId: 'caller-oid',
+      idempotencyKey: 'zap-request-00000001',
+    },
+  ]);
+});
+
+test('rejects zap amounts above the cap reported by the injected service', async () => {
   const callsBefore = calls.length;
   const response = await request('/api/lnbits/zaps', {
     method: 'POST',
     token: 'valid-token',
-    body: { recipientUserId: 'user-2', amount: 1000001, memo: 'too much' },
+    headers: { 'Idempotency-Key': 'zap-request-00000002' },
+    body: { recipientUserId: 'user-2', amount: 5001, memo: 'too much' },
   });
 
   assert.equal(response.status, 400);
@@ -207,143 +245,5 @@ test('rejects pagination values that are not plain integers', async () => {
 
     assert.equal(response.status, 400);
     assert.equal(calls.length, callsBefore);
-  }
-});
-
-// The zap ceiling is ZAP_MAX_AMOUNT_SATS, not the reward ceiling.
-// REWARDS_MAX_AMOUNT_SATS bounds automated rewards only; reusing it here gave
-// this route a 1,000,000 default that contradicted its documented meaning.
-
-// Both cap variables are process-wide, so each case sets exactly the state it
-// describes and restores whatever the parent process had. Deleting an inherited
-// value would silently change every case that runs after it.
-const CAP_VARS = ['ZAP_MAX_AMOUNT_SATS', 'REWARDS_MAX_AMOUNT_SATS'];
-
-const withCaps = (caps, assertions) => {
-  const original = CAP_VARS.map((name) => [name, process.env[name]]);
-  try {
-    for (const name of CAP_VARS) {
-      delete process.env[name];
-    }
-    for (const [name, value] of Object.entries(caps)) {
-      process.env[name] = value;
-    }
-    assertions();
-  } finally {
-    for (const [name, value] of original) {
-      if (value === undefined) {
-        delete process.env[name];
-      } else {
-        process.env[name] = value;
-      }
-    }
-  }
-};
-
-test('with neither cap configured the ceiling is 1,000,000', () => {
-  withCaps({}, () => {
-    assert.equal(parseAmount(1_000_000), 1_000_000);
-    assert.equal(parseAmount(1_000_001), null);
-  });
-});
-
-// Separating the caps must not loosen a deployment that never asked for it:
-// env/.env.dev.example ships REWARDS_MAX_AMOUNT_SATS=10000, and such a
-// deployment keeps its 10,000-sat zap ceiling until it names a zap cap.
-test('an unset zap cap inherits the configured reward cap', () => {
-  withCaps({ REWARDS_MAX_AMOUNT_SATS: '10000' }, () => {
-    assert.equal(parseAmount(10000), 10000);
-    assert.equal(parseAmount(10001), null);
-  });
-});
-
-test('ZAP_MAX_AMOUNT_SATS takes precedence over the reward cap', () => {
-  withCaps(
-    { REWARDS_MAX_AMOUNT_SATS: '10000', ZAP_MAX_AMOUNT_SATS: '500' },
-    () => {
-      assert.equal(parseAmount(500), 500);
-      assert.equal(parseAmount(501), null);
-    },
-  );
-});
-
-test('a zap cap above the reward cap is honoured, not clamped to it', () => {
-  withCaps(
-    { REWARDS_MAX_AMOUNT_SATS: '10000', ZAP_MAX_AMOUNT_SATS: '50000' },
-    () => {
-      assert.equal(parseAmount(50000), 50000);
-      assert.equal(parseAmount(50001), null);
-    },
-  );
-});
-
-test('a whitespace-only cap is unset, not malformed', () => {
-  withCaps({ ZAP_MAX_AMOUNT_SATS: '   ', REWARDS_MAX_AMOUNT_SATS: '10000' }, () => {
-    assert.equal(parseAmount(10000), 10000);
-    assert.equal(parseAmount(10001), null);
-  });
-});
-
-test('a malformed reward cap fails closed for zaps too', () => {
-  withCaps({ REWARDS_MAX_AMOUNT_SATS: '1e3' }, () => {
-    assert.throws(() => parseAmount(25), {
-      message: 'REWARDS_MAX_AMOUNT_SATS must be a positive integer',
-    });
-  });
-});
-
-test('a malformed zap cap fails closed instead of widening the ceiling', async () => {
-  for (const malformed of ['not-a-number', '-1', '0', '1.5', '0x10', '1e3']) {
-    withCaps({ ZAP_MAX_AMOUNT_SATS: malformed }, () => {
-      assert.throws(
-        () => createLnbitsRouter({ service, extractBearerToken, verifyMsalPayload }),
-        { message: 'ZAP_MAX_AMOUNT_SATS must be a positive integer' },
-      );
-    });
-  }
-});
-
-test('a narrowed zap cap is enforced over HTTP', async () => {
-  const originalCaps = CAP_VARS.map((name) => [name, process.env[name]]);
-  CAP_VARS.forEach((name) => delete process.env[name]);
-  process.env.ZAP_MAX_AMOUNT_SATS = '250';
-  let cappedServer;
-  try {
-    const cappedApp = express();
-    cappedApp.use(express.json());
-    cappedApp.use(
-      '/api/lnbits',
-      createLnbitsRouter({ service, extractBearerToken, verifyMsalPayload }),
-    );
-    cappedServer = await new Promise((resolve) => {
-      const listener = cappedApp.listen(0, '127.0.0.1', () => resolve(listener));
-    });
-    const cappedUrl = `http://127.0.0.1:${cappedServer.address().port}`;
-    const send = (amount) =>
-      fetch(`${cappedUrl}/api/lnbits/zaps`, {
-        method: 'POST',
-        headers: {
-          Authorization: 'Bearer valid-token',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ recipientUserId: 'user-2', amount, memo: 'capped' }),
-      });
-
-    const callsBefore = calls.length;
-    assert.equal((await send(251)).status, 400);
-    assert.equal(calls.length, callsBefore);
-    assert.equal((await send(250)).status, 200);
-    assert.deepEqual(calls.at(-1)[1].amount, 250);
-  } finally {
-    for (const [name, value] of originalCaps) {
-      if (value === undefined) {
-        delete process.env[name];
-      } else {
-        process.env[name] = value;
-      }
-    }
-    if (cappedServer) {
-      await new Promise((resolve) => cappedServer.close(resolve));
-    }
   }
 });

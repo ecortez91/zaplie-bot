@@ -12,12 +12,11 @@ export const msalConfig: Configuration = {
     postLogoutRedirectUri: window.location.origin,
   },
   system: {
-    allowNativeBroker: false, // Disables WAM Broker
+    allowPlatformBroker: false, // Disables WAM Broker
     allowRedirectInIframe: false, // Prevent redirect in iframe
   },
   cache: {
     cacheLocation: 'localStorage', // This can be 'localStorage' or 'sessionStorage'
-    storeAuthStateInCookie: true, // Set to true if you are having issues on IE11 or Edge
   },
 };
 

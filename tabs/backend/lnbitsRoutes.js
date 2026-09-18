@@ -4,44 +4,21 @@ const {
   extractBearerToken: defaultExtractBearerToken,
   verifyMsalPayload: defaultVerifyMsalPayload,
 } = require('./msalValidator');
-const { positiveIntFromEnv } = require('./rewardAmounts');
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const INVOICE_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
 const BOLT11_PATTERN = /^ln[a-z0-9]+$/i;
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~-]{16,128}$/;
 
 const validId = (value) => typeof value === 'string' && ID_PATTERN.test(value);
 
-// Zaps and self-issued invoices have their own ceiling. REWARDS_MAX_AMOUNT_SATS
-// is the automated-reward cap (default 10000) and reusing it here silently gave
-// this route a 1,000,000 default that no operator had asked for.
-const DEFAULT_ZAP_MAX_AMOUNT_SATS = 1_000_000;
-
-// Precedence: ZAP_MAX_AMOUNT_SATS, else whatever REWARDS_MAX_AMOUNT_SATS is set
-// to, else 1,000,000. The middle step is what stops this separation from being
-// a silent loosening: env/.env.dev.example ships REWARDS_MAX_AMOUNT_SATS=10000,
-// so a deployment following the repo's own template keeps its 10,000-sat zap
-// ceiling until an operator names a different one. Both are read through the
-// reward parser, so a malformed value throws rather than falling back and
-// widening the cap the operator meant to tighten.
-const zapMaxAmountSats = () => {
-  const configuredZapCap = positiveIntFromEnv('ZAP_MAX_AMOUNT_SATS', null);
-  if (configuredZapCap !== null) {
-    return configuredZapCap;
-  }
-  return (
-    positiveIntFromEnv('REWARDS_MAX_AMOUNT_SATS', null) ??
-    DEFAULT_ZAP_MAX_AMOUNT_SATS
-  );
-};
-
 // Only a real JSON number is an amount. `Number()` would turn `true` into 1 and
 // `['5']` into 5, which are not integer amount inputs.
-const parseAmount = (value, max = zapMaxAmountSats()) => {
+const parseAmount = (value, maxSats) => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
     return null;
   }
-  return value > 0 && value <= max ? value : null;
+  return value > 0 && value <= maxSats ? value : null;
 };
 
 // Pagination is validated, never clamped: a caller-supplied `10.5` or `1e3` is a
@@ -86,9 +63,6 @@ const createLnbitsRouter = ({
   extractBearerToken = defaultExtractBearerToken,
   verifyMsalPayload = defaultVerifyMsalPayload,
 } = {}) => {
-  // Read once, at startup: a malformed cap refuses to start the backend rather
-  // than letting it serve requests under a ceiling nobody chose.
-  const maxAmountSats = zapMaxAmountSats();
   const router = express.Router();
 
   router.use(async (req, res, next) => {
@@ -204,7 +178,7 @@ const createLnbitsRouter = ({
   }));
 
   router.post('/wallets/:walletId/invoices', asyncRoute(async (req, res) => {
-    const amount = parseAmount(req.body?.amount, maxAmountSats);
+    const amount = parseAmount(req.body?.amount, service.maxZapAmountSats());
     const memo = parseMemo(req.body?.memo);
     if (
       !hasOnlyKeys(req.body, INVOICE_BODY_KEYS) ||
@@ -215,13 +189,13 @@ const createLnbitsRouter = ({
       res.status(400).json({ error: 'invalid invoice request' });
       return;
     }
-    const paymentRequest = await service.createOwnedInvoice({
+    const invoice = await service.createOwnedInvoice({
       walletId: req.params.walletId,
       amount,
       memo,
       aadObjectId: req.auth.oid,
     });
-    res.status(201).json({ paymentRequest });
+    res.status(201).json(invoice);
   }));
 
   router.post('/wallets/:walletId/payments', asyncRoute(async (req, res) => {
@@ -246,13 +220,15 @@ const createLnbitsRouter = ({
   }));
 
   router.post('/zaps', asyncRoute(async (req, res) => {
-    const amount = parseAmount(req.body?.amount, maxAmountSats);
+    const amount = parseAmount(req.body?.amount, service.maxZapAmountSats());
     const memo = parseMemo(req.body?.memo);
+    const idempotencyKey = req.get('Idempotency-Key');
     if (
       !hasOnlyKeys(req.body, ZAP_BODY_KEYS) ||
       !validId(req.body?.recipientUserId) ||
       amount === null ||
-      memo === null
+      memo === null ||
+      !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey || '')
     ) {
       res.status(400).json({ error: 'invalid zap request' });
       return;
@@ -263,6 +239,7 @@ const createLnbitsRouter = ({
         amount,
         memo,
         aadObjectId: req.auth.oid,
+        idempotencyKey,
       }),
     );
   }));
@@ -304,7 +281,10 @@ const createLnbitsRouter = ({
     const status = Number.isInteger(error.status) ? error.status : 502;
     console.error('LNbits gateway request failed:', error.message);
     res.status(status).json({
-      error: status >= 500 ? 'LNbits service is unavailable' : error.message,
+      error:
+        status >= 500 && !error.expose
+          ? 'LNbits service is unavailable'
+          : error.message,
     });
   });
 

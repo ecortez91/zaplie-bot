@@ -23,8 +23,9 @@
 
 == Prerequisites
 
-- Node.js 18 (App Service is pinned to `~18`; CI builds with Node 20 — see the
-  MSAL override note in README.md)
+- Node.js 24 (`package.json` `engines`; App Service is pinned to `~24` by
+  `infra/azure.bicep` and CI builds on Node 24 — see the MSAL override note in
+  README.md)
 - Teams Toolkit VS Code extension ≥ 5.0.0 or the TeamsFx CLI (`teamsapp`)
 - An M365 tenant with permission to upload custom Teams apps
 - An LNbits 1.0+ instance (the shared test instance runs 1.5.6); the core Users
@@ -43,7 +44,8 @@
 . `teamsApp/create` and `botAadApp/create`
 . `arm/deploy` — `infra/azure.bicep` with `infra/azure.parameters.json`:
   App Service plan (B1), Windows web app (httpsOnly, alwaysOn,
-  `WEBSITE_RUN_FROM_PACKAGE=1`, Node `~18`), app settings (BOT_*, AAD_APP_*),
+  `WEBSITE_RUN_FROM_PACKAGE=1`, Node `~24`), app settings (BOT_*, AAD_APP_*,
+  `NODE_ENV=production`, `ZAPLIE_DATA_DIR=%HOME%\data\zaplie`),
   and `infra/botRegistration/azurebot.bicep` — Azure Bot Service (F0) with the
   MS Teams channel
 . `aadApp/update`, manifest validation, `zipAppPackage`, `teamsApp/update`
@@ -76,7 +78,9 @@ teamsapp preview --env local
 
 Or press F5 in VS Code ("Debug in Teams (Edge/Chrome)"). The bot itself runs
 with `npm run dev` (nodemon + ts-node, inspector on 9239), reading
-`.localConfigs` via `npm run dev:teamsfx`.
+`.localConfigs` via `npm run dev:teamsfx`. That command explicitly selects
+development mode; if `ZAPLIE_DATA_DIR` is omitted, only this mode uses the
+ignored `.zaplie-data` fallback.
 
 === Web tabs (GitHub Actions)
 
@@ -106,6 +110,58 @@ deploys the whole portal: the React build *and* the Express backend under
 `node backend/server.js` (with `SCM_DO_BUILD_DURING_DEPLOYMENT=false`, since
 the artifact arrives prebuilt). The bot deploys separately via
 `teamsapp deploy`.
+
+=== Persistent application state
+
+The bot keeps its mutable state — currently the durable Zap ledger
+`bot-zap-ledger.json` — under `ZAPLIE_DATA_DIR`. Bicep sets
+`ZAPLIE_DATA_DIR=+%HOME%\data\zaplie+` on the App Service it provisions
+(Windows: `kind: 'app'`, no `reserved`/`linuxFxVersion`), outside `wwwroot`, so
+a clean deployment cannot replace it. App Service passes app settings to the
+process verbatim — it does not expand `%VAR%` for an arbitrary setting — so the
+bot expands the `%HOME%` token itself in `src/services/dataDir.ts`, from
+`process.env.HOME` with a platform default (`+D:\home+` on Windows, `/home`
+elsewhere) if it is absent. That resolves to `+D:\home\data\zaplie+` on an
+older Windows stamp, `+C:\home\data\zaplie+` on a newer one and
+`/home/data/zaplie` on Linux, so the same setting is correct everywhere and no
+drive letter is baked in. An absolute literal path still works unchanged. Local development falls
+back to the git-ignored `.zaplie-data` directory when the variable is absent;
+every deployed (non-development) runtime must set it to an absolute path or
+the bot refuses to start.
+
+Never include mutable JSON in a deployment artifact: `.webappignore` excludes
+the ledger, its `.lock` file, and `bot-zap-ledger.json.<pid>.<random>.tmp`
+replacements. The bot creates the data directory with mode `0700` and ledger,
+lock, and temporary files with mode `0600` on supporting filesystems.
+
+Back up and restore the data directory as an application-consistent unit:
+
+. Stop or drain every bot process sharing the directory before copying it.
+. Copy the canonical `bot-zap-ledger.json`; never copy `.lock` or `.tmp`
+  artifacts. Keep backups access-controlled: payment hashes are operational
+  metadata.
+. To restore, keep the bot stopped, preserve a copy of the current directory,
+  restore the canonical backup into `ZAPLIE_DATA_DIR`, restore restrictive
+  permissions, and then start the bot.
+. If a restore moves the ledger backward in time, reconcile every potentially
+  affected Zap against the LNbits ledger before accepting submissions. Never
+  delete or rewrite `processing` or `unknown` records merely to make a retry
+  succeed.
+
+The bot deliberately never evicts `bot-zap-ledger.json.lock` by age: ownership
+is uncertain, and an eviction rule that guessed wrong could re-enable a payment
+that already settled. Treat a crash-left lock as a *manual outage*: while it is
+present, every zap submission fails after the five-second lock timeout with an
+error naming this procedure, and it stays that way until an operator clears it.
+After an unclean shutdown, stop/drain every bot process, inspect the canonical
+store, reconcile any `processing` or `unknown` record with LNbits, and only
+then remove the orphaned lock. Store corruption, an unreadable data directory,
+or lock acquisition failure prevents payment.
+
+Writes sweep this store's own `.tmp` files once they are older than an hour, so
+a crash between writing a temporary and renaming it cannot accumulate ledger
+snapshots on the share; nothing younger is touched, because it may belong to a
+write in flight.
 
 === Azure Functions
 
@@ -195,7 +251,8 @@ created. Must be a positive integer; a failed grant is logged, not retried
   which caps automated rewards only, but it inherits it: left unset the zap
   ceiling is whatever `REWARDS_MAX_AMOUNT_SATS` is set to, falling back to
   1000000 only when neither is set. Set it to give zaps a ceiling of their own.
-  A malformed value fails closed: the portal backend refuses to start
+  A malformed value fails closed: the gateway rejects the request with a 503
+  rather than falling back to a wider ceiling
 | Portal backend
 
 | `AAD_TENANT_ID`, `AAD_CLIENT_ID`
@@ -223,10 +280,13 @@ created. Must be a positive integer; a failed grant is logged, not retried
   REQUIRED in production: without it the stores sit inside the deployment tree
   and a clean deploy wipes them. The value depends on the App Service OS —
   `/home/data/zaplie` on Linux, `+D:\home\data\zaplie+` on Windows (the `home`
-  share is the persistent one in both cases). Consumers: every portal backend
+  share is the persistent one in both cases). `+%HOME%\data\zaplie+` is the
+  portable spelling: the bot expands `%HOME%` itself, so one value is correct
+  on either OS and on any stamp. Consumers: every portal backend
   store honours it (`data.json`, identities, connections, pending rewards,
   secrets, webhook keys, GitHub App credentials, the LNbits user directory);
-  the bot's zap ledger honours it in the durable bot-state work. Set it now on
+  the bot's zap ledger (`bot-zap-ledger.json`) reads it too, and outside
+  explicit development mode the bot refuses to start without it. Set it on
   both — a component that does not read it yet simply ignores it.
 | Bot, Portal backend
 
