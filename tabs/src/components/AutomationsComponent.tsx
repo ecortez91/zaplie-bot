@@ -159,6 +159,10 @@ const AutomationsComponent: FunctionComponent = () => {
     useState<AutomationAudience>('teammates');
 
   useEffect(() => {
+    // Same guard as the connections effect below: `accounts` gets a new
+    // identity on every token refresh, so account 1's response must not be
+    // able to overwrite repos/amounts after account 2's has landed.
+    let cancelled = false;
     const load = async () => {
       try {
         const account = accounts[0];
@@ -170,21 +174,42 @@ const AutomationsComponent: FunctionComponent = () => {
           getAutomations(idToken),
           getRewardAmounts(idToken),
         ]);
+        if (cancelled) {
+          return;
+        }
         setRepos(automations.repos || []);
         setAmounts(rewardAmounts.rewardAmounts || {});
       } catch (err) {
+        if (cancelled) {
+          return;
+        }
         setError(
           err instanceof Error ? err.message : 'Failed to load automations',
         );
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
     load();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts, instance]);
 
   const isAdmin = isZaplieAdmin(accounts[0]);
+  const accountId = accounts[0]?.homeAccountId;
+
+  // createdKey holds a plaintext webhook secret, shown once for copying.
+  // Keyed on the account id rather than the `accounts` array so an ordinary
+  // token refresh does not snatch it away mid-copy, but switching account
+  // cannot leave one admin's secret in the next one's DOM.
+  useEffect(() => {
+    setCreatedKey(null);
+  }, [accountId]);
 
   useEffect(() => {
     if (!accounts[0]) {

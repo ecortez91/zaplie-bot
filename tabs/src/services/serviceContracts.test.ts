@@ -218,13 +218,14 @@ describe('service response contracts — accepted backend payloads', () => {
     expect(parseRewardAmountsResponse({ rewardAmounts })).toEqual({
       rewardAmounts,
     });
-    // A tenant that has zeroed a rule out still has a valid payload.
+    // validateRewardAmountPatch rejects anything <= 0, so a retuned rule is
+    // still a positive integer.
     expect(
       parseRewardAmountsResponse({
-        rewardAmounts: { ...rewardAmounts, githubPrMergedSats: 0 },
+        rewardAmounts: { ...rewardAmounts, githubPrMergedSats: 250 },
       }),
     ).toEqual({
-      rewardAmounts: { ...rewardAmounts, githubPrMergedSats: 0 },
+      rewardAmounts: { ...rewardAmounts, githubPrMergedSats: 250 },
     });
   });
 
