@@ -24,6 +24,23 @@ const parseAmount = (value) => {
   return value > 0 && value <= max ? value : null;
 };
 
+// Pagination is validated, never clamped: a caller-supplied `10.5` or `1e3` is a
+// bad request, not something to silently round into an LNbits query.
+const parseBoundedInt = (value, { fallback, min, max }) => {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\+?\d+$/.test(value)
+        ? Number.parseInt(value, 10)
+        : NaN;
+  return Number.isSafeInteger(parsed) && parsed >= min && parsed <= max
+    ? parsed
+    : null;
+};
+
 const parseMemo = (value) =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 500
     ? value.trim()
@@ -111,11 +128,16 @@ const createLnbitsRouter = ({
   }));
 
   router.get('/wallets/:walletId/payments', asyncRoute(async (req, res) => {
-    if (!validId(req.params.walletId)) {
-      res.status(400).json({ error: 'invalid wallet id' });
+    const limit = parseBoundedInt(req.query.limit, {
+      fallback: 100,
+      min: 1,
+      max: 1000,
+    });
+    if (!validId(req.params.walletId) || limit === null) {
+      res.status(400).json({ error: 'invalid payment history request' });
       return;
     }
-    res.json(await service.listWalletPayments(req.params.walletId, req.query.limit));
+    res.json(await service.listWalletPayments(req.params.walletId, limit));
   }));
 
   router.get('/wallets/:walletId/payments/:invoiceId', asyncRoute(async (req, res) => {
@@ -205,10 +227,24 @@ const createLnbitsRouter = ({
   }));
 
   router.get('/payments', asyncRoute(async (req, res) => {
+    const limit = parseBoundedInt(req.query.limit, {
+      fallback: 1000,
+      min: 1,
+      max: 10000,
+    });
+    const offset = parseBoundedInt(req.query.offset, {
+      fallback: 0,
+      min: 0,
+      max: 1_000_000,
+    });
+    if (limit === null || offset === null) {
+      res.status(400).json({ error: 'invalid pagination request' });
+      return;
+    }
     res.json(
       await service.getAllPayments({
-        limit: req.query.limit,
-        offset: req.query.offset,
+        limit,
+        offset,
         sortby: req.query.sortby,
         direction: req.query.direction,
       }),

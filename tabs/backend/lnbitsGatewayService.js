@@ -116,7 +116,7 @@ const redactSensitive = (value, depth = 0) => {
 
 const sanitizeUser = (user) => {
   const extra = parseExtra(user);
-  let displayName = user.username || user.name || user.id;
+  let displayName = String(user.username || user.name || user.id || '');
   if (displayName.includes('@')) {
     displayName = displayName
       .split('@')[0]
@@ -288,8 +288,7 @@ const getWalletBalance = async (walletId, aadObjectId) =>
 // history from every teammate's wallet, so this read cannot be owner-only.
 const listWalletPayments = async (walletId, limit = 100) => {
   const wallet = await getWalletWithKeys(walletId);
-  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 1000);
-  const payments = await lnbitsRequest(`/api/v1/payments?limit=${safeLimit}`, {
+  const payments = await lnbitsRequest(`/api/v1/payments?limit=${limit}`, {
     walletKey: wallet.inkey,
   });
   if (!Array.isArray(payments)) {
@@ -402,8 +401,8 @@ const getNostrRewards = async (stallId) => {
 
 const getAllPayments = async ({ limit = 1000, offset = 0, direction = 'desc' }) => {
   const params = new URLSearchParams({
-    limit: String(Math.min(Math.max(Number(limit) || 1000, 1), 10000)),
-    offset: String(Math.max(Number(offset) || 0, 0)),
+    limit: String(limit),
+    offset: String(offset),
     sortby: 'time',
     direction: direction === 'asc' ? direction : 'desc',
   });

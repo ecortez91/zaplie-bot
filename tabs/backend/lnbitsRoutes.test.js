@@ -147,7 +147,7 @@ test('wallet payment history stays tenant-wide for the feed', async () => {
   assert.equal(response.status, 200);
   assert.deepEqual(calls.at(-1), [
     'payments',
-    { walletId: 'wallet-9', limit: undefined },
+    { walletId: 'wallet-9', limit: 100 },
   ]);
 });
 
@@ -171,6 +171,19 @@ test('rejects non-numeric amounts that would otherwise coerce to a number', asyn
       token: 'valid-token',
       body: { recipientUserId: 'user-2', amount, memo: 'coerced' },
     });
+
+    assert.equal(response.status, 400);
+    assert.equal(calls.length, callsBefore);
+  }
+});
+
+test('rejects pagination values that are not plain integers', async () => {
+  for (const limit of ['10.5', '1e3', '-1', '0', '9999', 'abc']) {
+    const callsBefore = calls.length;
+    const response = await request(
+      `/api/lnbits/wallets/wallet-9/payments?limit=${limit}`,
+      { token: 'valid-token' },
+    );
 
     assert.equal(response.status, 400);
     assert.equal(calls.length, callsBefore);

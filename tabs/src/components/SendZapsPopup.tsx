@@ -20,6 +20,18 @@ type UserWithWallet = User & { privateWallet: Wallet | null };
 
 const PRESET_AMOUNTS = [5000, 10000, 25000];
 
+const MAX_ZAP_AMOUNT = 1000000;
+
+const parseZapAmount = (value: string): number | null => {
+  if (!/^\d+$/.test(value.trim())) {
+    return null;
+  }
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= MAX_ZAP_AMOUNT
+    ? parsed
+    : null;
+};
+
 const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const [selectedUser, setSelectedUser] = useState<string>('');
   const [amount, setAmount] = useState<string>('');
@@ -168,12 +180,15 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
       return;
     }
 
-    if (!amount || parseFloat(amount) <= 0) {
-      setError('Please enter a valid amount');
+    // Sats are indivisible, and the gateway caps a single zap, so a decimal or
+    // oversized amount is rejected here rather than becoming a failed payment.
+    const zapAmount = parseZapAmount(amount);
+    if (zapAmount === null) {
+      setError(
+        `Please enter a whole number between 1 and ${MAX_ZAP_AMOUNT.toLocaleString()}`,
+      );
       return;
     }
-
-    const zapAmount = parseFloat(amount);
 
     // Balance validation
     if (zapAmount > currentUserWallets.balance) {
@@ -234,7 +249,8 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   };
 
   const selectedUserData = users.find(u => u.id === selectedUser);
-  const isSendDisabled = !selectedUser || !amount || parseFloat(amount) <= 0;
+  const isSendDisabled =
+    !selectedUser || !amount || parseZapAmount(amount) === null;
 
   // Get initials for avatar placeholder
   const getInitials = (name?: string) => {
