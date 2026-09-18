@@ -1,4 +1,4 @@
-import React, { FunctionComponent, useEffect, useState } from 'react';
+import React, { FunctionComponent, useEffect, useRef, useState } from 'react';
 import { useMsal } from '@azure/msal-react';
 import styles from './AutomationsComponent.module.css';
 import {
@@ -150,6 +150,7 @@ const AutomationsComponent: FunctionComponent = () => {
   const [appInstalled, setAppInstalled] = useState(false);
   const [stats, setStats] = useState<AutomationsStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState(false);
   const [webhookKeys, setWebhookKeys] = useState<WebhookKey[]>([]);
   const [newKeyLabel, setNewKeyLabel] = useState('');
   const [creatingKey, setCreatingKey] = useState(false);
@@ -157,7 +158,53 @@ const AutomationsComponent: FunctionComponent = () => {
   const [ruleAudience, setRuleAudience] =
     useState<AutomationAudience>('teammates');
 
+  const accountId = accounts[0]?.homeAccountId;
+  // Read after an await to tell whether the account changed mid-flight. A ref,
+  // not the closed-over `accountId`, so a handler started under the previous
+  // account sees the current value rather than the one it captured.
+  const accountIdRef = useRef(accountId);
+  const stillSameAccount = (startedAs: string | undefined) =>
+    accountIdRef.current === startedAs;
+
+  // Everything below is account-scoped. Reset it the moment the signed-in
+  // account changes, before the reloads start: a slow or hanging request would
+  // otherwise let the new account read the previous one's repos, reward
+  // amounts, treasury metrics, GitHub banner and key labels. Declared ahead of
+  // the load effects so it runs first, and keyed on the account id rather than
+  // the `accounts` array, which useMsal gives a new identity on every token
+  // refresh — that would wipe the one-time plaintext key mid-copy.
   useEffect(() => {
+    accountIdRef.current = accountId;
+    setRepos([]);
+    setAmounts({});
+    setAppInstalled(false);
+    setStats(null);
+    setWebhookKeys([]);
+    setCreatedKey(null);
+    setError(null);
+    setStatsError(false);
+    setLoading(true);
+    setStatsLoading(true);
+    // In-progress edits belong to the previous account: the same rule key
+    // could otherwise open in edit mode holding the old account's amount, and
+    // saving it would write that stale value.
+    setEditingKey(null);
+    setEditingValue('');
+    setNewRepo('');
+    setNewKeyLabel('');
+    // A handler still in flight for the previous account skips its own
+    // finally, so its flags have to be cleared here or the new account
+    // inherits a permanently disabled "Creating..." or saving control.
+    setCreatingKey(false);
+    setSaving(false);
+    setInstalling(false);
+  }, [accountId]);
+
+  useEffect(() => {
+    // Same guard as the connections effect below: `accounts` gets a new
+    // identity on every token refresh, so account 1's response must not be
+    // able to overwrite repos/amounts after account 2's has landed.
+    let cancelled = false;
     const load = async () => {
       try {
         const account = accounts[0];
@@ -169,17 +216,29 @@ const AutomationsComponent: FunctionComponent = () => {
           getAutomations(idToken),
           getRewardAmounts(idToken),
         ]);
+        if (cancelled) {
+          return;
+        }
         setRepos(automations.repos || []);
         setAmounts(rewardAmounts.rewardAmounts || {});
       } catch (err) {
+        if (cancelled) {
+          return;
+        }
         setError(
           err instanceof Error ? err.message : 'Failed to load automations',
         );
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
     load();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts, instance]);
 
@@ -190,26 +249,113 @@ const AutomationsComponent: FunctionComponent = () => {
       setStatsLoading(false);
       return;
     }
+    // `accounts` from useMsal gets a new identity on every token refresh, so
+    // this effect re-runs while its previous run is still in flight. Without
+    // this flag a slow run-1 rejection could land after run-2 succeeded and
+    // blank good data, and run-1's finally would clear the loading state while
+    // run-2 was still loading.
+    let cancelled = false;
     setStatsLoading(true);
+    setStatsError(false);
     const loadConnections = async () => {
+      let idToken: string;
       try {
-        const idToken = await acquireIdToken(instance, accounts[0]);
-        const [connection, statsData, keys] = await Promise.all([
-          getGithubConnection(idToken),
-          getAutomationsStats(idToken),
-          isAdmin ? getWebhookKeys(idToken) : Promise.resolve([]),
-        ]);
-        setAppInstalled(connection.connected);
-        setStats(statsData);
-        setWebhookKeys(keys);
+        idToken = await acquireIdToken(instance, accounts[0]);
       } catch (err) {
-        console.error('Error fetching connections state:', err);
+        if (cancelled) {
+          return;
+        }
+        console.error('Error acquiring a token for automations:', err);
         toast.error('Could not load connection status.');
-      } finally {
+        // No token means none of the three panels can be refreshed, so clear
+        // all of the account-scoped state rather than leaving the previous
+        // account's stats, banner and key labels on screen under an error.
+        // Defence in depth: the sibling load effect shares this token and
+        // already replaces the whole view with its error page, so this is not
+        // separately observable — but it must not depend on that.
+        setStats(null);
+        setAppInstalled(false);
+        setWebhookKeys([]);
+        setStatsError(true);
         setStatsLoading(false);
+        return;
       }
+      if (cancelled) {
+        return;
+      }
+
+      // Three independent chains, not Promise.all/allSettled: the treasury
+      // stats call is LNbits-backed and both the slowest and the likeliest to
+      // fail. Bundling it used to hide the GitHub-connected banner and the
+      // API-keys list behind one generic toast, and would still make them wait
+      // on it. Each panel now lands as soon as its own request settles.
+      //
+      // Every catch clears its own panel: these are account-scoped, so leaving
+      // the previous account's banner or key labels on screen after a failed
+      // reload would show one user another user's automation state.
+      void getGithubConnection(idToken)
+        .then(connection => {
+          if (cancelled) {
+            return;
+          }
+          setAppInstalled(connection.connected);
+        })
+        .catch(err => {
+          if (cancelled) {
+            return;
+          }
+          console.error('Error fetching GitHub connection:', err);
+          setAppInstalled(false);
+          toast.error('Could not load connection status.');
+        });
+
+      void getAutomationsStats(idToken)
+        .then(statsData => {
+          if (cancelled) {
+            return;
+          }
+          setStats(statsData);
+          setStatsError(false);
+        })
+        .catch(err => {
+          if (cancelled) {
+            return;
+          }
+          console.error('Error fetching automations stats:', err);
+          // Drop the previous summary too: the render path checks `stats`
+          // first, so stale recipients and history would otherwise sit there
+          // looking current while the refresh that replaced them had failed.
+          setStats(null);
+          setStatsError(true);
+        })
+        .finally(() => {
+          if (cancelled) {
+            return;
+          }
+          setStatsLoading(false);
+        });
+
+      void (isAdmin ? getWebhookKeys(idToken) : Promise.resolve([]))
+        .then(keys => {
+          if (cancelled) {
+            return;
+          }
+          setWebhookKeys(keys);
+        })
+        .catch(err => {
+          if (cancelled) {
+            return;
+          }
+          console.error('Error fetching webhook keys:', err);
+          setWebhookKeys([]);
+          toast.error('Could not load the API keys.');
+        });
     };
     loadConnections();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, accounts, instance]);
 
@@ -219,43 +365,84 @@ const AutomationsComponent: FunctionComponent = () => {
       toast.error('Give the key a label, like "GitHub Logic App".');
       return;
     }
+    const startedAs = accountId;
     setCreatingKey(true);
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
       const created = await createWebhookKey(idToken, label);
+      // The account changed while this was in flight: putting the plaintext
+      // key on screen now would show it to whoever is signed in instead.
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
+      // Surface the secret before refreshing the list. The key already exists
+      // server-side and its plaintext is returned exactly once, so a failed
+      // refresh must not cost the admin the only copy.
       setCreatedKey(created.key);
       setNewKeyLabel('');
-      setWebhookKeys(await getWebhookKeys(idToken));
+      try {
+        const keys = await getWebhookKeys(idToken);
+        if (stillSameAccount(startedAs)) {
+          setWebhookKeys(keys);
+        }
+      } catch (refreshErr) {
+        console.error(
+          'Error refreshing webhook keys after create:',
+          refreshErr,
+        );
+        if (stillSameAccount(startedAs)) {
+          toast.error('Key created, but the list could not be refreshed.');
+        }
+      }
     } catch (err) {
       console.error('Error creating webhook key:', err);
-      toast.error('Could not create the API key.');
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not create the API key.');
+      }
     } finally {
-      setCreatingKey(false);
+      if (stillSameAccount(startedAs)) {
+        setCreatingKey(false);
+      }
     }
   };
 
   const handleRevokeKey = async (id: string) => {
+    const startedAs = accountId;
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
       await revokeWebhookKey(idToken, id);
-      setWebhookKeys(await getWebhookKeys(idToken));
+      const keys = await getWebhookKeys(idToken);
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
+      setWebhookKeys(keys);
       toast.success('Key revoked. Flows using it stop working immediately.');
     } catch (err) {
       console.error('Error revoking webhook key:', err);
-      toast.error('Could not revoke the API key.');
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not revoke the API key.');
+      }
     }
   };
 
   const persistRepos = async (next: string[]) => {
+    const startedAs = accountId;
     setSaving(true);
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
       const data = await updateAutomations(idToken, next);
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
       setRepos(data.repos);
     } catch (err) {
-      toast.error('Could not update connected repositories.');
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not update connected repositories.');
+      }
     } finally {
-      setSaving(false);
+      if (stillSameAccount(startedAs)) {
+        setSaving(false);
+      }
     }
   };
 
@@ -282,6 +469,7 @@ const AutomationsComponent: FunctionComponent = () => {
     if (!account) {
       return;
     }
+    const startedAs = accountId;
     setInstalling(true);
     try {
       const tokenResponse = await instance.acquireTokenSilent({
@@ -290,11 +478,19 @@ const AutomationsComponent: FunctionComponent = () => {
         forceRefresh: true,
       });
       const installUrl = await getGithubInstallUrl(tokenResponse.idToken);
+      // The backend signs the redirect state with the requesting token's oid,
+      // so following this URL after an account switch would attach the GitHub
+      // installation to the account that is no longer signed in.
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
       window.location.href = installUrl;
     } catch (err) {
       console.error('Error starting repository install:', err);
-      toast.error('Could not start the GitHub App install.');
-      setInstalling(false);
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not start the GitHub App install.');
+        setInstalling(false);
+      }
     }
   };
 
@@ -309,6 +505,7 @@ const AutomationsComponent: FunctionComponent = () => {
       toast.error('Reward amount must be a positive whole number of sats.');
       return;
     }
+    const startedAs = accountId;
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
       // `amounts` only changes on a successful save, so another card's unsaved edit can't bleed in here.
@@ -316,11 +513,16 @@ const AutomationsComponent: FunctionComponent = () => {
         ...amounts,
         [key]: nextAmount,
       });
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
       setAmounts(data.rewardAmounts);
       setEditingKey(null);
       toast.success('Reward amount updated.');
     } catch (err) {
-      toast.error('Could not update the reward amount.');
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not update the reward amount.');
+      }
     }
   };
 
@@ -429,7 +631,10 @@ const AutomationsComponent: FunctionComponent = () => {
             ))}
           </div>
         ) : (
-          <p className={styles.emptyState}>
+          <p
+            className={styles.emptyState}
+            role={statsError ? 'alert' : undefined}
+          >
             Recipient activity is unavailable right now.
           </p>
         )}

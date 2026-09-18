@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { isFiniteNumber } from './services/validators';
 
 const API_URL = '/api';
 
@@ -6,7 +7,7 @@ export interface RewardNameResponse {
   rewardName: string;
 }
 
-const parseRewardNameResponse = (data: unknown): RewardNameResponse => {
+export const parseRewardNameResponse = (data: unknown): RewardNameResponse => {
   if (!data || typeof data !== 'object') {
     throw new Error('The reward name response was invalid.');
   }
@@ -53,7 +54,9 @@ export interface AutomationsResponse {
   repos: string[];
 }
 
-const parseRewardAmountsResponse = (data: unknown): RewardAmountsResponse => {
+export const parseRewardAmountsResponse = (
+  data: unknown,
+): RewardAmountsResponse => {
   if (!data || typeof data !== 'object') {
     throw new Error('The reward amounts response was invalid.');
   }
@@ -63,9 +66,7 @@ const parseRewardAmountsResponse = (data: unknown): RewardAmountsResponse => {
     !rewardAmounts ||
     typeof rewardAmounts !== 'object' ||
     Array.isArray(rewardAmounts) ||
-    !Object.values(rewardAmounts).every(
-      value => typeof value === 'number' && Number.isFinite(value),
-    )
+    !Object.values(rewardAmounts).every(isFiniteNumber)
   ) {
     throw new Error('The reward amounts response was invalid.');
   }
@@ -73,7 +74,9 @@ const parseRewardAmountsResponse = (data: unknown): RewardAmountsResponse => {
   return { rewardAmounts: rewardAmounts as Record<string, number> };
 };
 
-const parseAutomationsResponse = (data: unknown): AutomationsResponse => {
+export const parseAutomationsResponse = (
+  data: unknown,
+): AutomationsResponse => {
   if (!data || typeof data !== 'object') {
     throw new Error('The automations response was invalid.');
   }

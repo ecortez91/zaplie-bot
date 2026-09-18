@@ -72,7 +72,7 @@ const WalletYourWalletInfoCard: React.FC = () => {
   if (!rewardNameContext) {
     return null; // or handle the case where the context is not available
   }
-  const rewardsName = rewardNameContext.rewardName;
+  const rewardsName = rewardNameContext.rewardNameLabel;
 
   // Buttons should be disabled if balance is undefined (still loading)
   const isLoading = false; // balance === undefined;

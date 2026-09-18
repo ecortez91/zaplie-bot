@@ -120,7 +120,11 @@ describe('SendZapsPopup idempotency key', () => {
     await act(async () => {
       root.render(
         <RewardNameContext.Provider
-          value={{ rewardName: 'Sats', setRewardName: jest.fn() }}
+          value={{
+            rewardName: 'Sats',
+            rewardNameLabel: 'Sats',
+            setRewardName: jest.fn(),
+          }}
         >
           <SendZapsPopup onClose={jest.fn()} />
         </RewardNameContext.Provider>,
