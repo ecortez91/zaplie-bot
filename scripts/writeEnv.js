@@ -7,7 +7,10 @@ const env = process.env.TEAMSFX_ENV || 'local';
 // TEAMSFX_ENV names a file inside env/, so keep it to a plain environment
 // name — a value with separators or '..' would write outside that folder.
 if (!/^[A-Za-z0-9_-]+$/.test(env)) {
-  console.error(`Error: TEAMSFX_ENV "${env}" is not a valid environment name.`);
+  console.error(
+    'Error: TEAMSFX_ENV is not a valid environment name (letters, digits, ' +
+      'underscore and hyphen only).',
+  );
   process.exit(1);
 }
 

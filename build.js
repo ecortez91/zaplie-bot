@@ -17,7 +17,8 @@ if (activeEnv && activeEnv !== 'dev') {
   // name — a value with separators or '..' would read outside that folder.
   if (!/^[A-Za-z0-9_-]+$/.test(activeEnv)) {
     console.error(
-      `Error: TEAMSFX_ENV "${activeEnv}" is not a valid environment name.`,
+      'Error: TEAMSFX_ENV is not a valid environment name (letters, digits, ' +
+        'underscore and hyphen only).',
     );
     process.exit(1);
   }
@@ -59,8 +60,10 @@ for (const [name, value] of [
 ]) {
   const parsed = parseUrl(value);
   if (!parsed || parsed.protocol !== 'https:') {
+    // The value itself is not echoed: environment values can carry secrets.
     console.error(
-      `Error: the ${name} URL "${value}" must be an absolute https:// URL.`,
+      `Error: the ${name} URL must be an absolute https:// URL — check ` +
+        'TAB_ENDPOINT, CONTENT_URL and WEBSITE_URL.',
     );
     process.exit(1);
   }
