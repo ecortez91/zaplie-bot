@@ -1,9 +1,9 @@
-import { useEffect } from 'react';
+import { ReactElement, useEffect } from 'react';
 import { useMsal } from '@azure/msal-react';
 import { loginRequest } from '../services/authConfig';
 import { useNavigate } from 'react-router-dom';
 
-const RequireAuth = ({ children }: { children: JSX.Element }) => {
+const RequireAuth = ({ children }: { children: ReactElement }) => {
   const { instance, accounts, inProgress } = useMsal();
   const navigate = useNavigate();
 
