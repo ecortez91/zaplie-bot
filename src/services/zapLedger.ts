@@ -89,8 +89,8 @@ export const zapKey = (parts: ZapKeyParts): string => {
     .digest('hex');
 };
 
-// The ledger shares ZAPLIE_DATA_DIR with the weekly allowance guard and must
-// resolve it identically: one rule, one place to change it. Resolution
+// The ledger resolves ZAPLIE_DATA_DIR through the shared resolver so every
+// on-disk store agrees: one rule, one place to change it. Resolution
 // failures are re-raised as ZapLedgerError so every caller of this module sees
 // a single error type.
 export const resolveZapLedgerStorePath = (
