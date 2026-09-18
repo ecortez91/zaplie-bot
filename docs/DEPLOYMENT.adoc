@@ -195,12 +195,6 @@ Deploy `dist/` with Azure Functions Core Tools or your preferred pipeline
   `REACT_APP_` prefix
 | Bot, Portal backend
 
-| `ZAPLIE_DATA_DIR`
-| Absolute persistent directory for the bot's mutable stores
-  (`bot-zap-ledger.json`); Bicep sets `D:\home\data\zaplie` on the App
-  Service, local development defaults to `.zaplie-data`
-| Bot
-
 | `LNBITS_INITIAL_ALLOWANCE`
 | Sats the bot attempts to grant to each user's Allowance wallet when it is
 created. Must be a positive integer; a failed grant is logged, not retried
@@ -269,7 +263,8 @@ created. Must be a positive integer; a failed grant is logged, not retried
   share is the persistent one in both cases). Consumers: every portal backend
   store honours it (`data.json`, identities, connections, pending rewards,
   secrets, webhook keys, GitHub App credentials, the LNbits user directory);
-  the bot's zap ledger honours it in the durable bot-state work. Set it now on
+  the bot's zap ledger (`bot-zap-ledger.json`) reads it too, and outside
+  explicit development mode the bot refuses to start without it. Set it on
   both — a component that does not read it yet simply ignores it.
 | Bot, Portal backend
 
