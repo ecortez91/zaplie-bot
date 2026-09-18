@@ -21,7 +21,7 @@
     "express": "^4.22.3",
     "express-rate-limit": "^8.7.0",
     "http-proxy-middleware": "^2.0.6",
-    "jose": "^6.2.10",
+    "jose": "^6.2.12",
     "light-bolt11-decoder": "^3.2.0",
     "moment": "^2.31.0",
     "react": "^18.3.1",
