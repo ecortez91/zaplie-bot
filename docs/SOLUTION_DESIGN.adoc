@@ -218,6 +218,12 @@ per-request via HTTP Basic auth plus `siteURL`/`adminkey` query parameters.
 | Bot conversation state
 | `MemoryStorage` (in-process)
 | Ephemeral — lost on restart, not multi-instance safe
+
+| Zap card payment ledger
+| `ZapLedger` (in-process `Map`, `src/services/zapLedger.ts`)
+| One payment per card recipient for the life of the process; paid and
+  unknown slots never expire. Lost on restart, not multi-instance safe
+  (durable ledger tracked in #187)
 |===
 
 == Design Decisions

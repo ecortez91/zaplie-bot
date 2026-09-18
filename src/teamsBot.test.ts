@@ -16,6 +16,12 @@ import * as path from 'path';
 import { TurnContext } from 'botbuilder';
 import { GENERIC_ERROR_MESSAGE } from './messages';
 import { SSOCommand, SSOCommandMap } from './commands/SSOCommandMap';
+import {
+  createInvoice,
+  getUser,
+  getWalletBalance,
+  payInvoice,
+} from './services/lnbitsService';
 
 jest.mock('./services/lnbitsService');
 jest.mock('./services/foundryAgentService');
@@ -281,5 +287,130 @@ describe('TeamsBot welcome message', () => {
     await bot.run(context);
 
     expect(sendActivity).not.toHaveBeenCalled();
+  });
+});
+
+// Handler-level proof that one zap card pays each recipient at most once,
+// driven through bot.run() with the LNbits boundary mocked.
+describe('TeamsBot pays a zap card at most once per recipient', () => {
+  const receiver: User = {
+    id: 'recipient-1',
+    displayName: 'Bob',
+    profileImg: '',
+    aadObjectId: 'aad-bob',
+    email: 'bob@example.test',
+    privateWallet: {
+      id: 'w-bob-priv',
+      admin: '',
+      name: 'Private',
+      user: 'recipient-1',
+      adminkey: 'adm-bob-priv',
+      inkey: 'ink-bob-priv',
+      balance_msat: 0,
+      deleted: false,
+    },
+    allowanceWallet: null,
+  };
+
+  const submitContext = (cardId: string): MockContext => {
+    const mock = makeContext({
+      replyToId: cardId,
+      value: {
+        action: 'submitZaps',
+        zapReceiverId: 'recipient-1',
+        zapMessage: 'thanks!',
+        zapAmount: '10',
+      },
+    });
+    (mock.context.turnState as Map<unknown, unknown>).set('user', {
+      id: 'user-1',
+      displayName: 'Alice',
+      aadObjectId: 'aad-user-1',
+      privateWallet: null,
+      allowanceWallet: {
+        id: 'w-alice-allow',
+        inkey: 'ink-alice-allow',
+        adminkey: 'adm-alice-allow',
+      },
+    });
+    return mock;
+  };
+
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    jest.mocked(getUser).mockResolvedValue(receiver);
+    jest.mocked(getWalletBalance).mockResolvedValue(1000);
+    jest.mocked(createInvoice).mockResolvedValue('lnbc1-payment-request');
+    jest.mocked(payInvoice).mockResolvedValue({ payment_hash: 'hash-1' });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('pays once when the same card is submitted twice in a row', async () => {
+    const bot = new TeamsBot();
+    const first = submitContext('card-dup');
+    const second = submitContext('card-dup');
+
+    await bot.run(first.context);
+    await bot.run(second.context);
+
+    expect(payInvoice).toHaveBeenCalledTimes(1);
+    // The paid submit reads the balance twice (budget check, receipt); the
+    // duplicate is stopped before it touches LNbits at all.
+    expect(getWalletBalance).toHaveBeenCalledTimes(2);
+    expect(first.sendActivity).toHaveBeenCalledWith(
+      expect.stringContaining('Awesome! You sent 10'),
+    );
+    expect(second.sendActivity).toHaveBeenCalledWith(
+      'That zap card was already submitted, so nothing was sent again.',
+    );
+  });
+
+  test('pays once when two submits of the same card race', async () => {
+    const bot = new TeamsBot();
+    const first = submitContext('card-race');
+    const second = submitContext('card-race');
+    // Hold both submits at the balance read, which sits between the pending
+    // check and the acquire, so the interleaving is the test's own doing
+    // rather than the scheduler's.
+    let releaseBalance: () => void = () => undefined;
+    const gate = new Promise<void>(resolve => {
+      releaseBalance = resolve;
+    });
+    jest.mocked(getWalletBalance).mockImplementation(async () => {
+      await gate;
+      return 1000;
+    });
+
+    const runs = Promise.all([bot.run(first.context), bot.run(second.context)]);
+    await new Promise(resolve => setImmediate(resolve));
+    releaseBalance();
+    await runs;
+
+    expect(payInvoice).toHaveBeenCalledTimes(1);
+    // Three balance reads: both submits passed the pending check while the
+    // ledger was still empty, then the winner read it again for the receipt.
+    expect(getWalletBalance).toHaveBeenCalledTimes(3);
+    const replies = [
+      ...first.sendActivity.mock.calls,
+      ...second.sendActivity.mock.calls,
+    ].map(([message]) => message);
+    expect(replies).toContainEqual(
+      expect.stringMatching(/already submitted|still need checking/),
+    );
+    expect(replies).toContainEqual(
+      expect.stringContaining('Awesome! You sent 10'),
+    );
+  });
+
+  test('pays a different card to the same recipient normally', async () => {
+    const bot = new TeamsBot();
+
+    await bot.run(submitContext('card-a').context);
+    await bot.run(submitContext('card-b').context);
+
+    expect(payInvoice).toHaveBeenCalledTimes(2);
   });
 });

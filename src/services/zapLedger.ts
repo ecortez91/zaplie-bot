@@ -2,15 +2,19 @@
 //
 // Scope: this is in-memory, single-process state. It prevents a double click,
 // a Teams retry or two concurrent submits from paying twice inside one running
-// instance. It does NOT survive a restart and does not coordinate across
-// instances, so it is best-effort protection rather than an at-most-once
-// guarantee. A durable ledger is tracked in #187.
+// instance, for as long as that instance lives: a paid or unknown slot never
+// expires, because the card it belongs to never stops being submittable. It
+// does NOT survive a restart and does not coordinate across instances, so it
+// is best-effort protection rather than an at-most-once guarantee. A durable
+// ledger is tracked in #187.
 
 export type ZapEntryState = 'processing' | 'paid' | 'unknown';
 
 export interface ZapEntry {
   state: ZapEntryState;
   paymentHash?: string;
+  // Not read in-process any more (nothing expires), kept for the durable
+  // store tracked in #187, where it is what an operator reconciles against.
   at: number;
 }
 
@@ -32,13 +36,10 @@ export const zapKey = ({
 export class ZapLedger {
   private entries = new Map<string, ZapEntry>();
 
-  constructor(private readonly ttlMs = 24 * 60 * 60 * 1000) {}
-
   // Atomic in the single-threaded sense: the check and the write happen in one
   // synchronous block, so two concurrent submits cannot both acquire the slot.
   // Returns false when the recipient is already processing, paid, or unknown.
   tryAcquire(key: string): boolean {
-    this.expire(key);
     if (this.entries.has(key)) {
       return false;
     }
@@ -64,20 +65,6 @@ export class ZapLedger {
   }
 
   get(key: string): ZapEntry | undefined {
-    this.expire(key);
     return this.entries.get(key);
-  }
-
-  private expire(key: string): void {
-    const entry = this.entries.get(key);
-    // 'unknown' never expires on its own: it needs reconciliation, and dropping
-    // it would silently re-enable a payment that may already have settled.
-    if (
-      entry &&
-      entry.state !== 'unknown' &&
-      Date.now() - entry.at > this.ttlMs
-    ) {
-      this.entries.delete(key);
-    }
   }
 }
