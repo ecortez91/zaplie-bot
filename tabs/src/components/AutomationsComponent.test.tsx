@@ -209,4 +209,27 @@ describe('AutomationsComponent panel independence', () => {
       'Recipient activity is unavailable right now.',
     );
   });
+
+  test('drops the previous account state before the new loads settle', async () => {
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+    await renderAutomations();
+    expect(container.textContent).toContain('App installed');
+    expect(container.textContent).toContain(webhookKey.label);
+
+    // Switch account and let every request hang. Nothing settles, so this can
+    // only pass if the state is reset on the account change itself.
+    mockUseMsal.mockReturnValue({
+      instance: {},
+      accounts: [{ homeAccountId: 'account-2' }],
+    });
+    const pending = () => new Promise(() => undefined);
+    mockGetGithubConnection.mockImplementation(pending as never);
+    mockGetAutomationsStats.mockImplementation(pending as never);
+    mockGetWebhookKeys.mockImplementation(pending as never);
+
+    await renderAutomations();
+
+    expect(container.textContent).toContain('Not connected yet');
+    expect(container.textContent).not.toContain(webhookKey.label);
+  });
 });

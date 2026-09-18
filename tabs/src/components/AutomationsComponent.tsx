@@ -158,6 +158,28 @@ const AutomationsComponent: FunctionComponent = () => {
   const [ruleAudience, setRuleAudience] =
     useState<AutomationAudience>('teammates');
 
+  const accountId = accounts[0]?.homeAccountId;
+
+  // Everything below is account-scoped. Reset it the moment the signed-in
+  // account changes, before the reloads start: a slow or hanging request would
+  // otherwise let the new account read the previous one's repos, reward
+  // amounts, treasury metrics, GitHub banner and key labels. Declared ahead of
+  // the load effects so it runs first, and keyed on the account id rather than
+  // the `accounts` array, which useMsal gives a new identity on every token
+  // refresh — that would wipe the one-time plaintext key mid-copy.
+  useEffect(() => {
+    setRepos([]);
+    setAmounts({});
+    setAppInstalled(false);
+    setStats(null);
+    setWebhookKeys([]);
+    setCreatedKey(null);
+    setError(null);
+    setStatsError(false);
+    setLoading(true);
+    setStatsLoading(true);
+  }, [accountId]);
+
   useEffect(() => {
     // Same guard as the connections effect below: `accounts` gets a new
     // identity on every token refresh, so account 1's response must not be
@@ -201,15 +223,6 @@ const AutomationsComponent: FunctionComponent = () => {
   }, [accounts, instance]);
 
   const isAdmin = isZaplieAdmin(accounts[0]);
-  const accountId = accounts[0]?.homeAccountId;
-
-  // createdKey holds a plaintext webhook secret, shown once for copying.
-  // Keyed on the account id rather than the `accounts` array so an ordinary
-  // token refresh does not snatch it away mid-copy, but switching account
-  // cannot leave one admin's secret in the next one's DOM.
-  useEffect(() => {
-    setCreatedKey(null);
-  }, [accountId]);
 
   useEffect(() => {
     if (!accounts[0]) {
