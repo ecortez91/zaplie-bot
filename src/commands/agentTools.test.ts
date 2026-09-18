@@ -202,7 +202,7 @@ describe('agentTools', () => {
       expect(result.periodDays).toBe(7);
     });
 
-    test('defaults to all-time when days is omitted, and caps it at 365', async () => {
+    test('defaults to all-time when days is omitted', async () => {
       mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
       const tool = createReadOnlyTools().find(
         t => t.name === 'get_leaderboard',
@@ -213,12 +213,58 @@ describe('agentTools', () => {
         sinceTimestamp: undefined,
       });
       expect(allTime.periodDays).toBeNull();
+    });
 
-      await tool.handler({ days: 10000 }, makeTurnContext(currentUser));
-      const since = mockGetZapLeaderboard.mock.calls[1][0]!.sinceTimestamp!;
-      expect(Math.floor(Date.now() / 1000) - since).toBeLessThanOrEqual(
-        366 * 86400,
+    test('rejects an out-of-range or malformed days instead of clamping it', async () => {
+      // The model composes these arguments and nothing validates them against
+      // the schema before the handler runs. Clamping 400 to 365 would answer a
+      // different question than the one asked while still reporting the asked-
+      // for window — a wrong number, stated confidently.
+      mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_leaderboard',
+      )!;
+
+      for (const days of [0, -7, 400, 7.5, Number.NaN, '7' as never]) {
+        const result: any = await tool.handler(
+          { days },
+          makeTurnContext(currentUser),
+        );
+        expect(result.error).toBeTruthy();
+        expect(result.leaderboard).toBeUndefined();
+      }
+      expect(mockGetZapLeaderboard).not.toHaveBeenCalled();
+    });
+
+    test('rejects unknown arguments rather than ignoring them', async () => {
+      mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_leaderboard',
+      )!;
+
+      const result: any = await tool.handler(
+        { weeks: 2 } as never,
+        makeTurnContext(currentUser),
       );
+
+      expect(result.error).toContain('weeks');
+      expect(mockGetZapLeaderboard).not.toHaveBeenCalled();
+    });
+
+    test('reports exactly the window it measured', async () => {
+      mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_leaderboard',
+      )!;
+
+      const result: any = await tool.handler(
+        { days: 365 },
+        makeTurnContext(currentUser),
+      );
+
+      const since = mockGetZapLeaderboard.mock.calls[0][0]!.sinceTimestamp!;
+      expect(result.periodDays).toBe(365);
+      expect(Math.floor(Date.now() / 1000) - since).toBe(365 * 86400);
     });
 
     test('flags an incomplete read so the assistant can hedge', async () => {

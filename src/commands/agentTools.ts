@@ -29,6 +29,8 @@ const isBalanceWallet = (wallet: Wallet): boolean =>
 
 const SECONDS_PER_DAY = 86400;
 
+const MAX_LEADERBOARD_DAYS = 365;
+
 // The leaderboard's window is open-ended by default (all-time), unlike the
 // calendar tools' rolling week, so it gets its own parameter rather than
 // reusing DAYS_PARAMETER's "defaults to 7" contract.
@@ -36,13 +38,45 @@ const LEADERBOARD_DAYS_PARAMETER = {
   type: 'number',
   description:
     'Only count zaps sent in the last N days (e.g. 7 for "this week"). ' +
-    'Capped at 365. Omit for all-time totals.',
+    `A whole number from 1 to ${MAX_LEADERBOARD_DAYS}. Omit for all-time totals.`,
 };
 
-const leaderboardSinceTimestamp = (days?: number): number | undefined => {
-  if (typeof days !== 'number' || !Number.isFinite(days)) return undefined;
-  const periodDays = Math.min(Math.max(Math.floor(days), 1), 365);
-  return Math.floor(Date.now() / 1000) - periodDays * SECONDS_PER_DAY;
+interface LeaderboardArgs {
+  days?: number;
+}
+
+// The model composes these arguments itself, and the runner hands them to the
+// tool as parsed JSON without checking them against the schema — so the schema
+// documents the contract, it does not enforce it.
+//
+// Rejecting beats clamping here. Clamping 400 to 365 would answer a different
+// question than the one asked while the reply still names the asked-for window,
+// which is a wrong number stated confidently — the failure this PR exists to
+// remove. An error lets the assistant ask again or say what it can do.
+const leaderboardArgsError = (args: LeaderboardArgs): string | undefined => {
+  const unknown = Object.keys(args || {}).filter(key => key !== 'days');
+  if (unknown.length > 0) {
+    return (
+      `Unknown argument(s): ${unknown.join(', ')}. ` +
+      'get_leaderboard accepts an optional "days" and nothing else.'
+    );
+  }
+
+  const days = args?.days;
+  if (days === undefined || days === null) return undefined;
+  if (typeof days !== 'number' || !Number.isInteger(days)) {
+    return (
+      `"days" must be a whole number, got ${JSON.stringify(days)}. ` +
+      `Use 1 to ${MAX_LEADERBOARD_DAYS}, or omit it for all-time totals.`
+    );
+  }
+  if (days < 1 || days > MAX_LEADERBOARD_DAYS) {
+    return (
+      `"days" must be between 1 and ${MAX_LEADERBOARD_DAYS}, got ${days}. ` +
+      'Omit it for all-time totals.'
+    );
+  }
+  return undefined;
 };
 
 // Team-wide reads can miss a user or a wallet (a rate-limited LNbits response,
@@ -95,13 +129,23 @@ const getLeaderboardTool: ToolDefinition = {
     type: 'object',
     properties: { days: LEADERBOARD_DAYS_PARAMETER },
     required: [],
+    additionalProperties: false,
   },
-  handler: async (args: { days?: number }) => {
-    const sinceTimestamp = leaderboardSinceTimestamp(args?.days);
+  handler: async (args: LeaderboardArgs) => {
+    const error = leaderboardArgsError(args || {});
+    if (error) return { error };
+
+    // One validated value drives both the query and the reported window, so the
+    // period the assistant quotes is always the period that was measured.
+    const periodDays = args?.days ?? null;
+    const sinceTimestamp =
+      periodDays === null
+        ? undefined
+        : Math.floor(Date.now() / 1000) - periodDays * SECONDS_PER_DAY;
     const leaderboard = await getZapLeaderboard({ sinceTimestamp });
     return {
       rewardLabel,
-      periodDays: sinceTimestamp ? Math.floor(args.days as number) : null,
+      periodDays,
       partial: leaderboard.partial,
       incompleteReason: coverageNote(leaderboard),
       leaderboard: leaderboard.entries.map(entry => ({
