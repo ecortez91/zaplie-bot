@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { isFiniteNumber } from './validators';
 
 export interface ReportsData {
   weeks: number;
@@ -9,9 +10,6 @@ export interface ReportsData {
   totalAutomatedSats: number;
   totalAutomatedCount: number;
 }
-
-const isFiniteNumber = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isFinite(value);
 
 export const parseReportsData = (value: unknown): ReportsData => {
   if (!value || typeof value !== 'object') {
