@@ -124,6 +124,25 @@ describe('ZapLedger durability and concurrency', () => {
     await expect(afterRestart.tryAcquire(key('alice'))).resolves.toBe(false);
   });
 
+  test('a paid entry recorded long ago is still locked', async () => {
+    // #380 removed a TTL that let a paid card pay again a day later. A zap card
+    // in a Teams thread is still clickable days on, so age must never unlock a
+    // settled recipient - on the durable store either.
+    const storePath = newStorePath();
+    const ledger = new ZapLedger({ storePath, now: () => 1 });
+    await ledger.tryAcquire(key('alice'));
+    await ledger.markPaid(key('alice'), 'hash-alice');
+
+    const afterRestart = new ZapLedger({ storePath });
+
+    await expect(afterRestart.get(key('alice'))).resolves.toMatchObject({
+      state: 'paid',
+      paymentHash: 'hash-alice',
+      at: 1,
+    });
+    await expect(afterRestart.tryAcquire(key('alice'))).resolves.toBe(false);
+  });
+
   test('an old processing entry survives restart and never becomes retryable', async () => {
     const storePath = newStorePath();
     const beforeRestart = new ZapLedger({ storePath, now: () => 1 });
