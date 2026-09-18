@@ -36,7 +36,9 @@ the bot, then try again.
 === Where do received Zaps go?
 
 Into your *Private* wallet (visible on the Wallet tab). Zaps you send are drawn
-from your *Allowance* wallet, which is periodically topped up.
+from your *Allowance* wallet. It receives a one-off starting balance when your
+account is created, if your organisation has configured one. Recurring top-ups,
+where configured, come from the LNbits allowance extension rather than the bot.
 
 === Can I withdraw my Sats?
 

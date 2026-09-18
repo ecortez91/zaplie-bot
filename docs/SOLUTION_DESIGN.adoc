@@ -9,8 +9,10 @@ each other Bitcoin micro-payments ("Zaps" of Sats) as recognition and reward.
 It combines a conversational Teams bot, a set of React web tabs, and serverless
 HTTP endpoints, all backed by an https://lnbits.com/[LNbits] Lightning wallet
 and account system. Every Teams user is automatically provisioned with two
-LNbits wallets: an *Allowance* wallet (a spending budget, periodically topped
-up) and a *Private* wallet (where received Zaps accumulate).
+LNbits wallets: an *Allowance* wallet (a spending budget; the bot attempts a
+one-off grant of `LNBITS_INITIAL_ALLOWANCE` when it is created, and weekly
+top-ups come from the LNbits allowance extension, not the bot) and a *Private*
+wallet (where received Zaps accumulate).
 
 == Architecture
 
@@ -147,9 +149,11 @@ Three parallel clients speak to the LNbits REST API:
   obtained from `POST /api/v1/auth` (cached at module level with concurrent
   request de-duplication). Uses the core API (`/api/v1/wallet`, `/payments`,
   `/wallets/{id}`) and the core Users API (`/users/api/v1/user`,
-  `/users/api/v1/user/{id}/wallet`). Includes a `scheduledTopup()` routine
-  (node-cron) that replenishes all Allowance wallets to
-  `LNBITS_INITIAL_ALLOWANCE`.
+  `/users/api/v1/user/{id}/wallet`). Attempts a one-off grant of
+  `LNBITS_INITIAL_ALLOWANCE` to a new user's Allowance wallet (`topUpWallet`,
+  called from `UserService`); the grant is skipped when the setting is missing
+  or not a positive integer, and a failed LNbits request is logged rather than
+  retried. Recurring replenishment is not bot code (see Design Decisions).
 - `tabs/src/services/lnbits/` — browser-side equivalent used by the tabs, split
   per concern (`auth`, `cache`, `users`, `wallets`, `payments`, `rewards`).
 - `functions/services/lnbitsService.ts` — request-scoped variant; the LNbits
@@ -233,12 +237,42 @@ REST API that supports programmatic user/wallet creation and payments.
 
 *Context:* Users need both a budget to give from and a balance they have earned.
 
-*Decision:* Provision each user an Allowance wallet (topped up to
-`LNBITS_INITIAL_ALLOWANCE` on a schedule) and a Private wallet (receives Zaps).
+*Decision:* Provision each user an Allowance wallet (granted
+`LNBITS_INITIAL_ALLOWANCE` on a best-effort basis at creation; weekly top-ups
+come from the LNbits allowance extension) and a Private wallet (receives
+Zaps).
 
 *Rationale:* Cleanly separates "money to give" from "money earned", enabling
 leaderboards on Private balances and periodic replenishment without touching
 earnings.
+
+=== Scheduled top-ups are not bot code
+
+*Context:* The bot carried a `scheduledTopup()` function that swept every
+Allowance wallet into a host wallet and refunded it. Nothing on `main` ever
+called it: the node-cron job that invoked it on the PR #73 branch was removed
+on that branch (59c25967) before the squash merge (82f2fd1b). It read three
+settings
+(`LNBITS_HOST_WALLET_ID`, `LNBITS_HOST_USER_ID`, `LNBITS_INKEY`) used nowhere
+else, and it ran its per-wallet payments in a fire-and-forget loop (PR #242
+and PR #310 document the defects).
+
+*Decision:* Remove it, per the Product Owner on PR #242 ("I think
+`scheduledTopup` is deadcode if we're going to use the allowance extension for
+LNbits?") and PR #310 ("Can still remove the dead code."). Recurring
+allowance funding belongs to the LNbits
+https://github.com/BenGWeeks/allowance[allowance extension], which pays to a
+Lightning address on a schedule, so each Allowance wallet needs a Lightning
+address before that can be wired up (tracked separately). The bot only
+attempts to fund a wallet once, when it is created: `applyInitialAllowance`
+skips the grant when `LNBITS_INITIAL_ALLOWANCE` is missing or not a positive
+integer, and `topUpWallet` logs a failed LNbits request instead of retrying,
+so user setup never fails on funding and no later balance check enforces it.
+Weekly top-ups are the allowance extension's job.
+
+*Consequences:* No scheduler, host wallet or sweep logic lives in the bot.
+The leaderboard keeps excluding payments whose memo contains
+`Weekly Allowance cleared` so historical sweeps never count as zaps.
 
 === Teams Toolkit for provisioning
 
