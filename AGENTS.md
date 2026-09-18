@@ -76,13 +76,8 @@ npm install
 npm run dev      # hot reload via nodemon + ts-node (inspector on 9239)
 npm run build    # tsc --build  → lib/
 npm start        # node ./lib/src/index.js
-```
-
-There is no root-level `npm test` (the script exits with an error). The Jest
-suite that exists is run directly:
-
-```bash
-npx jest src/services/lnbitsService.test.ts
+npm test         # jest with ts-jest; collects coverage and enforces the floors
+npm run coverage:ratchet   # coverage must not drop below .coverage-baseline.json
 ```
 
 ### Web app (`tabs/`)
@@ -95,6 +90,7 @@ npm run client   # CRA dev server only
 npm run server   # Express backend only
 npm run build    # production build → tabs/build/
 npm test         # react-scripts test (watch mode; use CI=true npm test -- --watchAll=false for one-shot)
+npm run test:backend   # node:test suite for the Express backend (runs in CI)
 ```
 
 ### Azure Functions (`functions/`)
@@ -148,8 +144,6 @@ table):
 
 ## Known Gotchas (do not "fix" silently — raise or ticket them)
 
-- Root `jest.config.ts` has no ts-jest transform configured; the root `test`
-  script is intentionally unwired.
 - `src/setupProxy.js` references `NBITS_NODE_URL` (missing `L`) — likely dead
   code.
 - The reward-name API uses a placeholder shared secret (`your-secret-token`)
