@@ -191,6 +191,12 @@ const AutomationsComponent: FunctionComponent = () => {
       setStatsLoading(false);
       return;
     }
+    // `accounts` from useMsal gets a new identity on every token refresh, so
+    // this effect re-runs while its previous run is still in flight. Without
+    // this flag a slow run-1 rejection could land after run-2 succeeded and
+    // blank good data, and run-1's finally would clear the loading state while
+    // run-2 was still loading.
+    let cancelled = false;
     setStatsLoading(true);
     setStatsError(false);
     const loadConnections = async () => {
@@ -198,10 +204,16 @@ const AutomationsComponent: FunctionComponent = () => {
       try {
         idToken = await acquireIdToken(instance, accounts[0]);
       } catch (err) {
+        if (cancelled) {
+          return;
+        }
         console.error('Error acquiring a token for automations:', err);
         toast.error('Could not load connection status.');
         setStatsError(true);
         setStatsLoading(false);
+        return;
+      }
+      if (cancelled) {
         return;
       }
 
@@ -210,21 +222,38 @@ const AutomationsComponent: FunctionComponent = () => {
       // fail. Bundling it used to hide the GitHub-connected banner and the
       // API-keys list behind one generic toast, and would still make them wait
       // on it. Each panel now lands as soon as its own request settles.
+      //
+      // Every catch clears its own panel: these are account-scoped, so leaving
+      // the previous account's banner or key labels on screen after a failed
+      // reload would show one user another user's automation state.
       void getGithubConnection(idToken)
         .then(connection => {
+          if (cancelled) {
+            return;
+          }
           setAppInstalled(connection.connected);
         })
         .catch(err => {
+          if (cancelled) {
+            return;
+          }
           console.error('Error fetching GitHub connection:', err);
+          setAppInstalled(false);
           toast.error('Could not load connection status.');
         });
 
       void getAutomationsStats(idToken)
         .then(statsData => {
+          if (cancelled) {
+            return;
+          }
           setStats(statsData);
           setStatsError(false);
         })
         .catch(err => {
+          if (cancelled) {
+            return;
+          }
           console.error('Error fetching automations stats:', err);
           // Drop the previous summary too: the render path checks `stats`
           // first, so stale recipients and history would otherwise sit there
@@ -233,19 +262,33 @@ const AutomationsComponent: FunctionComponent = () => {
           setStatsError(true);
         })
         .finally(() => {
+          if (cancelled) {
+            return;
+          }
           setStatsLoading(false);
         });
 
       void (isAdmin ? getWebhookKeys(idToken) : Promise.resolve([]))
         .then(keys => {
+          if (cancelled) {
+            return;
+          }
           setWebhookKeys(keys);
         })
         .catch(err => {
+          if (cancelled) {
+            return;
+          }
           console.error('Error fetching webhook keys:', err);
+          setWebhookKeys([]);
           toast.error('Could not load the API keys.');
         });
     };
     loadConnections();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, accounts, instance]);
 

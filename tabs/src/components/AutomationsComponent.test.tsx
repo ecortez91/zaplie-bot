@@ -68,10 +68,18 @@ jest.mock('react-toastify', () => ({
 
 const webhookKey: WebhookKey = {
   id: '6f0b1e2c-6a4d-4c1a-9a0d-0b6a9c2f1e33',
-  label: 'GitHub Logic App',
+  label: 'Treasury payout runner',
   last4: 'a1b2',
   createdAt: '2026-08-01T10:00:00.000Z',
   revokedAt: null,
+};
+
+const emptyStats: AutomationsStats = {
+  paidSatsThisMonth: 0,
+  paymentsThisMonth: 0,
+  runsByEventType: {},
+  engagementByAudience: { teammates: [], copilots: [], customers: [] },
+  recentPayments: [],
 };
 
 let container: HTMLDivElement;
@@ -115,16 +123,30 @@ describe('AutomationsComponent panel independence', () => {
     container.remove();
   });
 
-  test('still renders the GitHub banner and API keys when stats reject', async () => {
+  test('renders the other panels while stats is still pending', async () => {
+    // Never resolves: under Promise.all/allSettled the banner and the key list
+    // would still be waiting here, so this is what proves they are independent
+    // rather than merely tolerant of a rejection in the same microtask.
+    mockGetAutomationsStats.mockReturnValue(new Promise(() => undefined));
+
+    await renderAutomations();
+
+    expect(container.textContent).toContain('App installed');
+    expect(container.textContent).toContain(webhookKey.label);
+    // Stats itself is still loading, so no error state yet.
+    expect(container.textContent).toContain('Loading recipient activity');
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test('shows a stats-only error and keeps the other panels when stats rejects', async () => {
     mockGetAutomationsStats.mockRejectedValue(
       new Error('Automations stats response is malformed.'),
     );
 
     await renderAutomations();
 
-    // The other two panels loaded independently of the failing stats call.
     expect(container.textContent).toContain('App installed');
-    expect(container.textContent).toContain('GitHub Logic App');
+    expect(container.textContent).toContain(webhookKey.label);
     // Stats gets its own, non-blocking error state.
     expect(container.textContent).toContain(
       'Recipient activity is unavailable right now.',
@@ -137,20 +159,26 @@ describe('AutomationsComponent panel independence', () => {
   });
 
   test('still renders API keys when the GitHub connection rejects', async () => {
-    mockGetAutomationsStats.mockResolvedValue({
-      paidSatsThisMonth: 0,
-      paymentsThisMonth: 0,
-      runsByEventType: {},
-      engagementByAudience: { teammates: [], copilots: [], customers: [] },
-      recentPayments: [],
-    });
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
     mockGetGithubConnection.mockRejectedValue(new Error('502 from GitHub'));
 
     await renderAutomations();
 
-    expect(container.textContent).toContain('GitHub Logic App');
+    expect(container.textContent).toContain(webhookKey.label);
     expect(mockToastError).toHaveBeenCalledWith(
       'Could not load connection status.',
     );
+    // The previous account's banner must not survive a failed reload.
+    expect(container.textContent).toContain('Not connected yet');
+  });
+
+  test('drops the previous key labels when the key request rejects', async () => {
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+    mockGetWebhookKeys.mockRejectedValue(new Error('403'));
+
+    await renderAutomations();
+
+    expect(container.textContent).not.toContain(webhookKey.label);
+    expect(mockToastError).toHaveBeenCalledWith('Could not load the API keys.');
   });
 });
