@@ -134,7 +134,7 @@ test('parallel payment reads share one walk over the LNbits users', async () => 
   assert.equal(paths.filter((p) => p.endsWith('/wallet')).length, USERS.length);
 });
 
-test('a burst after the token cache expires triggers one super-user login', async () => {
+test('a burst with no cached token triggers one super-user login, not three', async () => {
   const paths = installLnbitsStub();
 
   await Promise.all([listUsers(), listUsers(), listUsers()]);

@@ -29,7 +29,11 @@ const positiveIntFromEnv = (name, fallback) => {
   if (configured === undefined || configured === '') {
     return fallback;
   }
-  const value = Number(configured);
+  // Decimal digits only: `Number()` would accept `0x10` and `1e3`, which are
+  // not what an operator typing a sats ceiling meant.
+  const value = /^\d+$/.test(String(configured).trim())
+    ? Number.parseInt(String(configured).trim(), 10)
+    : NaN;
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer`);
   }

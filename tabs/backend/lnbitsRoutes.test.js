@@ -216,7 +216,7 @@ test('ZAP_MAX_AMOUNT_SATS narrows the zap ceiling', () => {
 });
 
 test('a malformed zap cap fails closed instead of widening the ceiling', async () => {
-  for (const malformed of ['not-a-number', '-1', '0', '1.5']) {
+  for (const malformed of ['not-a-number', '-1', '0', '1.5', '0x10', '1e3']) {
     process.env.ZAP_MAX_AMOUNT_SATS = malformed;
     try {
       assert.throws(

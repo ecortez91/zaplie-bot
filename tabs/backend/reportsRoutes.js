@@ -4,7 +4,12 @@
 // from the treasury. Shared org view, any authenticated tenant user.
 const express = require('express');
 const { verifyMsalToken, extractBearerToken } = require('./msalValidator');
-const { requireLnbitsConfig, getLnbitsToken, lnbitsGet } = require('./lnbitsAdmin');
+const {
+  REQUEST_TIMEOUT_MS,
+  requireLnbitsConfig,
+  getLnbitsToken,
+  lnbitsGet,
+} = require('./lnbitsAdmin');
 
 const router = express.Router();
 
@@ -17,6 +22,7 @@ const paymentEpoch = (time) =>
 const walletOutgoingIntoBuckets = async (config, wallet, nowTs, buckets, totals) => {
   const response = await fetch(`${config.nodeUrl}/api/v1/payments?limit=1000`, {
     headers: { 'X-Api-Key': wallet.inkey },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`payments fetch failed (status: ${response.status})`);
