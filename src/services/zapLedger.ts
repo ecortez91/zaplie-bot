@@ -13,8 +13,8 @@ export type ZapEntryState = 'processing' | 'paid' | 'unknown';
 export interface ZapEntry {
   state: ZapEntryState;
   paymentHash?: string;
-  // Not read in-process any more (nothing expires), kept because a durable
-  // store persists it and it is what an operator reconciles against.
+  // Not read in-process any more (nothing expires), kept for the durable
+  // store tracked in #187, where it is what an operator reconciles against.
   at: number;
 }
 
