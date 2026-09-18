@@ -36,13 +36,15 @@ const hostnameOf = value => {
   }
 };
 
-// The tab URL the Entra and Teams manifests point at, chosen the same way
-// build.js chooses it: the debug tunnel applies to the local environment only,
-// so a deployed environment always uses CONTENT_URL.
+// The tab URL the Entra manifest's SPA redirects point at.
+//
+// Locally it is only ever the tunnel value: falling back to CONTENT_URL here
+// would persist a TAB_ENDPOINT that build.js then uses for the website URLs
+// too, collapsing CONTENT_URL and WEBSITE_URL onto one value. A deployed
+// environment has no tunnel, so it uses CONTENT_URL — build.js ignores
+// TAB_ENDPOINT outside the local environment, so nothing collapses there.
 const tabEndpoint =
-  env === 'local'
-    ? envConfig.TAB_ENDPOINT || envConfig.CONTENT_URL
-    : envConfig.CONTENT_URL;
+  env === 'local' ? envConfig.TAB_ENDPOINT : envConfig.CONTENT_URL;
 
 // Select specific variables to write
 const selectedVars = {
@@ -58,7 +60,8 @@ const selectedVars = {
   // provisioning.
   TAB_ENDPOINT: tabEndpoint,
   TAB_DOMAIN:
-    (env === 'local' && envConfig.TAB_DOMAIN) || hostnameOf(tabEndpoint),
+    (env === 'local' && envConfig.TAB_DOMAIN) ||
+    hostnameOf(tabEndpoint || envConfig.CONTENT_URL),
   FOUNDRY_PROJECT_ENDPOINT: envConfig.FOUNDRY_PROJECT_ENDPOINT,
   FOUNDRY_MODEL: envConfig.FOUNDRY_MODEL,
   GRAPH_CONNECTION_NAME: envConfig.GRAPH_CONNECTION_NAME,
