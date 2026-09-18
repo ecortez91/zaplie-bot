@@ -4,12 +4,11 @@
 // agentTools itself.
 
 import { createReadOnlyTools } from './agentTools';
+import { getUserWallets } from '../services/lnbitsService';
 import {
-  getUserWallets,
-  getWallets,
-  getUsers,
-} from '../services/lnbitsService';
-import { getRecentZaps } from '../services/zapHistoryService';
+  getZapActivity,
+  getZapLeaderboard,
+} from '../services/zapHistoryService';
 import { getRecentMeetings, getRelevantPeople } from '../services/graphService';
 import {
   afterEach,
@@ -28,10 +27,51 @@ jest.mock('../services/graphService');
 const mockGetUserWallets = getUserWallets as jest.MockedFunction<
   typeof getUserWallets
 >;
-const mockGetWallets = getWallets as jest.MockedFunction<typeof getWallets>;
-const mockGetUsers = getUsers as jest.MockedFunction<typeof getUsers>;
-const mockGetRecentZaps = getRecentZaps as jest.MockedFunction<
-  typeof getRecentZaps
+const mockGetZapActivity = getZapActivity as jest.MockedFunction<
+  typeof getZapActivity
+>;
+
+// getZapActivity reports both the zaps and how complete the read was; most
+// tests only care about the zaps.
+const activityResult = (
+  zaps: ZapActivityForTest[],
+  coverage: Partial<{
+    partial: boolean;
+    skippedUsers: number;
+    skippedWallets: number;
+    truncated: boolean;
+  }> = {},
+) => ({
+  zaps,
+  partial: false,
+  skippedUsers: 0,
+  skippedWallets: 0,
+  truncated: false,
+  ...coverage,
+});
+
+type ZapActivityForTest = Awaited<
+  ReturnType<typeof getZapActivity>
+>['zaps'][number];
+
+const leaderboardResult = (
+  entries: Awaited<ReturnType<typeof getZapLeaderboard>>['entries'],
+  coverage: Partial<{
+    partial: boolean;
+    skippedUsers: number;
+    skippedWallets: number;
+    truncated: boolean;
+  }> = {},
+) => ({
+  entries,
+  partial: false,
+  skippedUsers: 0,
+  skippedWallets: 0,
+  truncated: false,
+  ...coverage,
+});
+const mockGetZapLeaderboard = getZapLeaderboard as jest.MockedFunction<
+  typeof getZapLeaderboard
 >;
 const mockGetRecentMeetings = getRecentMeetings as jest.MockedFunction<
   typeof getRecentMeetings
@@ -74,9 +114,10 @@ describe('agentTools', () => {
   });
 
   describe('get_my_balance', () => {
-    test('returns wallet balances in sats for the current user', async () => {
+    test('returns only Allowance and Private balances in sats', async () => {
       mockGetUserWallets.mockResolvedValue([
         wallet({ name: 'Allowance', balance_msat: 900000 }),
+        wallet({ name: 'LNbits wallet', balance_msat: 3000000 }),
         wallet({ name: 'Private', balance_msat: 50000 }),
       ]);
 
@@ -90,28 +131,39 @@ describe('agentTools', () => {
         { name: 'Private', balanceSats: 50 },
       ]);
     });
+
+    test('matches wallet names case-insensitively, as LNbits echoes them back', async () => {
+      mockGetUserWallets.mockResolvedValue([
+        wallet({ name: 'allowance', balance_msat: 900000 }),
+        wallet({ name: 'PRIVATE', balance_msat: 50000 }),
+      ]);
+
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_my_balance',
+      )!;
+      const result: any = await tool.handler({}, makeTurnContext(currentUser));
+
+      expect(result.wallets.map((w: { name: string }) => w.name)).toEqual([
+        'allowance',
+        'PRIVATE',
+      ]);
+    });
   });
 
   describe('get_leaderboard', () => {
-    test('ranks teammates by Private wallet balance, descending', async () => {
-      mockGetWallets.mockResolvedValue([
-        wallet({
-          id: 'w-bob',
-          name: 'Private',
-          user: 'user-bob',
-          balance_msat: 500000,
-        }),
-        wallet({
-          id: 'w-alice',
-          name: 'Private',
-          user: 'user-alice',
-          balance_msat: 1500000,
-        }),
-      ]);
-      mockGetUsers.mockResolvedValue([
-        { ...currentUser, id: 'user-bob', displayName: 'Bob' },
-        { ...currentUser, id: 'user-alice', displayName: 'Alice' },
-      ]);
+    test('reports sats zapped out of Allowance wallets, never wallet balances', async () => {
+      mockGetZapLeaderboard.mockResolvedValue(
+        leaderboardResult([
+          {
+            user: { ...currentUser, id: 'user-alice', displayName: 'Alice' },
+            zappedSats: 1500,
+          },
+          {
+            user: { ...currentUser, id: 'user-bob', displayName: 'Bob' },
+            zappedSats: 500,
+          },
+        ]),
+      );
 
       const tool = createReadOnlyTools().find(
         t => t.name === 'get_leaderboard',
@@ -119,23 +171,145 @@ describe('agentTools', () => {
       const result: any = await tool.handler({}, makeTurnContext(currentUser));
 
       expect(result.leaderboard).toEqual([
-        { displayName: 'Alice', balanceSats: 1500 },
-        { displayName: 'Bob', balanceSats: 500 },
+        { displayName: 'Alice', zappedSats: 1500 },
+        { displayName: 'Bob', zappedSats: 500 },
       ]);
+      expect(result.partial).toBe(false);
+      expect(result.incompleteReason).toBeUndefined();
+      expect(mockGetUserWallets).not.toHaveBeenCalled();
+    });
+
+    test('accepts a days window and passes the cut-off through', async () => {
+      mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_leaderboard',
+      )!;
+
+      // The tool must advertise the parameter, or the model cannot answer
+      // "who zapped most this week" with anything but all-time totals.
+      expect(tool.parameters.properties).toHaveProperty('days');
+
+      const before = Math.floor(Date.now() / 1000);
+      const result: any = await tool.handler(
+        { days: 7 },
+        makeTurnContext(currentUser),
+      );
+      const after = Math.floor(Date.now() / 1000);
+
+      const since = mockGetZapLeaderboard.mock.calls[0][0]!.sinceTimestamp!;
+      expect(since).toBeGreaterThanOrEqual(before - 7 * 86400);
+      expect(since).toBeLessThanOrEqual(after - 7 * 86400);
+      expect(result.periodDays).toBe(7);
+    });
+
+    test('defaults to all-time when days is omitted', async () => {
+      mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_leaderboard',
+      )!;
+
+      const allTime: any = await tool.handler({}, makeTurnContext(currentUser));
+      expect(mockGetZapLeaderboard).toHaveBeenLastCalledWith({
+        sinceTimestamp: undefined,
+      });
+      expect(allTime.periodDays).toBeNull();
+    });
+
+    test('rejects an out-of-range or malformed days instead of clamping it', async () => {
+      // The model composes these arguments and nothing validates them against
+      // the schema before the handler runs. Clamping 400 to 365 would answer a
+      // different question than the one asked while still reporting the asked-
+      // for window — a wrong number, stated confidently.
+      mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_leaderboard',
+      )!;
+
+      for (const days of [0, -7, 400, 7.5, Number.NaN, '7' as never]) {
+        const result: any = await tool.handler(
+          { days },
+          makeTurnContext(currentUser),
+        );
+        expect(result.error).toBeTruthy();
+        expect(result.leaderboard).toBeUndefined();
+      }
+      expect(mockGetZapLeaderboard).not.toHaveBeenCalled();
+    });
+
+    test('rejects unknown arguments rather than ignoring them', async () => {
+      mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_leaderboard',
+      )!;
+
+      const result: any = await tool.handler(
+        { weeks: 2 } as never,
+        makeTurnContext(currentUser),
+      );
+
+      expect(result.error).toContain('weeks');
+      expect(mockGetZapLeaderboard).not.toHaveBeenCalled();
+    });
+
+    test('reports exactly the window it measured', async () => {
+      mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_leaderboard',
+      )!;
+
+      // Bracket the call rather than comparing against a later Date.now():
+      // the clock can tick a second between the handler and the assertion.
+      const before = Math.floor(Date.now() / 1000);
+      const result: any = await tool.handler(
+        { days: 365 },
+        makeTurnContext(currentUser),
+      );
+      const after = Math.floor(Date.now() / 1000);
+
+      const since = mockGetZapLeaderboard.mock.calls[0][0]!.sinceTimestamp!;
+      expect(result.periodDays).toBe(365);
+      expect(since).toBeGreaterThanOrEqual(before - 365 * 86400);
+      expect(since).toBeLessThanOrEqual(after - 365 * 86400);
+    });
+
+    test('flags an incomplete read so the assistant can hedge', async () => {
+      mockGetZapLeaderboard.mockResolvedValue(
+        leaderboardResult(
+          [
+            {
+              user: { ...currentUser, id: 'user-alice', displayName: 'Alice' },
+              zappedSats: 1500,
+            },
+          ],
+          { partial: true, skippedUsers: 1, skippedWallets: 2 },
+        ),
+      );
+
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_leaderboard',
+      )!;
+      const result: any = await tool.handler({}, makeTurnContext(currentUser));
+
+      expect(result.partial).toBe(true);
+      expect(result.incompleteReason).toContain('incomplete');
+      expect(result.incompleteReason).toContain('1 user(s)');
+      expect(result.incompleteReason).toContain('2 wallet(s)');
     });
   });
 
   describe('get_recent_activity', () => {
-    test('passes limit and onlyInvolvingMe through to getRecentZaps', async () => {
-      mockGetRecentZaps.mockResolvedValue([
-        {
-          from: { ...currentUser, displayName: 'Alice' },
-          to: { ...currentUser, displayName: 'Bob' },
-          amountSats: 100,
-          memo: 'Great work!',
-          time: new Date('2026-07-15T10:00:00Z'),
-        },
-      ]);
+    test('passes limit and onlyInvolvingMe through to getZapActivity', async () => {
+      mockGetZapActivity.mockResolvedValue(
+        activityResult([
+          {
+            from: { ...currentUser, displayName: 'Alice' },
+            to: { ...currentUser, displayName: 'Bob' },
+            amountSats: 100,
+            memo: 'Great work!',
+            time: new Date('2026-07-15T10:00:00Z'),
+          },
+        ]),
+      );
 
       const tool = createReadOnlyTools().find(
         t => t.name === 'get_recent_activity',
@@ -145,7 +319,7 @@ describe('agentTools', () => {
         makeTurnContext(currentUser),
       );
 
-      expect(mockGetRecentZaps).toHaveBeenCalledWith({
+      expect(mockGetZapActivity).toHaveBeenCalledWith({
         limit: 10,
         userAadObjectId: 'aad-alice',
       });
@@ -161,14 +335,14 @@ describe('agentTools', () => {
     });
 
     test('clamps limit to [1, 50] and defaults to 20', async () => {
-      mockGetRecentZaps.mockResolvedValue([]);
+      mockGetZapActivity.mockResolvedValue(activityResult([]));
 
       const tool = createReadOnlyTools().find(
         t => t.name === 'get_recent_activity',
       )!;
 
       await tool.handler({ limit: 500 }, makeTurnContext(currentUser));
-      expect(mockGetRecentZaps).toHaveBeenLastCalledWith({
+      expect(mockGetZapActivity).toHaveBeenLastCalledWith({
         limit: 50,
         userAadObjectId: undefined,
       });
@@ -177,13 +351,13 @@ describe('agentTools', () => {
       // where slice(0, -1) would return almost everything instead of a
       // small capped list.
       await tool.handler({ limit: -1 }, makeTurnContext(currentUser));
-      expect(mockGetRecentZaps).toHaveBeenLastCalledWith({
+      expect(mockGetZapActivity).toHaveBeenLastCalledWith({
         limit: 1,
         userAadObjectId: undefined,
       });
 
       await tool.handler({}, makeTurnContext(currentUser));
-      expect(mockGetRecentZaps).toHaveBeenLastCalledWith({
+      expect(mockGetZapActivity).toHaveBeenLastCalledWith({
         limit: 20,
         userAadObjectId: undefined,
       });
