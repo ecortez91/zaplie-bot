@@ -70,9 +70,13 @@ resource webAppSettings 'Microsoft.Web/sites/config@2021-02-01' = {
     AAD_APP_OAUTH_AUTHORITY_HOST: aadAppOauthAuthorityHost
     RUNNING_ON_AZURE: '1'
     NODE_ENV: 'production'
-    // Windows App Service persistent share, outside wwwroot so a clean deploy
-    // cannot wipe the zap ledger and reintroduce double payments.
-    ZAPLIE_DATA_DIR: 'D:\\home\\data\\zaplie'
+    // The App Service persistent share, outside wwwroot so a clean deploy
+    // cannot wipe the zap ledger and reintroduce double payments. %HOME% is
+    // deliberate: App Service passes app settings through verbatim, so the bot
+    // expands this token itself (src/services/dataDir.ts) and lands on
+    // D:\home on older Windows stamps, C:\home on newer ones and /home on
+    // Linux - a hard-coded drive letter breaks when the app moves stamp.
+    ZAPLIE_DATA_DIR: '%HOME%\\data\\zaplie'
   }
 }
 

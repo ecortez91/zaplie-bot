@@ -208,6 +208,15 @@ directory, sync it, and atomically rename it over the canonical store. On
 POSIX the containing directory is synced too, so the rename that publishes the
 record survives a power loss; a failure to sync fails the write closed.
 
+Every write drops `paid` records older than the retention window (ninety days
+by default, `retentionMs`; `0` disables it) so the file cannot grow until a
+transition outlasts the lock. `processing` and `unknown` records are never
+pruned — they are the ones a human still has to settle. Recording an outcome
+LNbits has already decided (`markPaid`, `markUnknown`) waits far longer for the
+lock than a submit does, logging every five seconds while it waits: a submit
+may fail, but abandoning a settled payment would leave the recipient
+`processing` for good.
+
 `ZAPLIE_DATA_DIR` must be an absolute path outside explicit development mode,
 including Azure runtimes detected without `NODE_ENV`. `npm run dev` explicitly
 uses development mode and falls back to the ignored `.zaplie-data` directory

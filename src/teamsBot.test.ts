@@ -194,6 +194,63 @@ describe('TeamsBot submitZaps message validation', () => {
     jest.restoreAllMocks();
   });
 
+  const zapSubmitter = {
+    id: 'user-1',
+    aadObjectId: 'aad-user-1',
+    allowanceWallet: { id: 'wallet-1', inkey: 'inkey', adminkey: 'adminkey' },
+  };
+
+  test('rejects a submit whose scope cannot be identified at all', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    const bot = new TeamsBot();
+    // No tenant on the conversation and none in channelData: the ledger key
+    // would have to be guessed, which could merge unrelated submissions.
+    const { context, sendActivity } = makeContext({
+      replyToId: 'card-1',
+      conversation: { id: 'conv-1', conversationType: 'personal' },
+      value: {
+        action: 'submitZaps',
+        zapReceiverId: 'recipient-1',
+        zapAmount: '10',
+        zapMessage: 'nice work',
+      },
+    });
+    (context.turnState as Map<unknown, unknown>).set('user', zapSubmitter);
+
+    await bot.run(context);
+
+    expect(sendActivity).toHaveBeenCalledWith(
+      'That zap card cannot be identified, so it was not submitted. Please start a new zap.',
+    );
+    expect(context.updateActivity).not.toHaveBeenCalled();
+  });
+
+  test('accepts a submit whose tenant id arrives only in channelData', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    const bot = new TeamsBot();
+    const { context, sendActivity } = makeContext({
+      replyToId: 'card-1',
+      conversation: { id: 'conv-1', conversationType: 'personal' },
+      channelData: { tenant: { id: 'tenant-1' } },
+      value: {
+        action: 'submitZaps',
+        zapReceiverId: 'recipient-1',
+        zapAmount: '10',
+      },
+    });
+    (context.turnState as Map<unknown, unknown>).set('user', zapSubmitter);
+
+    await bot.run(context);
+
+    // It gets past scope validation and fails on the missing message instead,
+    // which is the next check - the tenant was found, not guessed.
+    expect(sendActivity).toHaveBeenCalledWith(
+      "D'oh! Your zap needs a message, so no zaps were sent.",
+    );
+  });
+
   test('rejects a submit with no message instead of building a receipt from it', async () => {
     jest.spyOn(console, 'error').mockImplementation(() => undefined);
     jest.spyOn(console, 'log').mockImplementation(() => undefined);

@@ -45,7 +45,7 @@
 . `arm/deploy` — `infra/azure.bicep` with `infra/azure.parameters.json`:
   App Service plan (B1), Windows web app (httpsOnly, alwaysOn,
   `WEBSITE_RUN_FROM_PACKAGE=1`, Node `~24`), app settings (BOT_*, AAD_APP_*,
-  `NODE_ENV=production`, `ZAPLIE_DATA_DIR=D:\home\data\zaplie`),
+  `NODE_ENV=production`, `ZAPLIE_DATA_DIR=%HOME%\data\zaplie`),
   and `infra/botRegistration/azurebot.bicep` — Azure Bot Service (F0) with the
   MS Teams channel
 . `aadApp/update`, manifest validation, `zipAppPackage`, `teamsApp/update`
@@ -115,8 +115,16 @@ the artifact arrives prebuilt). The bot deploys separately via
 
 The bot keeps its mutable state — currently the durable Zap ledger
 `bot-zap-ledger.json` — under `ZAPLIE_DATA_DIR`. Bicep sets
-`ZAPLIE_DATA_DIR=D:\home\data\zaplie` on the Windows App Service, outside
-`wwwroot`, so a clean deployment cannot replace it. Local development falls
+`ZAPLIE_DATA_DIR=+%HOME%\data\zaplie+` on the App Service it provisions
+(Windows: `kind: 'app'`, no `reserved`/`linuxFxVersion`), outside `wwwroot`, so
+a clean deployment cannot replace it. App Service passes app settings to the
+process verbatim — it does not expand `%VAR%` for an arbitrary setting — so the
+bot expands the `%HOME%` token itself in `src/services/dataDir.ts`, from
+`process.env.HOME` with a platform default (`+D:\home+` on Windows, `/home`
+elsewhere) if it is absent. That resolves to `+D:\home\data\zaplie+` on an
+older Windows stamp, `+C:\home\data\zaplie+` on a newer one and
+`/home/data/zaplie` on Linux, so the same setting is correct everywhere and no
+drive letter is baked in. An absolute literal path still works unchanged. Local development falls
 back to the git-ignored `.zaplie-data` directory when the variable is absent;
 every deployed (non-development) runtime must set it to an absolute path or
 the bot refuses to start.
@@ -260,7 +268,9 @@ created. Must be a positive integer; a failed grant is logged, not retried
   REQUIRED in production: without it the stores sit inside the deployment tree
   and a clean deploy wipes them. The value depends on the App Service OS —
   `/home/data/zaplie` on Linux, `+D:\home\data\zaplie+` on Windows (the `home`
-  share is the persistent one in both cases). Consumers: every portal backend
+  share is the persistent one in both cases). `+%HOME%\data\zaplie+` is the
+  portable spelling: the bot expands `%HOME%` itself, so one value is correct
+  on either OS and on any stamp. Consumers: every portal backend
   store honours it (`data.json`, identities, connections, pending rewards,
   secrets, webhook keys, GitHub App credentials, the LNbits user directory);
   the bot's zap ledger (`bot-zap-ledger.json`) reads it too, and outside

@@ -395,9 +395,8 @@ describe('ZapLedger durability and concurrency', () => {
     await expect(afterRestart.tryAcquire(key('alice'))).resolves.toBe(false);
   });
 
-  test('a crash temporary is swept once it is too old to be in flight', async () => {
+  test('a crash temporary is swept at startup, not on every write', async () => {
     const storePath = newStorePath();
-    const ledger = new ZapLedger({ storePath });
     const stale = `${storePath}.999.deadbeef.tmp`;
     const fresh = `${storePath}.998.feedface.tmp`;
     const unrelated = path.join(path.dirname(storePath), 'keep-me.tmp');
@@ -409,16 +408,138 @@ describe('ZapLedger durability and concurrency', () => {
     fs.utimesSync(stale, longAgo, longAgo);
     fs.utimesSync(unrelated, longAgo, longAgo);
 
-    await ledger.tryAcquire(key('alice'));
+    const ledger = new ZapLedger({ storePath });
 
     expect(fs.existsSync(stale)).toBe(false);
     // A temporary young enough to belong to a live write is left alone, and a
     // file that is not this store's temporary is never touched.
     expect(fs.existsSync(fresh)).toBe(true);
     expect(fs.existsSync(unrelated)).toBe(true);
-    await expect(ledger.get(key('alice'))).resolves.toMatchObject({
+
+    // The sweep is a startup step: a later crash temporary survives the writes
+    // that follow, instead of costing a readdir inside the exclusive lock.
+    const afterStartup = `${storePath}.997.c0ffee.tmp`;
+    fs.writeFileSync(afterStartup, '{"version":', { mode: 0o600 });
+    fs.utimesSync(afterStartup, longAgo, longAgo);
+    await ledger.tryAcquire(key('alice'));
+
+    expect(fs.existsSync(afterStartup)).toBe(true);
+    expect(fs.existsSync(`${storePath}.997.c0ffee.tmp`)).toBe(true);
+    // The next process to start clears it.
+    new ZapLedger({ storePath });
+    expect(fs.existsSync(afterStartup)).toBe(false);
+  });
+
+  test('paid records past the retention window are pruned, unfinished ones are not', async () => {
+    const storePath = newStorePath();
+    const day = 24 * 60 * 60 * 1000;
+    let clock = 1_000 * day;
+    const ledger = new ZapLedger({ storePath, now: () => clock });
+
+    await ledger.tryAcquire(key('alice'));
+    await ledger.markPaid(key('alice'), 'hash-alice');
+    await ledger.tryAcquire(key('bob'));
+    await ledger.markUnknown(key('bob'));
+    await ledger.tryAcquire(key('carol'));
+
+    // Ninety-one days later: no card from then is still being clicked, but the
+    // two unfinished records are still someone's job to settle.
+    clock += 91 * day;
+    await ledger.tryAcquire(key('dave'));
+
+    await expect(ledger.get(key('alice'))).resolves.toBeUndefined();
+    await expect(ledger.get(key('bob'))).resolves.toMatchObject({
+      state: 'unknown',
+    });
+    await expect(ledger.get(key('carol'))).resolves.toMatchObject({
       state: 'processing',
     });
+    await expect(ledger.get(key('dave'))).resolves.toMatchObject({
+      state: 'processing',
+    });
+  });
+
+  test('a paid record inside the retention window still blocks a resubmit', async () => {
+    const storePath = newStorePath();
+    const day = 24 * 60 * 60 * 1000;
+    let clock = 1_000 * day;
+    const ledger = new ZapLedger({ storePath, now: () => clock });
+
+    await ledger.tryAcquire(key('alice'));
+    await ledger.markPaid(key('alice'), 'hash-alice');
+
+    clock += 89 * day;
+
+    await expect(ledger.tryAcquire(key('alice'))).resolves.toBe(false);
+    await expect(ledger.get(key('alice'))).resolves.toMatchObject({
+      state: 'paid',
+      paymentHash: 'hash-alice',
+    });
+  });
+
+  test('retention can be switched off entirely', async () => {
+    const storePath = newStorePath();
+    const day = 24 * 60 * 60 * 1000;
+    let clock = 1_000 * day;
+    const ledger = new ZapLedger({
+      storePath,
+      retentionMs: 0,
+      now: () => clock,
+    });
+
+    await ledger.tryAcquire(key('alice'));
+    await ledger.markPaid(key('alice'), 'hash-alice');
+    clock += 3_650 * day;
+    await ledger.tryAcquire(key('bob'));
+
+    await expect(ledger.get(key('alice'))).resolves.toMatchObject({
+      state: 'paid',
+    });
+  });
+
+  test('markPaid outwaits a lock that a submit would have given up on', async () => {
+    const storePath = newStorePath();
+    const ledger = new ZapLedger({
+      storePath,
+      lockRetryMs: 5,
+      lockTimeoutMs: 25,
+      settleLockTimeoutMs: 5_000,
+    });
+    await ledger.tryAcquire(key('alice'));
+
+    // Somebody else holds the lock for longer than a submit is willing to wait.
+    fs.writeFileSync(ledger.lockPath, 'other-owner', { mode: 0o600 });
+    const held = setTimeout(() => fs.unlinkSync(ledger.lockPath), 200);
+
+    // A settled payment must be recorded, so markPaid keeps waiting...
+    await expect(
+      ledger.markPaid(key('alice'), 'hash-alice'),
+    ).resolves.toBeUndefined();
+    clearTimeout(held);
+
+    await expect(ledger.get(key('alice'))).resolves.toMatchObject({
+      state: 'paid',
+      paymentHash: 'hash-alice',
+    });
+
+    // ...while an ordinary submit still fails fast on the short timeout.
+    fs.writeFileSync(ledger.lockPath, 'other-owner', { mode: 0o600 });
+    await expect(ledger.tryAcquire(key('bob'))).rejects.toThrow(
+      'Zap ledger lock timed out',
+    );
+    fs.unlinkSync(ledger.lockPath);
+  });
+
+  test('a store written by a newer build names itself instead of failing generically', () => {
+    const storePath = newStorePath();
+    fs.writeFileSync(storePath, JSON.stringify({ version: 2, records: {} }), {
+      mode: 0o600,
+    });
+
+    expect(() => new ZapLedger({ storePath })).toThrow(storePath);
+    expect(() => new ZapLedger({ storePath })).toThrow(
+      'written by a newer version of the bot',
+    );
   });
 
   test('invalid payment hashes leave the durable processing barrier intact', async () => {

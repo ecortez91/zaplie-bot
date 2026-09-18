@@ -21,6 +21,29 @@ export class DataDirError extends Error {
 
 export const DEVELOPMENT_DATA_DIR = '.zaplie-data';
 
+// App Service passes app settings to the process verbatim - it does not expand
+// %VAR% for an arbitrary setting - so the one token worth supporting is
+// expanded here instead of being hard-coded per stamp. The persistent share is
+// %HOME% on every App Service: D:\home on the older Windows stamps, C:\home on
+// newer ones, /home on Linux. Hard-coding a drive letter is what breaks when an
+// app moves stamp.
+const HOME_TOKEN = /^%HOME%/i;
+const FALLBACK_HOME = process.platform === 'win32' ? 'D:\\home' : '/home';
+
+const expandHome = (value: string, environment: NodeJS.ProcessEnv): string => {
+  if (!HOME_TOKEN.test(value)) {
+    return value;
+  }
+  const home = environment.HOME?.trim() || FALLBACK_HOME;
+  const rest = value
+    .replace(HOME_TOKEN, '')
+    .split(/[\\/]+/)
+    .filter(segment => segment.length > 0);
+  // Rejoined with this platform's separator, so the same setting is correct on
+  // a Windows stamp and a Linux one.
+  return path.join(home, ...rest);
+};
+
 const isAzureRuntime = (environment: NodeJS.ProcessEnv): boolean =>
   Boolean(
     environment.RUNNING_ON_AZURE ||
@@ -32,7 +55,8 @@ export const resolveDataDir = (
   environment: NodeJS.ProcessEnv = process.env,
   workingDirectory = process.cwd(),
 ): string => {
-  const configured = environment.ZAPLIE_DATA_DIR?.trim();
+  const raw = environment.ZAPLIE_DATA_DIR?.trim();
+  const configured = raw ? expandHome(raw, environment) : raw;
   const durableRuntime =
     environment.NODE_ENV !== 'development' || isAzureRuntime(environment);
 

@@ -130,7 +130,13 @@ export class TeamsBot extends TeamsActivityHandler {
           context.activity.value.action === ZAP_SUBMIT_ACTION
         ) {
           const cardId = context.activity.replyToId;
-          const tenantId = context.activity.conversation.tenantId;
+          // Teams usually stamps the tenant on the conversation, but some
+          // activities carry it only in channelData. Read both before giving
+          // up: the id is the same one, not a guess.
+          const channelData = context.activity.channelData as
+            { tenant?: { id?: string } } | undefined;
+          const tenantId =
+            context.activity.conversation.tenantId ?? channelData?.tenant?.id;
           const conversationId = context.activity.conversation.id;
           // All scope components are mandatory. Guessing a missing tenant,
           // conversation, or card id could merge unrelated submissions or

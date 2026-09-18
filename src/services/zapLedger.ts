@@ -21,6 +21,18 @@ const RENAME_RETRY_MS = 20;
 // than that belongs to a dead process, never to a write in flight.
 const STALE_TEMP_MS = 60 * 60 * 1000;
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+// A transition that records an already-settled payment can never be safely
+// abandoned: giving up leaves the recipient `processing` forever, which no
+// retry may clear. It waits far longer than a submit does, and says so
+// periodically instead of failing quietly.
+const DEFAULT_SETTLE_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
+const LOCK_WAIT_LOG_MS = 5_000;
+// Every write re-serialises the whole store, so an unbounded file eventually
+// makes each transition slow enough to queue submits past the lock timeout.
+// A `paid` record only has to outlive the card that produced it; ninety days
+// is far beyond any adaptive card anyone will still click. `processing` and
+// `unknown` are never pruned - they are the ones a human still has to settle.
+const DEFAULT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const IDENTIFIER_PATTERN = /^\S{1,256}$/;
 const KEY_PART_MAX_LENGTH = 1_024;
@@ -50,6 +62,12 @@ export interface ZapLedgerOptions {
   storePath?: string;
   lockRetryMs?: number;
   lockTimeoutMs?: number;
+  // Lock wait for transitions that record an outcome LNbits has already
+  // decided. Separate from lockTimeoutMs on purpose: a submit may fail, a
+  // settled payment may not.
+  settleLockTimeoutMs?: number;
+  // How long a `paid` record is kept. 0 disables pruning entirely.
+  retentionMs?: number;
   now?: () => number;
 }
 
@@ -157,7 +175,21 @@ const validateEntry = (value: unknown): ZapEntry => {
   return { state, at };
 };
 
-const validateStore = (value: unknown): ZapStore => {
+const validateStore = (value: unknown, storePath?: string): ZapStore => {
+  // A newer schema is the one invalid store an operator can act on, so say
+  // which file it is and what wrote it rather than failing generically.
+  if (
+    isRecord(value) &&
+    typeof value.version === 'number' &&
+    value.version > STORE_VERSION
+  ) {
+    throw new ZapLedgerError(
+      `Zap ledger ${storePath ?? STORE_FILENAME} was written by a newer ` +
+        `version of the bot (store version ${value.version}, this build ` +
+        `understands ${STORE_VERSION}); deploy that version or restore a ` +
+        'compatible backup - do not delete the file, it records real payments',
+    );
+  }
   if (
     !isRecord(value) ||
     value.version !== STORE_VERSION ||
@@ -180,7 +212,7 @@ const validateStore = (value: unknown): ZapStore => {
 const readStore = (storePath: string): ZapStore => {
   try {
     const raw = fs.readFileSync(storePath, 'utf8');
-    return validateStore(JSON.parse(raw) as unknown);
+    return validateStore(JSON.parse(raw) as unknown, storePath);
   } catch (error) {
     if (isErrnoException(error) && error.code === 'ENOENT') {
       return { version: STORE_VERSION, records: {} };
@@ -206,31 +238,31 @@ const wait = (milliseconds: number): Promise<void> =>
 // replacement, so a reader still sees either the previous canonical file or
 // the next one. Writers already hold the exclusive store lock, so no other
 // writer can slip in between attempts.
-// Best effort by design: a sweep failure must never fail a write that already
-// landed, so every error here is swallowed. Only this store's own temporaries
-// match, and only ones old enough that no live write could own them.
-const sweepStaleTemporaries = async (storePath: string): Promise<void> => {
+// Best effort by design: a crash temporary is a leftover, never a reason to
+// fail. Only this store's own temporaries match, and only ones old enough that
+// no live write could own them. Runs once when a ZapLedger is constructed, not
+// per write: the condition it cleans up only arises after a crash, and a
+// readdir+stat on every transition would sit inside the exclusive lock.
+const sweepStaleTemporaries = (storePath: string, nowMs: number): void => {
   const directory = path.dirname(storePath);
   const prefix = `${path.basename(storePath)}.`;
   try {
-    const names = await fs.promises.readdir(directory);
-    const cutoff = Date.now() - STALE_TEMP_MS;
-    for (const name of names) {
+    const cutoff = nowMs - STALE_TEMP_MS;
+    for (const name of fs.readdirSync(directory)) {
       if (!name.startsWith(prefix) || !name.endsWith('.tmp')) {
         continue;
       }
       const candidate = path.join(directory, name);
       try {
-        const stats = await fs.promises.stat(candidate);
-        if (stats.mtimeMs < cutoff) {
-          await fs.promises.unlink(candidate);
+        if (fs.statSync(candidate).mtimeMs < cutoff) {
+          fs.unlinkSync(candidate);
         }
       } catch {
         // Another process removed it, or it is not ours to remove.
       }
     }
   } catch {
-    // A directory listing failure is not a reason to fail a settled write.
+    // A directory listing failure is not a reason to refuse to start.
   }
 };
 
@@ -280,6 +312,8 @@ export class ZapLedger {
   readonly lockPath: string;
   private readonly lockRetryMs: number;
   private readonly lockTimeoutMs: number;
+  private readonly settleLockTimeoutMs: number;
+  private readonly retentionMs: number;
   private readonly now: () => number;
 
   constructor(options: ZapLedgerOptions = {}) {
@@ -293,8 +327,19 @@ export class ZapLedger {
       'Zap ledger lock timeout',
       options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
     );
+    this.settleLockTimeoutMs = validateDuration(
+      'Zap ledger settle lock timeout',
+      options.settleLockTimeoutMs ?? DEFAULT_SETTLE_LOCK_TIMEOUT_MS,
+    );
+    this.retentionMs = validateDuration(
+      'Zap ledger retention window',
+      options.retentionMs ?? DEFAULT_RETENTION_MS,
+    );
     this.now = options.now ?? Date.now;
     this.ensureDataDirectory();
+    // Once per process, outside the lock: a crash temporary is a startup
+    // condition, not something to look for on every payment.
+    sweepStaleTemporaries(this.storePath, this.timestamp());
     // Atomic replacements make an unlocked startup read safe. Validating here
     // keeps a corrupt or unreadable canonical store from producing a healthy
     // bot that discovers the problem only when someone tries to move money.
@@ -336,7 +381,10 @@ export class ZapLedger {
         at: this.timestamp(),
       };
       await this.writeStore(store);
-    });
+      // The payment is already settled at LNbits, so this transition waits far
+      // longer than a submit: abandoning it would leave the recipient
+      // `processing` forever, and no retry may clear that.
+    }, this.settleLockTimeoutMs);
   }
 
   // A payment whose outcome could not be determined must not be retried
@@ -358,7 +406,9 @@ export class ZapLedger {
       }
       store.records[key] = { state: 'unknown', at: this.timestamp() };
       await this.writeStore(store);
-    });
+      // Same reasoning as markPaid: the payment may have settled, so this
+      // record is not optional.
+    }, this.settleLockTimeoutMs);
   }
 
   // Only a recipient that definitively never reached the payment call may be
@@ -430,8 +480,11 @@ export class ZapLedger {
     }
   }
 
-  private async withStoreLock<T>(operation: () => Promise<T>): Promise<T> {
-    const release = await this.acquireLock();
+  private async withStoreLock<T>(
+    operation: () => Promise<T>,
+    timeoutMs = this.lockTimeoutMs,
+  ): Promise<T> {
+    const release = await this.acquireLock(timeoutMs);
     try {
       return await operation();
     } finally {
@@ -439,8 +492,12 @@ export class ZapLedger {
     }
   }
 
-  private async acquireLock(): Promise<() => Promise<void>> {
-    const deadline = Date.now() + this.lockTimeoutMs;
+  private async acquireLock(
+    timeoutMs = this.lockTimeoutMs,
+  ): Promise<() => Promise<void>> {
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
+    let nextLogAt = startedAt + LOCK_WAIT_LOG_MS;
 
     for (;;) {
       try {
@@ -500,6 +557,16 @@ export class ZapLedger {
             error,
           );
         }
+        // A long wait must not be silent: an operator watching the logs is
+        // how a held lock gets noticed before the deadline arrives.
+        if (Date.now() >= nextLogAt) {
+          console.error(
+            `Still waiting for the zap ledger lock after ${Math.round(
+              (Date.now() - startedAt) / 1000,
+            )}s; another process may have crashed holding ${this.lockPath}.`,
+          );
+          nextLogAt = Date.now() + LOCK_WAIT_LOG_MS;
+        }
         await wait(
           Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now())),
         );
@@ -507,10 +574,29 @@ export class ZapLedger {
     }
   }
 
+  // Bounded by construction: every write drops `paid` records past the
+  // retention window, so the file cannot grow until a transition outlasts the
+  // lock timeout. Pruning here rather than on a timer keeps it on the path
+  // that already holds the exclusive lock.
+  private prune(store: ZapStore): ZapStore {
+    if (this.retentionMs === 0) {
+      return store;
+    }
+    const cutoff = this.timestamp() - this.retentionMs;
+    for (const [key, entry] of Object.entries(store.records)) {
+      // Only `paid`: `processing` and `unknown` are unfinished business and
+      // outlive any window until a human settles them.
+      if (entry.state === 'paid' && entry.at < cutoff) {
+        delete store.records[key];
+      }
+    }
+    return store;
+  }
+
   private async writeStore(store: ZapStore): Promise<void> {
     // Validate our own output too: a bad transition must never replace the last
     // known-good file. A unique same-directory temporary keeps rename atomic.
-    const canonical = validateStore(store);
+    const canonical = validateStore(this.prune(store), this.storePath);
     const tempPath = `${this.storePath}.${process.pid}.${randomBytes(16).toString('hex')}.tmp`;
     let handle: fs.promises.FileHandle | undefined;
     try {
@@ -520,8 +606,6 @@ export class ZapLedger {
       await handle.close();
       handle = undefined;
       await replaceStoreFile(tempPath, this.storePath);
-      // Under the exclusive lock, so no other writer's temporary is in flight.
-      await sweepStaleTemporaries(this.storePath);
     } catch (error) {
       if (handle) {
         await handle.close().catch(() => undefined);
