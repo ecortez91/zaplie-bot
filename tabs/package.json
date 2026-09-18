@@ -20,7 +20,7 @@
     "dotenv-flow": "^4.1.0",
     "express": "^4.22.3",
     "express-rate-limit": "^8.7.0",
-    "http-proxy-middleware": "^2.0.6",
+    "http-proxy-middleware": "^4.2.0",
     "jose": "^6.2.12",
     "light-bolt11-decoder": "^3.2.0",
     "moment": "^2.31.0",
