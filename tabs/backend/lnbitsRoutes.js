@@ -17,10 +17,23 @@ const validId = (value) => typeof value === 'string' && ID_PATTERN.test(value);
 // this route a 1,000,000 default that no operator had asked for.
 const DEFAULT_ZAP_MAX_AMOUNT_SATS = 1_000_000;
 
-// Parsed with the reward parser, so a malformed value throws instead of falling
-// back to the default and widening the cap the operator meant to tighten.
-const zapMaxAmountSats = () =>
-  positiveIntFromEnv('ZAP_MAX_AMOUNT_SATS', DEFAULT_ZAP_MAX_AMOUNT_SATS);
+// Precedence: ZAP_MAX_AMOUNT_SATS, else whatever REWARDS_MAX_AMOUNT_SATS is set
+// to, else 1,000,000. The middle step is what stops this separation from being
+// a silent loosening: env/.env.dev.example ships REWARDS_MAX_AMOUNT_SATS=10000,
+// so a deployment following the repo's own template keeps its 10,000-sat zap
+// ceiling until an operator names a different one. Both are read through the
+// reward parser, so a malformed value throws rather than falling back and
+// widening the cap the operator meant to tighten.
+const zapMaxAmountSats = () => {
+  const configuredZapCap = positiveIntFromEnv('ZAP_MAX_AMOUNT_SATS', null);
+  if (configuredZapCap !== null) {
+    return configuredZapCap;
+  }
+  return (
+    positiveIntFromEnv('REWARDS_MAX_AMOUNT_SATS', null) ??
+    DEFAULT_ZAP_MAX_AMOUNT_SATS
+  );
+};
 
 // Only a real JSON number is an amount. `Number()` would turn `true` into 1 and
 // `['5']` into 5, which are not integer amount inputs.

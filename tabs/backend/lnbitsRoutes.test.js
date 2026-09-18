@@ -194,24 +194,56 @@ test('rejects pagination values that are not plain integers', async () => {
 // REWARDS_MAX_AMOUNT_SATS bounds automated rewards only; reusing it here gave
 // this route a 1,000,000 default that contradicted its documented meaning.
 
-test('the reward cap no longer moves the zap ceiling', () => {
-  process.env.REWARDS_MAX_AMOUNT_SATS = '250';
+test('with neither cap configured the ceiling is 1,000,000', () => {
+  assert.equal(parseAmount(1_000_000), 1_000_000);
+  assert.equal(parseAmount(1_000_001), null);
+});
+
+// Separating the caps must not loosen a deployment that never asked for it:
+// env/.env.dev.example ships REWARDS_MAX_AMOUNT_SATS=10000, and such a
+// deployment keeps its 10,000-sat zap ceiling until it names a zap cap.
+test('an unset zap cap inherits the configured reward cap', () => {
+  process.env.REWARDS_MAX_AMOUNT_SATS = '10000';
   try {
-    assert.equal(parseAmount(1000), 1000);
-    assert.equal(parseAmount(1_000_000), 1_000_000);
-    assert.equal(parseAmount(1_000_001), null);
+    assert.equal(parseAmount(10000), 10000);
+    assert.equal(parseAmount(10001), null);
   } finally {
     delete process.env.REWARDS_MAX_AMOUNT_SATS;
   }
 });
 
-test('ZAP_MAX_AMOUNT_SATS narrows the zap ceiling', () => {
+test('ZAP_MAX_AMOUNT_SATS takes precedence over the reward cap', () => {
+  process.env.REWARDS_MAX_AMOUNT_SATS = '10000';
   process.env.ZAP_MAX_AMOUNT_SATS = '500';
   try {
     assert.equal(parseAmount(500), 500);
     assert.equal(parseAmount(501), null);
   } finally {
+    delete process.env.REWARDS_MAX_AMOUNT_SATS;
     delete process.env.ZAP_MAX_AMOUNT_SATS;
+  }
+});
+
+test('a zap cap above the reward cap is honoured, not clamped to it', () => {
+  process.env.REWARDS_MAX_AMOUNT_SATS = '10000';
+  process.env.ZAP_MAX_AMOUNT_SATS = '50000';
+  try {
+    assert.equal(parseAmount(50000), 50000);
+    assert.equal(parseAmount(50001), null);
+  } finally {
+    delete process.env.REWARDS_MAX_AMOUNT_SATS;
+    delete process.env.ZAP_MAX_AMOUNT_SATS;
+  }
+});
+
+test('a malformed reward cap fails closed for zaps too', () => {
+  process.env.REWARDS_MAX_AMOUNT_SATS = '1e3';
+  try {
+    assert.throws(() => parseAmount(25), {
+      message: 'REWARDS_MAX_AMOUNT_SATS must be a positive integer',
+    });
+  } finally {
+    delete process.env.REWARDS_MAX_AMOUNT_SATS;
   }
 });
 

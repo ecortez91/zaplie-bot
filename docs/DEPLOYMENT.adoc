@@ -191,9 +191,11 @@ created. Must be a positive integer; a failed grant is logged, not retried
 
 | `ZAP_MAX_AMOUNT_SATS`
 | Upper bound in sats for a single person-to-person zap or self-issued invoice
-  through the portal's LNbits gateway (default 1000000). Separate from
-  `REWARDS_MAX_AMOUNT_SATS`, which caps automated rewards only. A malformed
-  value fails closed: the portal backend refuses to start
+  through the portal's LNbits gateway. Distinct from `REWARDS_MAX_AMOUNT_SATS`,
+  which caps automated rewards only, but it inherits it: left unset the zap
+  ceiling is whatever `REWARDS_MAX_AMOUNT_SATS` is set to, falling back to
+  1000000 only when neither is set. Set it to give zaps a ceiling of their own.
+  A malformed value fails closed: the portal backend refuses to start
 | Portal backend
 
 | `AAD_TENANT_ID`, `AAD_CLIENT_ID`
