@@ -257,14 +257,19 @@ describe('agentTools', () => {
         t => t.name === 'get_leaderboard',
       )!;
 
+      // Bracket the call rather than comparing against a later Date.now():
+      // the clock can tick a second between the handler and the assertion.
+      const before = Math.floor(Date.now() / 1000);
       const result: any = await tool.handler(
         { days: 365 },
         makeTurnContext(currentUser),
       );
+      const after = Math.floor(Date.now() / 1000);
 
       const since = mockGetZapLeaderboard.mock.calls[0][0]!.sinceTimestamp!;
       expect(result.periodDays).toBe(365);
-      expect(Math.floor(Date.now() / 1000) - since).toBe(365 * 86400);
+      expect(since).toBeGreaterThanOrEqual(before - 365 * 86400);
+      expect(since).toBeLessThanOrEqual(after - 365 * 86400);
     });
 
     test('flags an incomplete read so the assistant can hedge', async () => {
