@@ -12,7 +12,7 @@ export interface PaymentExtraWallet {
   id: string;
   name: string;
   user: string;
-  displayName?: string;
+  displayName: string;
   adminkey?: never;
   inkey?: never;
   balance_msat?: never;
@@ -29,19 +29,16 @@ export type PaymentExtraRole = 'sender Allowance' | 'receiver Private';
 export function toPaymentExtraWallet(
   wallet: Wallet | null | undefined,
   role: PaymentExtraRole,
-  displayName?: string,
+  displayName: string,
 ): PaymentExtraWallet {
   if (!wallet) {
     throw new Error(`Cannot build payment metadata: ${role} wallet is missing`);
   }
 
-  const projected: PaymentExtraWallet = {
+  return {
     id: wallet.id,
     name: wallet.name,
     user: wallet.user,
+    displayName,
   };
-  if (displayName) {
-    projected.displayName = displayName;
-  }
-  return projected;
 }

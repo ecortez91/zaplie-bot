@@ -50,6 +50,8 @@ const makeContext = (turnUser: User | undefined) => {
   return { context, sendActivity };
 };
 
+const originalPointsLabel = process.env.LNBITS_POINTS_LABEL;
+
 describe('ShowMyBalanceCommand', () => {
   let consoleLog: jest.SpiedFunction<typeof console.log>;
 
@@ -63,6 +65,11 @@ describe('ShowMyBalanceCommand', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+    if (originalPointsLabel === undefined) {
+      delete process.env.LNBITS_POINTS_LABEL;
+    } else {
+      process.env.LNBITS_POINTS_LABEL = originalPointsLabel;
+    }
   });
 
   test('replies with one balance line per wallet', async () => {

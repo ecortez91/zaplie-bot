@@ -30,13 +30,10 @@ describe('toPaymentExtraWallet', () => {
     });
   });
 
-  test('omits displayName when not provided', () => {
+  test('always writes displayName, so readers get the same four fields', () => {
     expect(
-      Object.keys(toPaymentExtraWallet(wallet, 'sender Allowance')),
-    ).toEqual(['id', 'name', 'user']);
-    expect(
-      Object.keys(toPaymentExtraWallet(wallet, 'sender Allowance', '')),
-    ).toEqual(['id', 'name', 'user']);
+      Object.keys(toPaymentExtraWallet(wallet, 'sender Allowance', 'Ada')),
+    ).toEqual(['id', 'name', 'user', 'displayName']);
   });
 
   test('a Wallet is not assignable to the projection', () => {
@@ -46,11 +43,11 @@ describe('toPaymentExtraWallet', () => {
   });
 
   test('throws when the wallet is missing', () => {
-    expect(() => toPaymentExtraWallet(null, 'sender Allowance')).toThrow(
+    expect(() => toPaymentExtraWallet(null, 'sender Allowance', 'Ada')).toThrow(
       /sender Allowance wallet is missing/,
     );
-    expect(() => toPaymentExtraWallet(undefined, 'receiver Private')).toThrow(
-      /receiver Private wallet is missing/,
-    );
+    expect(() =>
+      toPaymentExtraWallet(undefined, 'receiver Private', 'Bob'),
+    ).toThrow(/receiver Private wallet is missing/);
   });
 });

@@ -44,8 +44,8 @@ const automateZap: AzureFunction = async function (context: Context, req: HttpRe
         // Same projection the bot writes: never a wallet object or a key.
         const extra: ZapPaymentExtra = {
             tag: 'zap',
-            from: toPaymentExtraWallet(senderAllowanceWallet, 'sender Allowance'),
-            to: toPaymentExtraWallet(receiverPrivateWallet, 'receiver Private'),
+            from: toPaymentExtraWallet(senderAllowanceWallet, 'sender Allowance', sender.displayName),
+            to: toPaymentExtraWallet(receiverPrivateWallet, 'receiver Private', receiver.displayName),
         };
 
         const invoice = await createInvoice(req,receiverPrivateWallet.inkey, senderAllowanceWallet.id, zapAmount, zapMessage, extra);
