@@ -1,6 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
+const {
+  substitutePlaceholders,
+  findUnresolvedPlaceholders,
+} = require('./scripts/manifestTemplate');
+
+// manifest.template.json carries two placeholder forms:
+//   {{NAME}}   resolved below, by this script
+//   ${{NAME}}  left for Teams Toolkit to resolve from env/.env.<env>
 
 const envDir = path.join(__dirname, 'env');
 
@@ -33,13 +41,23 @@ envConfig = {
   ...process.env,
 };
 
-const contentUrl = envConfig.TAB_ENDPOINT || envConfig.CONTENT_URL;
-const websiteUrl = envConfig.TAB_ENDPOINT || envConfig.WEBSITE_URL;
+// TAB_ENDPOINT is the local debug tunnel. Honouring it everywhere would let a
+// stale local value silently replace the deployed URLs, so it applies to the
+// local environment only; every other environment uses CONTENT_URL and
+// WEBSITE_URL, which stay distinct from each other.
+const tunnelEndpoint =
+  activeEnv === 'local' ? envConfig.TAB_ENDPOINT : undefined;
+const contentUrl = tunnelEndpoint || envConfig.CONTENT_URL;
+const websiteUrl = tunnelEndpoint || envConfig.WEBSITE_URL;
+const urlSource = tunnelEndpoint
+  ? 'TAB_ENDPOINT (local tunnel)'
+  : 'CONTENT_URL / WEBSITE_URL';
 
 // Check for missing environment variables
 if (!contentUrl || !websiteUrl) {
   console.error(
-    'Error: configure TAB_ENDPOINT, or both CONTENT_URL and WEBSITE_URL.',
+    'Error: configure CONTENT_URL and WEBSITE_URL (or TAB_ENDPOINT for the ' +
+      'local debug tunnel).',
   );
   process.exit(1);
 }
@@ -70,8 +88,11 @@ for (const [name, value] of [
 }
 
 // A Teams validDomains entry is a bare host: no scheme, port, path or
-// wildcard. Fall back to the tab URL's host so every environment resolves.
-const tabDomain = envConfig.TAB_DOMAIN || parseUrl(contentUrl).hostname;
+// wildcard, and it has to match the tab URL actually in use — so derive it
+// from that URL. An explicit TAB_DOMAIN is only trusted for the local tunnel,
+// where the tunnel task writes the endpoint and the domain together.
+const tabDomain =
+  (tunnelEndpoint && envConfig.TAB_DOMAIN) || parseUrl(contentUrl).hostname;
 if (!/^[A-Za-z0-9.-]+$/.test(tabDomain)) {
   console.error(
     'Error: TAB_DOMAIN must be a bare hostname, with no scheme, port or path.',
@@ -105,8 +126,9 @@ try {
   // Update the version number in the manifest
   manifest.version = newVersion;
 
-  // Resolve the tab domain here (Teams Toolkit only resolves the ${{...}}
-  // form) and drop the duplicate it creates when the tab shares the bot host.
+  // Resolve the tab domain, then drop a duplicate if the same host is already
+  // listed. The bot entry is still a ${{BOT_DOMAIN}} placeholder here, so a
+  // tab sharing the bot host is de-duplicated by Teams Toolkit, not by this.
   manifest.validDomains = [
     ...new Set(
       manifest.validDomains.map(domain =>
@@ -116,16 +138,17 @@ try {
   ];
 
   // Replace placeholders with environment variables
-  const updatedManifest = JSON.stringify(manifest, null, 2)
-    .replace(/{{CONTENT_URL}}/g, contentUrl)
-    .replace(/{{WEBSITE_URL}}/g, websiteUrl);
+  const updatedManifest = substitutePlaceholders(
+    JSON.stringify(manifest, null, 2),
+    { CONTENT_URL: contentUrl, WEBSITE_URL: websiteUrl },
+  );
 
-  // ${{...}} placeholders are resolved later by Teams Toolkit; anything this
-  // script owns must be resolved by now.
-  const unresolved = updatedManifest.match(/(?<!\$)\{\{[^{}]+\}\}/g);
-  if (unresolved) {
-    const names = [...new Set(unresolved)].join(', ');
-    console.error(`Error: unresolved manifest placeholders: ${names}.`);
+  // Anything of this script's own form left over was never resolved.
+  const unresolved = findUnresolvedPlaceholders(updatedManifest);
+  if (unresolved.length > 0) {
+    console.error(
+      `Error: unresolved manifest placeholders: ${unresolved.join(', ')}.`,
+    );
     process.exit(1);
   }
 
@@ -133,7 +156,10 @@ try {
   const outputPath = path.join(__dirname, 'appPackage', 'manifest.json');
   fs.writeFileSync(outputPath, updatedManifest, 'utf8');
 
-  console.log(`manifest.json has been generated successfully with version ${newVersion}.`);
+  console.log(
+    `manifest.json has been generated successfully with version ` +
+      `${newVersion}, using tab URLs from ${urlSource}.`,
+  );
 } catch (error) {
   console.error('Error generating manifest.json:', error);
   process.exit(1);

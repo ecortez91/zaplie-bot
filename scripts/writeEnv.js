@@ -23,6 +23,9 @@ const envOutputPath = path.join(__dirname, '..', 'env', `.env.${env}`);
 const fileConfig = fs.existsSync(envFilePath)
   ? dotenv.parse(fs.readFileSync(envFilePath))
   : {};
+// NOTE: process.env wins, and whatever lands in selectedVars is written to
+// env/.env.<TEAMSFX_ENV>. That file can therefore contain real credentials —
+// .gitignore covers every env/.env.* for exactly this reason.
 const envConfig = { ...fileConfig, ...process.env };
 
 const hostnameOf = value => {
@@ -34,8 +37,12 @@ const hostnameOf = value => {
 };
 
 // The tab URL the Entra and Teams manifests point at, chosen the same way
-// build.js chooses it so the domain always belongs to the endpoint in use.
-const tabEndpoint = envConfig.TAB_ENDPOINT || envConfig.CONTENT_URL;
+// build.js chooses it: the debug tunnel applies to the local environment only,
+// so a deployed environment always uses CONTENT_URL.
+const tabEndpoint =
+  env === 'local'
+    ? envConfig.TAB_ENDPOINT || envConfig.CONTENT_URL
+    : envConfig.CONTENT_URL;
 
 // Select specific variables to write
 const selectedVars = {
@@ -50,7 +57,8 @@ const selectedVars = {
   // A local debug session overwrites both with the port 3000 tunnel before
   // provisioning.
   TAB_ENDPOINT: tabEndpoint,
-  TAB_DOMAIN: envConfig.TAB_DOMAIN || hostnameOf(tabEndpoint),
+  TAB_DOMAIN:
+    (env === 'local' && envConfig.TAB_DOMAIN) || hostnameOf(tabEndpoint),
   FOUNDRY_PROJECT_ENDPOINT: envConfig.FOUNDRY_PROJECT_ENDPOINT,
   FOUNDRY_MODEL: envConfig.FOUNDRY_MODEL,
   GRAPH_CONNECTION_NAME: envConfig.GRAPH_CONNECTION_NAME,
