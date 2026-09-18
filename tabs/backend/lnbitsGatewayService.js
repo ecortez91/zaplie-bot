@@ -1,4 +1,5 @@
 const {
+  REQUEST_TIMEOUT_MS,
   getLnbitsToken,
   requireLnbitsConfig,
 } = require('./lnbitsAdmin');
@@ -8,12 +9,11 @@ const {
 } = require('./lnbitsUserDirectory');
 
 const TOKEN_CACHE_MS = 5 * 60 * 1000;
-// A stalled LNbits connection must not pin an Express request open for ever.
-const REQUEST_TIMEOUT_MS = 10 * 1000;
 const WALLET_CACHE_MS = 30 * 1000;
 const SENSITIVE_FIELD = /(adminkey|inkey|admin.?key|invoice.?key|password|preimage|secret|token)/i;
 
 let tokenCache = null;
+let tokenRequest = null;
 const walletCache = new Map();
 let walletIndex = null;
 
@@ -30,14 +30,28 @@ const requireGatewayConfig = () => ({
   adminKey: process.env.LNBITS_ADMINKEY || '',
 });
 
+// The cache expiring under load must not turn one super-user login into N of
+// them: everyone who arrives while a login is in flight awaits that same
+// promise, and the slot is cleared on settle so a failure is retried, not cached.
 const getAccessToken = async (config) => {
-  const now = Date.now();
-  if (tokenCache && tokenCache.expiresAt > now) {
+  if (tokenCache && tokenCache.expiresAt > Date.now()) {
     return tokenCache.value;
   }
-  const value = await getLnbitsToken(config);
-  tokenCache = { value, expiresAt: now + TOKEN_CACHE_MS };
-  return value;
+  if (!tokenRequest) {
+    const request = getLnbitsToken(config).then((value) => {
+      tokenCache = { value, expiresAt: Date.now() + TOKEN_CACHE_MS };
+      return value;
+    });
+    tokenRequest = request;
+    request
+      .catch(() => {})
+      .then(() => {
+        if (tokenRequest === request) {
+          tokenRequest = null;
+        }
+      });
+  }
+  return tokenRequest;
 };
 
 const safeJson = async (response) => {
@@ -418,6 +432,7 @@ const getAllPayments = async ({ limit = 1000, offset = 0, direction = 'desc' }) 
 
 const resetCachesForTests = () => {
   tokenCache = null;
+  tokenRequest = null;
   walletCache.clear();
   walletIndex = null;
 };

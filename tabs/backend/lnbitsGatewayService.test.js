@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   getWalletBalance,
+  listUsers,
   listWalletPayments,
   redactSensitive,
   resetCachesForTests,
@@ -131,4 +132,36 @@ test('parallel payment reads share one walk over the LNbits users', async () => 
 
   assert.equal(paths.filter((p) => p === '/users/api/v1/user').length, 1);
   assert.equal(paths.filter((p) => p.endsWith('/wallet')).length, USERS.length);
+});
+
+test('a burst after the token cache expires triggers one super-user login', async () => {
+  const paths = installLnbitsStub();
+
+  await Promise.all([listUsers(), listUsers(), listUsers()]);
+
+  assert.equal(paths.filter((p) => p === '/api/v1/auth').length, 1);
+  assert.equal(paths.filter((p) => p === '/users/api/v1/user').length, 3);
+});
+
+test('a failed login is retried rather than cached as in flight', async () => {
+  installLnbitsStub();
+  let attempts = 0;
+  const failing = global.fetch;
+  global.fetch = async (url, init) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/api/v1/auth') {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error('LNbits auth failed (status: 502)');
+      }
+    }
+    return failing(url, init);
+  };
+
+  await assert.rejects(listUsers(), { message: 'LNbits auth failed (status: 502)' });
+  assert.deepEqual(
+    (await listUsers()).map((user) => user.id),
+    ['user-1', 'user-2'],
+  );
+  assert.equal(attempts, 2);
 });
