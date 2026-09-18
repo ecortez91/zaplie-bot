@@ -196,6 +196,7 @@ export async function runConversationalTurn(
       throw new Error(
         `foundryAgentService: could not parse the arguments for tool "${call.name}": ` +
           `${call.arguments} (${error instanceof Error ? error.message : String(error)})`,
+        { cause: error },
       );
     }
 

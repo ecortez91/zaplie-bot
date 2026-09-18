@@ -51,8 +51,9 @@
     "test:backend": "node --test backend/*.test.js",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "lint": "eslint src/ --ext .js,.jsx,.ts,.tsx",
-    "lint:fix": "eslint src/ --ext .js,.jsx,.ts,.tsx --fix",
+    "//lint": "ESLINT_USE_FLAT_CONFIG=false keeps this app on its eslintConfig below: ESLint 8 searches ancestor directories and would otherwise pick up the repo-root eslint.config.mjs. Drop it when this app moves to flat config.",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint src/ --ext .js,.jsx,.ts,.tsx",
+    "lint:fix": "ESLINT_USE_FLAT_CONFIG=false eslint src/ --ext .js,.jsx,.ts,.tsx --fix",
     "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,json,css}\"",
     "format:check": "prettier --check \"src/**/*.{js,jsx,ts,tsx,json,css}\"",
     "typecheck": "tsc --noEmit"

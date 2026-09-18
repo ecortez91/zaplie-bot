@@ -55,7 +55,7 @@ export class UserService {
   ): Promise<User> {
     const aadObjectId = teamsChannelAccount.aadObjectId;
 
-    let user: User | null = null;
+    let user: User;
     const lnbitsUsers = await getUsers(adminKey, {
       aadObjectId: aadObjectId, // userProfile.aadObjectId,
     });
