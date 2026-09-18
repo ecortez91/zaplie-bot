@@ -451,3 +451,73 @@ test('a malformed zap amount cap fails instead of falling back', async (t) => {
   );
   await assert.rejects(sendZap(validZap), (error) => error.status === 503);
 });
+
+// A store that pays fine but cannot record the success: the crash path that
+// used to be swallowed, leaving the record pending and every retry wedged.
+const createBrokenCompleteStore = (storePath) => {
+  const store = createZapIdempotencyStore({ storePath });
+  return {
+    ...store,
+    complete: async () => {
+      throw new Error('disk full');
+    },
+  };
+};
+
+test('a zap whose success cannot be recorded is reported, not swallowed', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zaplie-zap-unknown-'));
+  const storePath = path.join(tempDir, 'zaps.json');
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  let paymentCalls = 0;
+
+  const sendZap = createSendZap(
+    createTestZapDependencies(createBrokenCompleteStore(storePath), async () => {
+      paymentCalls += 1;
+      return { payment_hash: 'payment-1', checking_id: 'payment-1' };
+    }),
+  );
+
+  await assert.rejects(
+    sendZap(validZap),
+    (error) => error.status === 503 && /contact support/.test(error.message),
+  );
+  assert.equal(paymentCalls, 1);
+
+  const record = Object.values(
+    JSON.parse(fs.readFileSync(storePath, 'utf8')).records,
+  )[0];
+  assert.equal(record.state, 'outcome_unknown');
+  // The identifiers are what makes it reconcilable against LNbits.
+  assert.equal(record.payment.invoiceId, 'invoice-1');
+  assert.equal(record.payment.paymentHash, 'payment-1');
+
+  // A retry must not pay again, and must say the same thing.
+  await assert.rejects(
+    sendZap(validZap),
+    (error) => error.status === 503 && /contact support/.test(error.message),
+  );
+  assert.equal(paymentCalls, 1);
+});
+
+test('a poisoned key keeps the invoice id needed to reconcile it', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zaplie-zap-invoice-'));
+  const storePath = path.join(tempDir, 'zaps.json');
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+
+  const sendZap = createSendZap(
+    createTestZapDependencies(
+      createZapIdempotencyStore({ storePath }),
+      async () => {
+        throw new Error('LNbits timed out mid-payment');
+      },
+    ),
+  );
+
+  await assert.rejects(sendZap(validZap), /timed out/);
+
+  const record = Object.values(
+    JSON.parse(fs.readFileSync(storePath, 'utf8')).records,
+  )[0];
+  assert.equal(record.state, 'failed');
+  assert.equal(record.payment.invoiceId, 'invoice-1');
+});

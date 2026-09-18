@@ -35,6 +35,7 @@ tabs/backend/pending-rewards.json
 tabs/backend/connections.json
 tabs/backend/lnbits-zap-idempotency.json
 tabs/backend/lnbits-zap-idempotency.json.lock
+tabs/backend/lnbits-zap-idempotency.json.lock.stale.*
 tabs/backend/lnbits-zap-idempotency.json.*.tmp
 tabs/backend/webhook-keys.json
 tabs/backend/data.json

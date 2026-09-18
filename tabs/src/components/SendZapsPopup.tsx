@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import styles from './SendZapsPopup.module.css';
 import { RewardNameContext } from './RewardNameContext';
 import { useCache } from '../utils/CacheContext';
-import { sendZap } from '../services/lnbits/payments';
+import { sendZap, newIdempotencyKey } from '../services/lnbits/payments';
 import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
 import { useMsal } from '@azure/msal-react';
@@ -36,6 +36,11 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const [selectedUser, setSelectedUser] = useState<string>('');
   const [amount, setAmount] = useState<string>('');
   const [memo, setMemo] = useState<string>('');
+  // One key per zap attempt, deliberately outside React state so a re-render
+  // cannot change it mid-flight. The gateway can time the browser out while it
+  // is still paying, so pressing Send again has to replay the same key or it
+  // pays a second time. Cleared on success and whenever the zap itself changes.
+  const idempotencyKeyRef = useRef<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +56,13 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const [sendAnonymously, setSendAnonymously] = useState(false);
   const [selectedValue, setSelectedValue] = useState<string>('');
   const [paymentHash, setPaymentHash] = useState<string | null>(null);
+
+  // Editing the recipient, amount or memo makes it a different zap, and the
+  // gateway rejects a key reused for different details with a 409, so the key
+  // is dropped the moment any of them changes.
+  useEffect(() => {
+    idempotencyKeyRef.current = null;
+  }, [selectedUser, amount, memo, selectedValue, sendAnonymously]);
 
   const { cache, setCache } = useCache();
   const { accounts } = useMsal();
@@ -222,9 +234,19 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
         paymentMemo = `[Anonymous] ${paymentMemo}`;
       }
 
-      const result = await sendZap(recipient.id, zapAmount, paymentMemo);
+      if (!idempotencyKeyRef.current) {
+        idempotencyKeyRef.current = newIdempotencyKey();
+      }
+      const result = await sendZap(
+        recipient.id,
+        zapAmount,
+        paymentMemo,
+        idempotencyKeyRef.current,
+      );
 
       if (result && result.payment_hash) {
+        // Settled: the next Send is a different zap and needs its own key.
+        idempotencyKeyRef.current = null;
         setPaymentHash(result.payment_hash);
         setSuccess(true);
         // Optimistic update for immediate UI feedback
@@ -243,6 +265,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   };
 
   const handleClose = () => {
+    idempotencyKeyRef.current = null;
     setSuccess(false);
     setError(null);
     onClose();

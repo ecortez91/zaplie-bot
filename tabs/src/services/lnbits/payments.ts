@@ -96,7 +96,7 @@ const payInvoice = async (
 // rather than throw on a path that moves money. Both shapes satisfy the
 // gateway's own key pattern; a weaker source is refused outright, because a
 // guessable key would let one zap replay another's recorded result.
-const newIdempotencyKey = (): string => {
+export const newIdempotencyKey = (): string => {
   const webCrypto = globalThis.crypto;
   if (typeof webCrypto?.randomUUID === 'function') {
     return webCrypto.randomUUID();
@@ -112,11 +112,16 @@ const newIdempotencyKey = (): string => {
 
 // One call so the gateway picks the sender's Allowance wallet and the
 // recipient's Private wallet; the browser never learns either wallet key.
+//
+// The key is required rather than defaulted: a default is evaluated per call,
+// so a caller retrying after a timeout would mint a new key and pay twice,
+// which is the exact thing the gateway's idempotency layer exists to stop. The
+// caller must hold one key for as long as it keeps retrying the same zap.
 const sendZap = async (
   recipientUserId: string,
   amount: number,
   memo: string,
-  idempotencyKey: string = newIdempotencyKey(),
+  idempotencyKey: string,
 ): Promise<PaymentResult> =>
   apiRequest<PaymentResult>('/zaps', {
     method: 'POST',

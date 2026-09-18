@@ -259,7 +259,10 @@ const createLnbitsRouter = ({
     const status = Number.isInteger(error.status) ? error.status : 502;
     console.error('LNbits gateway request failed:', error.message);
     res.status(status).json({
-      error: status >= 500 ? 'LNbits service is unavailable' : error.message,
+      error:
+        status >= 500 && !error.expose
+          ? 'LNbits service is unavailable'
+          : error.message,
     });
   });
 

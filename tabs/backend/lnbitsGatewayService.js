@@ -23,10 +23,14 @@ const walletCache = new Map();
 let walletIndex = null;
 
 class LnbitsGatewayError extends Error {
-  constructor(message, status = 502) {
+  // 5xx messages are masked by the router so LNbits internals never reach the
+  // browser. `expose` opts a message back in, for the few 5xx cases where the
+  // user has to be told something specific rather than "try again".
+  constructor(message, status = 502, { expose = false } = {}) {
     super(message);
     this.name = 'LnbitsGatewayError';
     this.status = status;
+    this.expose = expose;
   }
 }
 
@@ -392,6 +396,12 @@ const payInvoice = async (wallet, paymentRequest) => {
 const payOwnedInvoice = async ({ walletId, paymentRequest, aadObjectId }) =>
   payInvoice(await requireOwnedWallet(walletId, aadObjectId), paymentRequest);
 
+// One wording for both the moment it happens and every later retry, so support
+// sees the same string whichever way the user hits it.
+const OUTCOME_UNKNOWN_MESSAGE =
+  'This zap may have been paid but could not be recorded. Do not retry: ' +
+  'contact support to confirm whether it went through.';
+
 const createSendZap = ({
   findCallerForZap = findCaller,
   listWalletsForZap = listUserWalletsWithKeys,
@@ -464,6 +474,11 @@ const createSendZap = ({
           409,
         );
       }
+      if (idempotency.state === 'outcome_unknown') {
+        throw new LnbitsGatewayError(OUTCOME_UNKNOWN_MESSAGE, 503, {
+          expose: true,
+        });
+      }
 
       let paymentAttempted = false;
       try {
@@ -493,6 +508,13 @@ const createSendZap = ({
           amount,
           memo,
         );
+        // Recorded before the payment so a zap that dies mid-payment still
+        // leaves the invoice id behind to reconcile against LNbits.
+        await idempotencyStore.attachPayment({
+          scope,
+          requestHash,
+          invoiceId: invoice.invoiceId,
+        });
         paymentAttempted = true;
         const result = await payInvoiceForZap(
           senderWallet,
@@ -505,6 +527,25 @@ const createSendZap = ({
             'Zap idempotency completion could not be persisted',
             persistError,
           );
+          // The money has left. Swallowing this would report success for a zap
+          // nothing recorded, and leaving the record pending would wedge every
+          // retry on "already in progress" forever, so mark it unknown and say
+          // so instead of guessing either way.
+          try {
+            await idempotencyStore.markOutcomeUnknown({
+              scope,
+              requestHash,
+              result,
+            });
+          } catch (markError) {
+            console.error(
+              'Zap idempotency outcome could not be marked unknown',
+              markError,
+            );
+          }
+          throw new LnbitsGatewayError(OUTCOME_UNKNOWN_MESSAGE, 503, {
+          expose: true,
+        });
         }
         return result;
       } catch (error) {
