@@ -43,6 +43,14 @@ const cleanCheckingId = (checkingId: string | undefined): string =>
 // instead: still parallel, but with a ceiling that does not depend on team size.
 export const MAX_CONCURRENT_LNBITS_REQUESTS = 8;
 
+// `getPayments` defaults to LNbits' 100-payment page, which is well short of a
+// busy wallet's history: the leaderboard sums every zap a member has sent, so a
+// short page would quietly undercount them. Ask for the same depth the portal
+// uses (tabs/src/utils/walletUtilities.ts requests 10000). There is no cursor
+// on this endpoint, so a wallet that fills the page is logged rather than
+// silently truncated.
+export const PAYMENTS_PER_WALLET_LIMIT = 10000;
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
@@ -125,8 +133,18 @@ export async function getRecentZaps(
     MAX_CONCURRENT_LNBITS_REQUESTS,
     async wallet => {
       try {
-        const payments = await getPayments(wallet.inkey);
-        return (payments || []) as Transaction[];
+        const payments = (await getPayments(
+          wallet.inkey,
+          PAYMENTS_PER_WALLET_LIMIT,
+        )) as Transaction[] | null;
+        if (payments && payments.length >= PAYMENTS_PER_WALLET_LIMIT) {
+          console.warn(
+            `getRecentZaps: wallet ${wallet.id} returned the full ` +
+              `${PAYMENTS_PER_WALLET_LIMIT}-payment page; older payments are ` +
+              'not counted. Paginate this read before the history grows further.',
+          );
+        }
+        return payments || [];
       } catch (error) {
         console.error(
           `getRecentZaps: failed to fetch payments for wallet ${wallet.id}:`,
@@ -224,7 +242,17 @@ export interface ZapLeaderboardEntry {
 
 // Ranks recognition given, not money held: a Private wallet is the owner's own
 // balance (and may one day be an external wallet we cannot read), so only zaps
-// sent out of Allowance wallets count. Matches tabs/src/components/Leaderboard.tsx.
+// sent out of Allowance wallets count.
+//
+// This is the same *measure* as the portal leaderboard
+// (tabs/src/components/Leaderboard.tsx) — sats sent, ranked per user — but it is
+// stricter about what counts: the portal sums every outgoing payment from any
+// mapped wallet minus "Weekly Allowance cleared", while this reuses
+// getRecentZaps(), which additionally requires the payment to leave an Allowance
+// wallet and to land in a Private wallet (cross-referenced by checking_id). The
+// bot therefore excludes outgoing payments the portal would still count, such as
+// a withdrawal to an external invoice. Expect small differences until the two
+// converge.
 export async function getZapLeaderboard(): Promise<ZapLeaderboardEntry[]> {
   const zaps = await getRecentZaps({ limit: Number.MAX_SAFE_INTEGER });
 

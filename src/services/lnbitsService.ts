@@ -469,17 +469,23 @@ const getWalletName = async (inKey: string) => {
   }
 };
 
-const getPayments = async (inKey: string) => {
-  console.log('getPayments starting ...');
+// `limit` is the page size LNbits applies to this wallet's payment list. It
+// defaults to the historical 100, but a caller that aggregates a wallet's whole
+// history (see zapHistoryService) must ask for more or it silently undercounts.
+const getPayments = async (inKey: string, limit = 100) => {
+  console.log(`getPayments starting ... (limit: ${limit})`);
 
   try {
-    const response = await fetch(`${lnbitsUrl()}/api/v1/payments?limit=100`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Api-Key': inKey,
+    const response = await fetch(
+      `${lnbitsUrl()}/api/v1/payments?limit=${limit}`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Api-Key': inKey,
+        },
       },
-    });
+    );
 
     if (!response.ok) {
       throw new Error(`Error getting payments (status: ${response.status})`);

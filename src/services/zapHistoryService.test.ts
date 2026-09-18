@@ -8,6 +8,7 @@ import {
   getRecentZaps,
   getZapLeaderboard,
   MAX_CONCURRENT_LNBITS_REQUESTS,
+  PAYMENTS_PER_WALLET_LIMIT,
 } from './zapHistoryService';
 import { getUsers, getUserWallets, getPayments } from './lnbitsService';
 import { expect, describe, test, beforeEach, jest } from '@jest/globals';
@@ -570,6 +571,10 @@ describe('LNbits request fan-out', () => {
 
     expect(mockGetUserWallets).toHaveBeenCalledTimes(teamSize);
     expect(mockGetPayments).toHaveBeenCalledTimes(teamSize * 2);
+    // Every wallet read must ask for the deep page, or totals undercount.
+    for (const call of mockGetPayments.mock.calls) {
+      expect(call[1]).toBe(PAYMENTS_PER_WALLET_LIMIT);
+    }
     expect(peakWalletReads).toBeLessThanOrEqual(MAX_CONCURRENT_LNBITS_REQUESTS);
     expect(peakPaymentReads).toBeLessThanOrEqual(
       MAX_CONCURRENT_LNBITS_REQUESTS,
