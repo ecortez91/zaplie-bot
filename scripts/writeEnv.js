@@ -7,8 +7,21 @@ const env = process.env.TEAMSFX_ENV || 'local';
 const envFilePath = path.join(__dirname, '..', 'env', '.env.dev');
 const envOutputPath = path.join(__dirname, '..', 'env', `.env.${env}`);
 
-// Load environment variables from .env.dev
-const envConfig = dotenv.parse(fs.readFileSync(envFilePath));
+// env/.env.dev is gitignored, so a clean checkout (or CI) may not have it.
+// Read it when it exists and let process variables win, so values supplied by
+// the environment still reach the generated file.
+const fileConfig = fs.existsSync(envFilePath)
+  ? dotenv.parse(fs.readFileSync(envFilePath))
+  : {};
+const envConfig = { ...fileConfig, ...process.env };
+
+const hostnameOf = value => {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return undefined;
+  }
+};
 
 // Select specific variables to write
 const selectedVars = {
@@ -20,6 +33,10 @@ const selectedVars = {
   PORTAL_URL: envConfig.PORTAL_URL,
   WEBSITE_URL: envConfig.WEBSITE_URL,
   CONTENT_URL: envConfig.CONTENT_URL,
+  // The tab URL the Entra and Teams manifests point at. A local debug session
+  // overwrites both with the port 3000 tunnel before provisioning.
+  TAB_ENDPOINT: envConfig.TAB_ENDPOINT || envConfig.CONTENT_URL,
+  TAB_DOMAIN: envConfig.TAB_DOMAIN || hostnameOf(envConfig.CONTENT_URL),
   FOUNDRY_PROJECT_ENDPOINT: envConfig.FOUNDRY_PROJECT_ENDPOINT,
   FOUNDRY_MODEL: envConfig.FOUNDRY_MODEL,
   GRAPH_CONNECTION_NAME: envConfig.GRAPH_CONNECTION_NAME,
@@ -60,6 +77,8 @@ appendEnvFile(envOutputPath, {
   PORTAL_URL: selectedVars.PORTAL_URL,
   WEBSITE_URL: selectedVars.WEBSITE_URL,
   CONTENT_URL: selectedVars.CONTENT_URL,
+  TAB_ENDPOINT: selectedVars.TAB_ENDPOINT,
+  TAB_DOMAIN: selectedVars.TAB_DOMAIN,
   FOUNDRY_PROJECT_ENDPOINT: selectedVars.FOUNDRY_PROJECT_ENDPOINT,
   FOUNDRY_MODEL: selectedVars.FOUNDRY_MODEL,
   GRAPH_CONNECTION_NAME: selectedVars.GRAPH_CONNECTION_NAME,

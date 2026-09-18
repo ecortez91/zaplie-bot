@@ -29,6 +29,7 @@
                 ],
                 "portOccupancy": [
                     3978, // app service port
+                    3000, // tab (portal) development server port
                     9239 // app inspector port for Node.js debugger
                 ]
             }
