@@ -469,6 +469,7 @@ const AutomationsComponent: FunctionComponent = () => {
     if (!account) {
       return;
     }
+    const startedAs = accountId;
     setInstalling(true);
     try {
       const tokenResponse = await instance.acquireTokenSilent({
@@ -477,11 +478,19 @@ const AutomationsComponent: FunctionComponent = () => {
         forceRefresh: true,
       });
       const installUrl = await getGithubInstallUrl(tokenResponse.idToken);
+      // The backend signs the redirect state with the requesting token's oid,
+      // so following this URL after an account switch would attach the GitHub
+      // installation to the account that is no longer signed in.
+      if (!stillSameAccount(startedAs)) {
+        return;
+      }
       window.location.href = installUrl;
     } catch (err) {
       console.error('Error starting repository install:', err);
-      toast.error('Could not start the GitHub App install.');
-      setInstalling(false);
+      if (stillSameAccount(startedAs)) {
+        toast.error('Could not start the GitHub App install.');
+        setInstalling(false);
+      }
     }
   };
 
