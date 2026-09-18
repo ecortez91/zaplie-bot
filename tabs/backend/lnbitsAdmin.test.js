@@ -6,6 +6,7 @@ const {
   getLnbitsToken,
   lnbitsGet,
 } = require('./lnbitsAdmin');
+const { REQUEST_TIMEOUT_MS: SHARED_TIMEOUT_MS } = require('./httpTimeout');
 
 const CONFIG = {
   nodeUrl: 'https://lnbits.test',
@@ -27,7 +28,9 @@ const captureFetch = (body) => {
 };
 
 test('the LNbits request timeout is shared, not redeclared per module', () => {
-  assert.equal(REQUEST_TIMEOUT_MS, 10 * 1000);
+  // Compared against the source constant, not a literal: a local redeclaration
+  // in lnbitsAdmin.js would drift from httpTimeout.js and still pass a literal.
+  assert.equal(REQUEST_TIMEOUT_MS, SHARED_TIMEOUT_MS);
 });
 
 test('the super-user login is bound by the request timeout', async () => {
