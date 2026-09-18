@@ -21,17 +21,23 @@ const migrateRewardAmounts = (rewardAmounts) => {
   );
 };
 
-const maxRewardSats = () => {
-  const configured = process.env.REWARDS_MAX_AMOUNT_SATS;
+// Every sats ceiling this backend reads is parsed here, so a malformed value
+// fails closed everywhere instead of silently widening one cap and rejecting
+// another. Shared with the LNbits gateway's ZAP_MAX_AMOUNT_SATS.
+const positiveIntFromEnv = (name, fallback) => {
+  const configured = process.env[name];
   if (configured === undefined || configured === '') {
-    return DEFAULT_MAX_REWARD_SATS;
+    return fallback;
   }
   const value = Number(configured);
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error('REWARDS_MAX_AMOUNT_SATS must be a positive integer');
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
   }
   return value;
 };
+
+const maxRewardSats = () =>
+  positiveIntFromEnv('REWARDS_MAX_AMOUNT_SATS', DEFAULT_MAX_REWARD_SATS);
 
 const validateRewardAmountPatch = (rewardAmounts) => {
   if (
@@ -73,5 +79,6 @@ module.exports = {
   DEFAULT_REWARD_AMOUNTS,
   migrateRewardAmounts,
   maxRewardSats,
+  positiveIntFromEnv,
   validateRewardAmountPatch,
 };

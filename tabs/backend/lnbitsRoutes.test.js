@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { after, before, test } = require('node:test');
 const express = require('express');
-const { createLnbitsRouter } = require('./lnbitsRoutes');
+const { createLnbitsRouter, parseAmount } = require('./lnbitsRoutes');
 
 const calls = [];
 const service = {
@@ -187,5 +187,81 @@ test('rejects pagination values that are not plain integers', async () => {
 
     assert.equal(response.status, 400);
     assert.equal(calls.length, callsBefore);
+  }
+});
+
+// The zap ceiling is ZAP_MAX_AMOUNT_SATS, not the reward ceiling.
+// REWARDS_MAX_AMOUNT_SATS bounds automated rewards only; reusing it here gave
+// this route a 1,000,000 default that contradicted its documented meaning.
+
+test('the reward cap no longer moves the zap ceiling', () => {
+  process.env.REWARDS_MAX_AMOUNT_SATS = '250';
+  try {
+    assert.equal(parseAmount(1000), 1000);
+    assert.equal(parseAmount(1_000_000), 1_000_000);
+    assert.equal(parseAmount(1_000_001), null);
+  } finally {
+    delete process.env.REWARDS_MAX_AMOUNT_SATS;
+  }
+});
+
+test('ZAP_MAX_AMOUNT_SATS narrows the zap ceiling', () => {
+  process.env.ZAP_MAX_AMOUNT_SATS = '500';
+  try {
+    assert.equal(parseAmount(500), 500);
+    assert.equal(parseAmount(501), null);
+  } finally {
+    delete process.env.ZAP_MAX_AMOUNT_SATS;
+  }
+});
+
+test('a malformed zap cap fails closed instead of widening the ceiling', async () => {
+  for (const malformed of ['not-a-number', '-1', '0', '1.5']) {
+    process.env.ZAP_MAX_AMOUNT_SATS = malformed;
+    try {
+      assert.throws(
+        () => createLnbitsRouter({ service, extractBearerToken, verifyMsalPayload }),
+        { message: 'ZAP_MAX_AMOUNT_SATS must be a positive integer' },
+      );
+    } finally {
+      delete process.env.ZAP_MAX_AMOUNT_SATS;
+    }
+  }
+});
+
+test('a narrowed zap cap is enforced over HTTP', async () => {
+  process.env.ZAP_MAX_AMOUNT_SATS = '250';
+  let cappedServer;
+  try {
+    const cappedApp = express();
+    cappedApp.use(express.json());
+    cappedApp.use(
+      '/api/lnbits',
+      createLnbitsRouter({ service, extractBearerToken, verifyMsalPayload }),
+    );
+    cappedServer = await new Promise((resolve) => {
+      const listener = cappedApp.listen(0, '127.0.0.1', () => resolve(listener));
+    });
+    const cappedUrl = `http://127.0.0.1:${cappedServer.address().port}`;
+    const send = (amount) =>
+      fetch(`${cappedUrl}/api/lnbits/zaps`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer valid-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ recipientUserId: 'user-2', amount, memo: 'capped' }),
+      });
+
+    const callsBefore = calls.length;
+    assert.equal((await send(251)).status, 400);
+    assert.equal(calls.length, callsBefore);
+    assert.equal((await send(250)).status, 200);
+    assert.deepEqual(calls.at(-1)[1].amount, 250);
+  } finally {
+    delete process.env.ZAP_MAX_AMOUNT_SATS;
+    if (cappedServer) {
+      await new Promise((resolve) => cappedServer.close(resolve));
+    }
   }
 });

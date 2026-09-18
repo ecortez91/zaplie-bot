@@ -184,8 +184,17 @@ created. Must be a positive integer; a failed grant is logged, not retried
 | Bot
 
 | `REWARDS_MAX_AMOUNT_SATS`
-| Upper bound in sats for a single reward (default 10000)
+| Upper bound in sats for a single automated reward (default 10000). A
+  malformed value fails closed — reward rules are rejected rather than accepted
+  under an unintended ceiling
 | Bot, Portal backend
+
+| `ZAP_MAX_AMOUNT_SATS`
+| Upper bound in sats for a single person-to-person zap or self-issued invoice
+  through the portal's LNbits gateway (default 1000000). Separate from
+  `REWARDS_MAX_AMOUNT_SATS`, which caps automated rewards only. A malformed
+  value fails closed: the portal backend refuses to start
+| Portal backend
 
 | `AAD_TENANT_ID`, `AAD_CLIENT_ID`
 | Entra tenant and app client id used to validate MSAL idTokens

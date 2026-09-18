@@ -4,6 +4,7 @@ const {
   extractBearerToken: defaultExtractBearerToken,
   verifyMsalPayload: defaultVerifyMsalPayload,
 } = require('./msalValidator');
+const { positiveIntFromEnv } = require('./rewardAmounts');
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const INVOICE_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
@@ -11,16 +12,22 @@ const BOLT11_PATTERN = /^ln[a-z0-9]+$/i;
 
 const validId = (value) => typeof value === 'string' && ID_PATTERN.test(value);
 
+// Zaps and self-issued invoices have their own ceiling. REWARDS_MAX_AMOUNT_SATS
+// is the automated-reward cap (default 10000) and reusing it here silently gave
+// this route a 1,000,000 default that no operator had asked for.
+const DEFAULT_ZAP_MAX_AMOUNT_SATS = 1_000_000;
+
+// Parsed with the reward parser, so a malformed value throws instead of falling
+// back to the default and widening the cap the operator meant to tighten.
+const zapMaxAmountSats = () =>
+  positiveIntFromEnv('ZAP_MAX_AMOUNT_SATS', DEFAULT_ZAP_MAX_AMOUNT_SATS);
+
 // Only a real JSON number is an amount. `Number()` would turn `true` into 1 and
 // `['5']` into 5, which are not integer amount inputs.
-const parseAmount = (value) => {
+const parseAmount = (value, max = zapMaxAmountSats()) => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
     return null;
   }
-  const configuredMax = Number(process.env.REWARDS_MAX_AMOUNT_SATS);
-  const max = Number.isSafeInteger(configuredMax) && configuredMax > 0
-    ? configuredMax
-    : 1_000_000;
   return value > 0 && value <= max ? value : null;
 };
 
@@ -51,6 +58,9 @@ const createLnbitsRouter = ({
   extractBearerToken = defaultExtractBearerToken,
   verifyMsalPayload = defaultVerifyMsalPayload,
 } = {}) => {
+  // Read once, at startup: a malformed cap refuses to start the backend rather
+  // than letting it serve requests under a ceiling nobody chose.
+  const maxAmountSats = zapMaxAmountSats();
   const router = express.Router();
 
   router.use(async (req, res, next) => {
@@ -166,7 +176,7 @@ const createLnbitsRouter = ({
   }));
 
   router.post('/wallets/:walletId/invoices', asyncRoute(async (req, res) => {
-    const amount = parseAmount(req.body?.amount);
+    const amount = parseAmount(req.body?.amount, maxAmountSats);
     const memo = parseMemo(req.body?.memo);
     if (!validId(req.params.walletId) || amount === null || memo === null) {
       res.status(400).json({ error: 'invalid invoice request' });
@@ -202,7 +212,7 @@ const createLnbitsRouter = ({
   }));
 
   router.post('/zaps', asyncRoute(async (req, res) => {
-    const amount = parseAmount(req.body?.amount);
+    const amount = parseAmount(req.body?.amount, maxAmountSats);
     const memo = parseMemo(req.body?.memo);
     if (!validId(req.body?.recipientUserId) || amount === null || memo === null) {
       res.status(400).json({ error: 'invalid zap request' });
