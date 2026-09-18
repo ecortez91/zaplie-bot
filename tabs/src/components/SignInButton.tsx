@@ -8,10 +8,15 @@ import { loginRequest } from '../services/authConfig';
 export const SignInButton = () => {
   const { instance, inProgress } = useMsal();
   const [error, setError] = useState<string | null>(null);
+  // Teams runs its own popup, so MSAL's inProgress stays None in the host
+  // window. Without this the button stays live and a second click opens a
+  // second popup.
+  const [teamsSignInPending, setTeamsSignInPending] = useState(false);
+  const busy = inProgress !== InteractionStatus.None || teamsSignInPending;
 
   const handleLogin = async () => {
     setError(null);
-    if (inProgress !== InteractionStatus.None) {
+    if (busy) {
       setError('Sign-in is already in progress.');
       return;
     }
@@ -23,6 +28,7 @@ export const SignInButton = () => {
       new URLSearchParams(window.location.search).has('inTeams');
 
     if (isInTeams) {
+      setTeamsSignInPending(true);
       try {
         await microsoftTeams.app.initialize();
         await microsoftTeams.app.getContext();
@@ -48,6 +54,8 @@ export const SignInButton = () => {
         });
       } catch {
         setError('We could not sign you in. Please try again.');
+      } finally {
+        setTeamsSignInPending(false);
       }
       return;
     }
@@ -65,11 +73,9 @@ export const SignInButton = () => {
   return (
     <div>
       <DefaultButton
-        text={
-          inProgress !== InteractionStatus.None ? 'Signing In...' : 'Sign In'
-        }
+        text={busy ? 'Signing In...' : 'Sign In'}
         onClick={handleLogin}
-        disabled={inProgress !== InteractionStatus.None}
+        disabled={busy}
         styles={{
           root: {
             color: 'black',

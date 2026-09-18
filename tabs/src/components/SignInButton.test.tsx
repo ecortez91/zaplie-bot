@@ -151,6 +151,40 @@ describe('SignInButton', () => {
     );
   });
 
+  test('disables itself while the Teams popup is open so a second click cannot open a second popup', async () => {
+    const account = { homeAccountId: 'account-1' };
+    window.history.replaceState({}, '', '/login?inTeams=1');
+    mockTeamsInitialize.mockImplementation(async () => undefined);
+    mockGetContext.mockImplementation(async () => ({}) as never);
+    mockGetAllAccounts.mockReturnValue([account]);
+
+    // MSAL's inProgress stays None in the host window, so only the component's
+    // own busy state can hold the button shut while Teams owns the popup.
+    let releaseAuthenticate: (() => void) | undefined;
+    mockAuthenticate.mockImplementation(
+      () =>
+        new Promise<string>(resolve => {
+          releaseAuthenticate = () => resolve('auth-success');
+        }),
+    );
+
+    await renderButton();
+    await clickSignIn();
+
+    const button = container.querySelector('button');
+    expect(button?.disabled).toBe(true);
+    expect(button?.textContent).toContain('Signing In...');
+
+    await clickSignIn();
+    expect(mockAuthenticate).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseAuthenticate?.();
+    });
+
+    expect(container.querySelector('button')?.disabled).toBe(false);
+  });
+
   test('renders an error instead of leaving the Teams authentication flow', async () => {
     window.history.replaceState({}, '', '/login?inTeams=1');
     mockTeamsInitialize.mockRejectedValue(new Error('Teams unavailable'));

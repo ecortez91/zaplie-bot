@@ -12,7 +12,6 @@ import { useMsal } from '@azure/msal-react';
 import * as microsoftTeams from '@microsoft/teams-js';
 import AuthEnd, {
   AUTH_FLOW_STORAGE_KEY,
-  postAuthSignal,
   resolveSameOriginRedirect,
 } from './AuthEnd';
 
@@ -110,31 +109,6 @@ describe('AuthEnd', () => {
     );
   });
 
-  test('posts a minimal signal only to an open opener', () => {
-    const postMessage = jest.fn();
-    const focus = jest.fn();
-    const opener = {
-      closed: false,
-      postMessage,
-      focus,
-    } as unknown as Window;
-
-    expect(
-      postAuthSignal(opener, 'auth-success', 'https://portal.example'),
-    ).toBe(true);
-    expect(postMessage).toHaveBeenCalledWith(
-      { type: 'auth-success' },
-      'https://portal.example',
-    );
-    expect(focus).toHaveBeenCalledTimes(1);
-    expect(
-      postAuthSignal(
-        { ...opener, closed: true } as unknown as Window,
-        'auth-success',
-      ),
-    ).toBe(false);
-  });
-
   test('completes Teams authentication without returning an MSAL response', async () => {
     const account = { homeAccountId: 'account-1' };
     sessionStorage.setItem(
@@ -155,13 +129,20 @@ describe('AuthEnd', () => {
     expect(sessionStorage.getItem(AUTH_FLOW_STORAGE_KEY)).toBeNull();
   });
 
-  test('shows a useful error when authentication cannot complete', async () => {
+  test('shows a useful error and a way back when authentication cannot complete', async () => {
+    sessionStorage.setItem(
+      AUTH_FLOW_STORAGE_KEY,
+      JSON.stringify({ redirectUrl: `${window.location.origin}/feed` }),
+    );
     mockHandleRedirectPromise.mockRejectedValue(new Error('redirect failed'));
 
     await renderAuthEnd();
 
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
       'We could not complete sign-in. Close this window and try again.',
+    );
+    expect(container.querySelector('a')?.getAttribute('href')).toBe(
+      `${window.location.origin}/feed`,
     );
   });
 });

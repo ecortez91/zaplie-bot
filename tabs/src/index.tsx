@@ -41,10 +41,15 @@ const renderApp = (msalInstance: PublicClientApplication) => {
   );
 };
 
-const renderStartupError = () => {
+// The message only ever names missing configuration (never its value), so it
+// is safe to show: without it a misconfigured deployment is a blank error.
+const renderStartupError = (error: unknown) => {
+  const detail = error instanceof Error ? error.message : null;
+
   root.render(
     <main role="alert">
       <h1>Zaplie could not start</h1>
+      {detail && <p>{detail}</p>}
       <p>Reload the page to try signing in again.</p>
       <button type="button" onClick={() => window.location.reload()}>
         Reload
@@ -53,10 +58,24 @@ const renderStartupError = () => {
   );
 };
 
-const initializeApp = async () => {
+export const initializeApp = async () => {
+  let msalInstance: PublicClientApplication;
+
+  // Only a broken MSAL instance is fatal: without one there is no app to show.
   try {
-    const msalInstance = getMsalInstance();
+    msalInstance = getMsalInstance();
     await msalInstance.initialize();
+  } catch (error) {
+    console.error('Zaplie startup failed', error);
+    renderStartupError(error);
+    return;
+  }
+
+  // A rejected redirect is not fatal. Declining consent lands on
+  // /auth-end?error=access_denied, and AuthEnd still has to mount so it can
+  // call notifyFailure -- replacing the SPA with a startup error would leave
+  // the Teams authentication popup hanging until it is closed by hand.
+  try {
     const response = await msalInstance.handleRedirectPromise();
     if (response) {
       msalInstance.setActiveAccount(response.account);
@@ -66,18 +85,19 @@ const initializeApp = async () => {
         msalInstance.setActiveAccount(accounts[0]);
       }
     }
-
-    msalInstance.addEventCallback((event: EventMessage) => {
-      if (event.eventType === EventType.LOGIN_SUCCESS && event.payload) {
-        const payload = event.payload as AuthenticationResult;
-        msalInstance.setActiveAccount(payload.account);
-      }
-    });
-
-    renderApp(msalInstance);
-  } catch {
-    renderStartupError();
+  } catch (error) {
+    console.error('Zaplie could not complete the sign-in redirect', error);
   }
+
+  msalInstance.addEventCallback((event: EventMessage) => {
+    if (event.eventType === EventType.LOGIN_SUCCESS && event.payload) {
+      const payload = event.payload as AuthenticationResult;
+      msalInstance.setActiveAccount(payload.account);
+    }
+  });
+
+  renderApp(msalInstance);
 };
 
-void initializeApp();
+// Exported so the startup sequence can be awaited in tests.
+export const startupComplete = initializeApp();

@@ -32,24 +32,6 @@ export const resolveSameOriginRedirect = (
   }
 };
 
-export const postAuthSignal = (
-  opener: Window | null,
-  signal: AuthSignal,
-  origin = window.location.origin,
-): boolean => {
-  if (!opener || opener.closed) {
-    return false;
-  }
-
-  try {
-    opener.postMessage({ type: signal }, origin);
-    opener.focus();
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 const readAuthFlow = (): AuthFlow => {
   const params = new URLSearchParams(window.location.search);
   let stored: StoredAuthFlow = {};
@@ -93,6 +75,7 @@ const notifyTeams = async (signal: AuthSignal): Promise<boolean> => {
 const AuthEnd: React.FC = () => {
   const { instance } = useMsal();
   const [error, setError] = useState<string | null>(null);
+  const [returnUrl, setReturnUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -111,7 +94,6 @@ const AuthEnd: React.FC = () => {
         }
 
         instance.setActiveAccount(account);
-        postAuthSignal(window.opener, 'auth-success');
 
         if (flow.teamsAuth && (await notifyTeams('auth-success'))) {
           return;
@@ -126,11 +108,13 @@ const AuthEnd: React.FC = () => {
 
         window.location.assign(flow.redirectUrl);
       } catch {
-        postAuthSignal(window.opener, 'auth-error');
         if (flow.teamsAuth && (await notifyTeams('auth-error'))) {
           return;
         }
         if (active) {
+          // Outside Teams there is no popup to close, so offer the way back
+          // rather than stranding the user on /auth-end.
+          setReturnUrl(flow.redirectUrl);
           setError(
             'We could not complete sign-in. Close this window and try again.',
           );
@@ -148,6 +132,7 @@ const AuthEnd: React.FC = () => {
     <main>
       <h1>Completing authentication...</h1>
       {error && <p role="alert">{error}</p>}
+      {error && returnUrl && <a href={returnUrl}>Return to Zaplie</a>}
     </main>
   );
 };
