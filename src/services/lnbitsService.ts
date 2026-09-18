@@ -469,6 +469,31 @@ const getWalletName = async (inKey: string) => {
   }
 };
 
+// A stalled LNbits response must not hold a turn open forever: the leaderboard
+// awaits every payment read, so one hung request would make the whole answer
+// unavailable rather than slow. Node 24 (the declared runtime) has this API.
+const LNBITS_REQUEST_TIMEOUT_MS = 30000;
+
+// Payment listings are paged. These reads are exported, so validate the page
+// before it reaches the query string: a fractional, negative or non-finite
+// value would otherwise be pasted into the URL and answered with whatever
+// LNbits makes of it, which is indistinguishable from a genuinely short page
+// and so reads as "no more payments".
+const MAX_PAGE_SIZE = 10000;
+
+const requirePageBounds = (limit: number, offset: number): void => {
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
+    throw new Error(
+      `Invalid payments page limit: ${limit} (expected an integer 1-${MAX_PAGE_SIZE})`,
+    );
+  }
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error(
+      `Invalid payments page offset: ${offset} (expected an integer >= 0)`,
+    );
+  }
+};
+
 // `limit`/`offset` are the page LNbits applies to this wallet's payment list.
 // `limit` defaults to the historical 100, but a caller that aggregates a
 // wallet's whole history (see zapHistoryService) must page or it undercounts.
@@ -482,6 +507,7 @@ const getPayments = async (
   limit = 100,
   offset = 0,
 ): Promise<Transaction[]> => {
+  requirePageBounds(limit, offset);
   console.log(`getPayments starting ... (limit: ${limit}, offset: ${offset})`);
 
   const response = await fetch(
@@ -492,6 +518,7 @@ const getPayments = async (
         'Content-Type': 'application/json',
         'X-Api-Key': inKey,
       },
+      signal: AbortSignal.timeout(LNBITS_REQUEST_TIMEOUT_MS),
     },
   );
 
@@ -522,6 +549,7 @@ const getAllPaymentsPage = async (
   limit: number,
   offset: number,
 ): Promise<Transaction[]> => {
+  requirePageBounds(limit, offset);
   const query = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
@@ -530,7 +558,7 @@ const getAllPaymentsPage = async (
   });
   const response = await adminFetch(
     `/api/v1/payments/all/paginated?${query.toString()}`,
-    { method: 'GET' },
+    { method: 'GET', signal: AbortSignal.timeout(LNBITS_REQUEST_TIMEOUT_MS) },
   );
 
   if ([401, 403, 404, 405].includes(response.status)) {
