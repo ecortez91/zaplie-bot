@@ -226,6 +226,10 @@ const AutomationsComponent: FunctionComponent = () => {
         setStatsError(false);
       } else {
         console.error('Error fetching automations stats:', statsData.reason);
+        // Drop the previous summary too: the render path checks `stats` first,
+        // so stale recipients and history would otherwise sit there looking
+        // current while the refresh that replaced them had actually failed.
+        setStats(null);
         setStatsError(true);
       }
 
