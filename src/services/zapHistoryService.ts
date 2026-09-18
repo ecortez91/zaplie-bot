@@ -37,6 +37,34 @@ const parseTransactionTime = (timestamp: number | string): Date | null => {
 const cleanCheckingId = (checkingId: string | undefined): string =>
   checkingId?.replace('internal_', '') || '';
 
+// A team-wide read fans out one LNbits request per user and one per relevant
+// wallet, so an unbounded Promise.all grows with head-count and can exhaust the
+// connection pool or trip LNbits' rate limiter. Cap the in-flight requests
+// instead: still parallel, but with a ceiling that does not depend on team size.
+export const MAX_CONCURRENT_LNBITS_REQUESTS = 8;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  // Each worker drains the shared queue; a rejection propagates exactly as it
+  // would from Promise.all, so caller-visible error behaviour is unchanged.
+  const worker = async (): Promise<void> => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
+}
+
 export interface ZapActivity {
   from: User | null;
   to: User | null;
@@ -63,11 +91,13 @@ export async function getRecentZaps(
     return [];
   }
 
-  const walletsByUser = await Promise.all(
-    users.map(async user => ({
+  const walletsByUser = await mapWithConcurrency(
+    users,
+    MAX_CONCURRENT_LNBITS_REQUESTS,
+    async user => ({
       user,
       wallets: (await getUserWallets(adminKey, user.id)) || [],
-    })),
+    }),
   );
 
   const walletToUser = new Map<string, User>();
@@ -90,8 +120,10 @@ export async function getRecentZaps(
 
   const allowanceWalletIds = new Set(allowanceWallets.map(w => w.id));
 
-  const paymentsPerWallet = await Promise.all(
-    relevantWallets.map(async wallet => {
+  const paymentsPerWallet = await mapWithConcurrency(
+    relevantWallets,
+    MAX_CONCURRENT_LNBITS_REQUESTS,
+    async wallet => {
       try {
         const payments = await getPayments(wallet.inkey);
         return (payments || []) as Transaction[];
@@ -102,7 +134,7 @@ export async function getRecentZaps(
         );
         return [] as Transaction[];
       }
-    }),
+    },
   );
 
   // tsconfig targets es2017, so flatten without Array.prototype.flat (es2019).

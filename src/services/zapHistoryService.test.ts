@@ -4,7 +4,11 @@
 // zapHistoryService itself — the matching/filtering logic being tested here
 // lives entirely in zapHistoryService.
 
-import { getRecentZaps, getZapLeaderboard } from './zapHistoryService';
+import {
+  getRecentZaps,
+  getZapLeaderboard,
+  MAX_CONCURRENT_LNBITS_REQUESTS,
+} from './zapHistoryService';
 import { getUsers, getUserWallets, getPayments } from './lnbitsService';
 import { expect, describe, test, beforeEach, jest } from '@jest/globals';
 
@@ -494,5 +498,84 @@ describe('getZapLeaderboard', () => {
       'Alice',
       'Bob',
     ]);
+  });
+});
+
+describe('LNbits request fan-out', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    for (const key of Object.keys(walletsByInkey)) {
+      delete walletsByInkey[key];
+    }
+  });
+
+  test('keeps in-flight wallet and payment reads under the concurrency cap', async () => {
+    const teamSize = MAX_CONCURRENT_LNBITS_REQUESTS * 4;
+    const users: User[] = Array.from(
+      { length: teamSize },
+      (_unused, index) => ({
+        id: `user-${index}`,
+        displayName: `User ${index}`,
+        profileImg: '',
+        aadObjectId: `aad-${index}`,
+        email: `user${index}@example.com`,
+        privateWallet: null,
+        allowanceWallet: null,
+      }),
+    );
+
+    let walletReadsInFlight = 0;
+    let peakWalletReads = 0;
+    let paymentReadsInFlight = 0;
+    let peakPaymentReads = 0;
+
+    mockGetUsers.mockResolvedValue(users);
+    mockGetUserWallets.mockImplementation(async (_adminKey, userId) => {
+      walletReadsInFlight += 1;
+      peakWalletReads = Math.max(peakWalletReads, walletReadsInFlight);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      walletReadsInFlight -= 1;
+      return [
+        {
+          id: `w-${userId}-allow`,
+          admin: '',
+          name: 'Allowance',
+          user: userId,
+          adminkey: `adm-${userId}-allow`,
+          inkey: `ink-${userId}-allow`,
+          balance_msat: 0,
+          deleted: false,
+        },
+        {
+          id: `w-${userId}-priv`,
+          admin: '',
+          name: 'Private',
+          user: userId,
+          adminkey: `adm-${userId}-priv`,
+          inkey: `ink-${userId}-priv`,
+          balance_msat: 0,
+          deleted: false,
+        },
+      ];
+    });
+    mockGetPayments.mockImplementation(async () => {
+      paymentReadsInFlight += 1;
+      peakPaymentReads = Math.max(peakPaymentReads, paymentReadsInFlight);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      paymentReadsInFlight -= 1;
+      return [];
+    });
+
+    await getRecentZaps();
+
+    expect(mockGetUserWallets).toHaveBeenCalledTimes(teamSize);
+    expect(mockGetPayments).toHaveBeenCalledTimes(teamSize * 2);
+    expect(peakWalletReads).toBeLessThanOrEqual(MAX_CONCURRENT_LNBITS_REQUESTS);
+    expect(peakPaymentReads).toBeLessThanOrEqual(
+      MAX_CONCURRENT_LNBITS_REQUESTS,
+    );
+    // Still parallel, not one-at-a-time.
+    expect(peakWalletReads).toBeGreaterThan(1);
+    expect(peakPaymentReads).toBeGreaterThan(1);
   });
 });
