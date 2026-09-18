@@ -8,8 +8,13 @@
 
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import type { TurnContext } from 'botbuilder';
-import { SendZapCommand, buildZapReceiptCard } from './sendZapCommand';
-import { getUsers } from '../services/lnbitsService';
+import { SendZap, SendZapCommand, buildZapReceiptCard } from './sendZapCommand';
+import {
+  createInvoice,
+  getUsers,
+  getWalletBalance,
+  payInvoice,
+} from '../services/lnbitsService';
 import { GENERIC_ERROR_MESSAGE } from '../messages';
 
 jest.mock('../services/lnbitsService');
@@ -64,6 +69,79 @@ const baseReceipt = {
   remainingBalance: 979,
   rewardName: 'Sats',
 };
+
+describe('SendZap after the payment settles', () => {
+  const sender = {
+    id: 'user-1',
+    displayName: 'Alice',
+    allowanceWallet: { id: 'w-alice', inkey: 'inkey-alice', adminkey: 'adm' },
+  } as never;
+  const receiver = {
+    id: 'user-2',
+    displayName: 'Bob',
+    privateWallet: { id: 'w-bob', inkey: 'inkey-bob' },
+  } as never;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('a failed receipt card never turns a settled payment into a retryable error', async () => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    jest.mocked(createInvoice).mockResolvedValue('lnbc-payment-request');
+    jest
+      .mocked(payInvoice)
+      .mockResolvedValue({ payment_hash: 'hash-bob' } as never);
+    // The balance read is presentation only, and it is the first thing the
+    // receipt update does. Before this fix its failure escaped as a plain
+    // Error, which zapRecipient reads as "never reached LNbits" and releases -
+    // letting a resubmit pay Bob a second time.
+    jest
+      .mocked(getWalletBalance)
+      .mockRejectedValue(new Error('LNbits balance read failed'));
+
+    const updateActivity = jest
+      .fn<() => Promise<void>>()
+      .mockResolvedValue(undefined);
+    const context = {
+      activity: { replyToId: 'card-1' },
+      updateActivity,
+    } as unknown as TurnContext;
+
+    await expect(
+      SendZap(sender, receiver, 'nice work', 21, context, true, 'Sats'),
+    ).resolves.toEqual({ paymentHash: 'hash-bob' });
+    expect(updateActivity).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('receipt card could not be updated'),
+      expect.any(Error),
+    );
+  });
+
+  test('a card update failure is logged, not thrown', async () => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.mocked(createInvoice).mockResolvedValue('lnbc-payment-request');
+    jest
+      .mocked(payInvoice)
+      .mockResolvedValue({ payment_hash: 'hash-bob' } as never);
+    jest.mocked(getWalletBalance).mockResolvedValue(979 as never);
+
+    const context = {
+      activity: { replyToId: 'card-1' },
+      updateActivity: jest
+        .fn<() => Promise<void>>()
+        .mockRejectedValue(new Error('Teams rejected the card update')),
+    } as unknown as TurnContext;
+
+    await expect(
+      SendZap(sender, receiver, 'nice work', 21, context, true, 'Sats'),
+    ).resolves.toEqual({ paymentHash: 'hash-bob' });
+  });
+});
 
 describe('SendZapCommand error hygiene', () => {
   afterEach(() => {

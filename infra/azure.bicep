@@ -31,8 +31,10 @@ resource serverfarm 'Microsoft.Web/serverfarms@2021-02-01' = {
   name: serverfarmsName
   sku: {
     name: webAppSKU
-    // Token-exchange deduplication and the zap-card ledger
-    // (src/services/zapLedger.ts) use in-memory storage.
+    // Token-exchange deduplication is in-memory, so the plan stays at one
+    // instance. The zap-card ledger (src/services/zapLedger.ts) is durable and
+    // coordinates processes through a lock file, but only across a shared
+    // filesystem - scaling out needs shared storage for ZAPLIE_DATA_DIR.
     capacity: 1
   }
 }
@@ -47,25 +49,13 @@ resource webApp 'Microsoft.Web/sites@2021-02-01' = {
     httpsOnly: true
     siteConfig: {
       alwaysOn: true
-      appSettings: [
-        {
-          name: 'WEBSITE_NODE_DEFAULT_VERSION'
-          value: '~24' // Set NodeJS version to 24.x for your site
-        }
-        {
-          name: 'WEBSITE_RUN_FROM_PACKAGE'
-          value: '1'
-        }
-        {
-          name: 'RUNNING_ON_AZURE'
-          value: '1'
-        }
-      ]
       ftpsState: 'FtpsOnly'
     }
   }
 }
 
+// Sole source of app settings: this child resource replaces the site's entire
+// appSettings collection on deploy, so anything declared inline above is lost.
 resource webAppSettings 'Microsoft.Web/sites/config@2021-02-01' = {
   name: '${webAppName}/appsettings'
   properties: {
@@ -79,6 +69,14 @@ resource webAppSettings 'Microsoft.Web/sites/config@2021-02-01' = {
     AAD_APP_TENANT_ID: aadAppTenantId
     AAD_APP_OAUTH_AUTHORITY_HOST: aadAppOauthAuthorityHost
     RUNNING_ON_AZURE: '1'
+    NODE_ENV: 'production'
+    // The App Service persistent share, outside wwwroot so a clean deploy
+    // cannot wipe the zap ledger and reintroduce double payments. %HOME% is
+    // deliberate: App Service passes app settings through verbatim, so the bot
+    // expands this token itself (src/services/dataDir.ts) and lands on
+    // D:\home on older Windows stamps, C:\home on newer ones and /home on
+    // Linux - a hard-coded drive letter breaks when the app moves stamp.
+    ZAPLIE_DATA_DIR: '%HOME%\\data\\zaplie'
   }
 }
 
