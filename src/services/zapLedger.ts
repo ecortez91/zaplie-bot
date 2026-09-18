@@ -234,6 +234,25 @@ const sweepStaleTemporaries = async (storePath: string): Promise<void> => {
   }
 };
 
+// fsync of the file only guarantees its contents. On POSIX the rename itself
+// is a directory update, and without syncing the directory a power loss can
+// restore the old entry - losing a `paid` record that markPaid already
+// returned, which a later retry would pay again. Failures are deliberately not
+// caught: a durability operation that failed must fail the write. Windows has
+// no directory handle to sync (opening one fails outright) and MoveFileEx is
+// already ordered by the filesystem, so the step is skipped there.
+const syncDirectory = async (directory: string): Promise<void> => {
+  if (process.platform === 'win32') {
+    return;
+  }
+  const handle = await fs.promises.open(directory, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+};
+
 const replaceStoreFile = async (
   tempPath: string,
   storePath: string,
@@ -241,6 +260,7 @@ const replaceStoreFile = async (
   for (let attempt = 1; ; attempt += 1) {
     try {
       await fs.promises.rename(tempPath, storePath);
+      await syncDirectory(path.dirname(storePath));
       return;
     } catch (error) {
       const transient =

@@ -256,6 +256,82 @@ describe('ZapLedger durability and concurrency', () => {
     });
   });
 
+  const posixOnly = process.platform === 'win32' ? test.skip : test;
+
+  posixOnly(
+    'the rename is made durable by syncing the containing directory',
+    async () => {
+      const storePath = newStorePath();
+      const ledger = new ZapLedger({ storePath });
+      const directory = path.dirname(storePath);
+
+      const open = fs.promises.open;
+      const synced: string[] = [];
+      const spy = jest
+        .spyOn(fs.promises, 'open')
+        .mockImplementation(async (target, ...rest) => {
+          const handle = await (
+            open as unknown as (
+              ...args: unknown[]
+            ) => Promise<fs.promises.FileHandle>
+          )(target, ...rest);
+          const sync = handle.sync.bind(handle);
+          handle.sync = async () => {
+            synced.push(String(target));
+            return sync();
+          };
+          return handle;
+        });
+
+      try {
+        await ledger.tryAcquire(key('alice'));
+      } finally {
+        spy.mockRestore();
+      }
+
+      // The temporary is synced for its contents; the directory is synced so
+      // the rename that publishes it survives a power loss too.
+      expect(synced).toContain(directory);
+    },
+  );
+
+  posixOnly(
+    'a directory sync failure fails the write closed, never silently',
+    async () => {
+      const storePath = newStorePath();
+      const ledger = new ZapLedger({ storePath });
+      const directory = path.dirname(storePath);
+
+      const open = fs.promises.open;
+      const spy = jest
+        .spyOn(fs.promises, 'open')
+        .mockImplementation(async (target, ...rest) => {
+          if (String(target) === directory) {
+            throw Object.assign(new Error('EIO: i/o error, open'), {
+              code: 'EIO',
+            });
+          }
+          return (
+            open as unknown as (
+              ...args: unknown[]
+            ) => Promise<fs.promises.FileHandle>
+          )(target, ...rest);
+        });
+
+      try {
+        await expect(ledger.tryAcquire(key('alice'))).rejects.toThrow(
+          'Zap ledger data could not be persisted',
+        );
+      } finally {
+        spy.mockRestore();
+      }
+
+      // Durability was not confirmed, so the slot stays taken rather than
+      // handing a retry permission to pay.
+      await expect(ledger.tryAcquire(key('alice'))).resolves.toBe(false);
+    },
+  );
+
   test('a Windows sharing violation on rename is retried, not left processing', async () => {
     const storePath = newStorePath();
     const ledger = new ZapLedger({ storePath });
