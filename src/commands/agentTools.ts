@@ -16,6 +16,7 @@ import {
   CONNECT_CALENDAR_COMMAND,
   getStoredGraphToken,
 } from './connectCalendarCommand';
+import { isRecord } from '../utils/typeGuards';
 
 const adminKey = process.env.LNBITS_ADMINKEY as string;
 const rewardLabel = process.env.LNBITS_POINTS_LABEL as string;
@@ -41,28 +42,40 @@ const LEADERBOARD_DAYS_PARAMETER = {
     `A whole number from 1 to ${MAX_LEADERBOARD_DAYS}. Omit for all-time totals.`,
 };
 
-interface LeaderboardArgs {
-  days?: number;
-}
-
 // The model composes these arguments itself, and the runner hands them to the
 // tool as parsed JSON without checking them against the schema — so the schema
-// documents the contract, it does not enforce it.
-//
+// documents the contract, it does not enforce it. Every handler therefore
+// takes `unknown` and narrows here.
+const toolArgs = (args: unknown): Record<string, unknown> =>
+  isRecord(args) ? args : {};
+
+// An argument the tool does not implement is a misunderstanding, not a
+// harmless extra: ignoring it answers a question nobody asked while the model
+// believes its filter was applied. Naming it lets the assistant correct itself.
+const unknownArgumentsError = (
+  toolName: string,
+  args: Record<string, unknown>,
+  allowed: readonly string[],
+): string | undefined => {
+  const unknown = Object.keys(args).filter(key => !allowed.includes(key));
+  if (unknown.length === 0) return undefined;
+  return (
+    `Unknown argument(s): ${unknown.join(', ')}. ` +
+    `${toolName} accepts ${allowed.length === 0 ? 'no arguments' : allowed.map(key => `"${key}"`).join(', ')} and nothing else.`
+  );
+};
+
 // Rejecting beats clamping here. Clamping 400 to 365 would answer a different
 // question than the one asked while the reply still names the asked-for window,
 // which is a wrong number stated confidently — the failure this PR exists to
 // remove. An error lets the assistant ask again or say what it can do.
-const leaderboardArgsError = (args: LeaderboardArgs): string | undefined => {
-  const unknown = Object.keys(args || {}).filter(key => key !== 'days');
-  if (unknown.length > 0) {
-    return (
-      `Unknown argument(s): ${unknown.join(', ')}. ` +
-      'get_leaderboard accepts an optional "days" and nothing else.'
-    );
-  }
+const leaderboardArgsError = (
+  args: Record<string, unknown>,
+): string | undefined => {
+  const unknown = unknownArgumentsError('get_leaderboard', args, ['days']);
+  if (unknown) return unknown;
 
-  const days = args?.days;
+  const days = args.days;
   if (days === undefined || days === null) return undefined;
   if (typeof days !== 'number' || !Number.isInteger(days)) {
     return (
@@ -98,16 +111,34 @@ const DAYS_PARAMETER = {
   description: 'Look-back window in days. Defaults to 7, capped at 30.',
 };
 
-const clampDays = (days?: number): number =>
-  typeof days === 'number' && Number.isFinite(days)
-    ? Math.min(Math.max(Math.floor(days), 1), 30)
-    : 7;
+// Unlike the leaderboard, these tools report the window they actually
+// measured back to the model (`periodDays`), so a clamped value can never be
+// quoted as the asked-for one. A non-integer or non-finite value is not
+// clamped, though: NaN used to survive Math.min/Math.max and reach the query,
+// and a fraction reached Array.prototype.slice.
+const clampWholeNumber = (
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number =>
+  typeof value === 'number' && Number.isInteger(value)
+    ? Math.min(Math.max(value, min), max)
+    : fallback;
 
 const getMyBalanceTool: ToolDefinition = {
   name: 'get_my_balance',
   description: "Get the current user's Allowance and Private wallet balances.",
-  parameters: { type: 'object', properties: {}, required: [] },
-  handler: async (_args, turnContext: TurnContext) => {
+  parameters: {
+    type: 'object',
+    properties: {},
+    required: [],
+    additionalProperties: false,
+  },
+  handler: async (args: unknown, turnContext: TurnContext) => {
+    const error = unknownArgumentsError('get_my_balance', toolArgs(args), []);
+    if (error) return { error };
+
     const user = turnContext.turnState.get('user') as User;
     const wallets = await getUserWallets(adminKey, user.id);
     return {
@@ -131,13 +162,14 @@ const getLeaderboardTool: ToolDefinition = {
     required: [],
     additionalProperties: false,
   },
-  handler: async (args: LeaderboardArgs) => {
-    const error = leaderboardArgsError(args || {});
+  handler: async (args: unknown) => {
+    const options = toolArgs(args);
+    const error = leaderboardArgsError(options);
     if (error) return { error };
 
     // One validated value drives both the query and the reported window, so the
     // period the assistant quotes is always the period that was measured.
-    const periodDays = args?.days ?? null;
+    const periodDays = (options.days as number | undefined) ?? null;
     const sinceTimestamp =
       periodDays === null
         ? undefined
@@ -176,19 +208,22 @@ const getRecentActivityTool: ToolDefinition = {
       },
     },
     required: [],
+    additionalProperties: false,
   },
-  handler: async (
-    args: { limit?: number; onlyInvolvingMe?: boolean },
-    turnContext: TurnContext,
-  ) => {
+  handler: async (args: unknown, turnContext: TurnContext) => {
+    const options = toolArgs(args);
+    const error = unknownArgumentsError('get_recent_activity', options, [
+      'limit',
+      'onlyInvolvingMe',
+    ]);
+    if (error) return { error };
+
     const user = turnContext.turnState.get('user') as User;
-    const limit =
-      typeof args.limit === 'number'
-        ? Math.min(Math.max(args.limit, 1), 50)
-        : 20;
+    const limit = clampWholeNumber(options.limit, 20, 1, 50);
     const activity = await getZapActivity({
       limit,
-      userAadObjectId: args.onlyInvolvingMe ? user.aadObjectId : undefined,
+      userAadObjectId:
+        options.onlyInvolvingMe === true ? user.aadObjectId : undefined,
     });
     return {
       rewardLabel,
@@ -214,8 +249,15 @@ const getRecentMeetingsTool: ToolDefinition = {
     type: 'object',
     properties: { days: DAYS_PARAMETER },
     required: [],
+    additionalProperties: false,
   },
-  handler: async (args: { days?: number }, turnContext: TurnContext) => {
+  handler: async (args: unknown, turnContext: TurnContext) => {
+    const options = toolArgs(args);
+    const error = unknownArgumentsError('get_recent_meetings', options, [
+      'days',
+    ]);
+    if (error) return { error };
+
     const token = await getStoredGraphToken(turnContext);
     if (!token) {
       return {
@@ -223,7 +265,7 @@ const getRecentMeetingsTool: ToolDefinition = {
         message: `Ask the user to type "${CONNECT_CALENDAR_COMMAND}" before using work signals.`,
       };
     }
-    const periodDays = clampDays(args.days);
+    const periodDays = clampWholeNumber(options.days, 7, 1, 30);
     return {
       connected: true,
       periodDays,
@@ -237,8 +279,20 @@ const getFrequentCollaboratorsTool: ToolDefinition = {
   description:
     'Get people most relevant to the current user across Microsoft 365 communication signals. ' +
     'No message content is returned. Combine with get_recent_activity when suggesting recognition.',
-  parameters: { type: 'object', properties: {}, required: [] },
-  handler: async (_args, turnContext: TurnContext) => {
+  parameters: {
+    type: 'object',
+    properties: {},
+    required: [],
+    additionalProperties: false,
+  },
+  handler: async (args: unknown, turnContext: TurnContext) => {
+    const error = unknownArgumentsError(
+      'get_frequent_collaborators',
+      toolArgs(args),
+      [],
+    );
+    if (error) return { error };
+
     const token = await getStoredGraphToken(turnContext);
     if (!token) {
       return {

@@ -19,6 +19,16 @@ import {
   jest,
 } from '@jest/globals';
 import { TurnContext } from 'botbuilder';
+import { isRecord } from '../utils/typeGuards';
+
+// Tool results are `unknown` by contract. Narrowing once here keeps the
+// assertions honest without an `any` in every test.
+const requireRecord = (value: unknown): Record<string, unknown> => {
+  if (!isRecord(value)) {
+    throw new Error(`Expected the tool to return an object, got ${value}.`);
+  }
+  return value;
+};
 
 jest.mock('../services/lnbitsService');
 jest.mock('../services/zapHistoryService');
@@ -124,7 +134,9 @@ describe('agentTools', () => {
       const tool = createReadOnlyTools().find(
         t => t.name === 'get_my_balance',
       )!;
-      const result: any = await tool.handler({}, makeTurnContext(currentUser));
+      const result = requireRecord(
+        await tool.handler({}, makeTurnContext(currentUser)),
+      );
 
       expect(result.wallets).toEqual([
         { name: 'Allowance', balanceSats: 900 },
@@ -141,13 +153,41 @@ describe('agentTools', () => {
       const tool = createReadOnlyTools().find(
         t => t.name === 'get_my_balance',
       )!;
-      const result: any = await tool.handler({}, makeTurnContext(currentUser));
+      const result = requireRecord(
+        await tool.handler({}, makeTurnContext(currentUser)),
+      );
 
-      expect(result.wallets.map((w: { name: string }) => w.name)).toEqual([
-        'allowance',
-        'PRIVATE',
-      ]);
+      expect(
+        (result.wallets as Array<{ name: string }>).map(w => w.name),
+      ).toEqual(['allowance', 'PRIVATE']);
     });
+
+    test('rejects unknown arguments rather than ignoring them', async () => {
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_my_balance',
+      )!;
+
+      const result = requireRecord(
+        await tool.handler(
+          { userId: 'someone-else' },
+          makeTurnContext(currentUser),
+        ),
+      );
+
+      expect(result.error).toContain('userId');
+      expect(mockGetUserWallets).not.toHaveBeenCalled();
+    });
+  });
+
+  test('every tool schema refuses properties it does not declare', () => {
+    process.env.GRAPH_CONNECTION_NAME = 'GraphWorkSignals';
+    try {
+      for (const tool of createReadOnlyTools()) {
+        expect(tool.parameters).toMatchObject({ additionalProperties: false });
+      }
+    } finally {
+      delete process.env.GRAPH_CONNECTION_NAME;
+    }
   });
 
   describe('get_leaderboard', () => {
@@ -168,7 +208,9 @@ describe('agentTools', () => {
       const tool = createReadOnlyTools().find(
         t => t.name === 'get_leaderboard',
       )!;
-      const result: any = await tool.handler({}, makeTurnContext(currentUser));
+      const result = requireRecord(
+        await tool.handler({}, makeTurnContext(currentUser)),
+      );
 
       expect(result.leaderboard).toEqual([
         { displayName: 'Alice', zappedSats: 1500 },
@@ -190,9 +232,8 @@ describe('agentTools', () => {
       expect(tool.parameters.properties).toHaveProperty('days');
 
       const before = Math.floor(Date.now() / 1000);
-      const result: any = await tool.handler(
-        { days: 7 },
-        makeTurnContext(currentUser),
+      const result = requireRecord(
+        await tool.handler({ days: 7 }, makeTurnContext(currentUser)),
       );
       const after = Math.floor(Date.now() / 1000);
 
@@ -208,7 +249,9 @@ describe('agentTools', () => {
         t => t.name === 'get_leaderboard',
       )!;
 
-      const allTime: any = await tool.handler({}, makeTurnContext(currentUser));
+      const allTime = requireRecord(
+        await tool.handler({}, makeTurnContext(currentUser)),
+      );
       expect(mockGetZapLeaderboard).toHaveBeenLastCalledWith({
         sinceTimestamp: undefined,
       });
@@ -226,9 +269,8 @@ describe('agentTools', () => {
       )!;
 
       for (const days of [0, -7, 400, 7.5, Number.NaN, '7' as never]) {
-        const result: any = await tool.handler(
-          { days },
-          makeTurnContext(currentUser),
+        const result = requireRecord(
+          await tool.handler({ days }, makeTurnContext(currentUser)),
         );
         expect(result.error).toBeTruthy();
         expect(result.leaderboard).toBeUndefined();
@@ -242,9 +284,8 @@ describe('agentTools', () => {
         t => t.name === 'get_leaderboard',
       )!;
 
-      const result: any = await tool.handler(
-        { weeks: 2 } as never,
-        makeTurnContext(currentUser),
+      const result = requireRecord(
+        await tool.handler({ weeks: 2 } as never, makeTurnContext(currentUser)),
       );
 
       expect(result.error).toContain('weeks');
@@ -260,9 +301,8 @@ describe('agentTools', () => {
       // Bracket the call rather than comparing against a later Date.now():
       // the clock can tick a second between the handler and the assertion.
       const before = Math.floor(Date.now() / 1000);
-      const result: any = await tool.handler(
-        { days: 365 },
-        makeTurnContext(currentUser),
+      const result = requireRecord(
+        await tool.handler({ days: 365 }, makeTurnContext(currentUser)),
       );
       const after = Math.floor(Date.now() / 1000);
 
@@ -288,7 +328,9 @@ describe('agentTools', () => {
       const tool = createReadOnlyTools().find(
         t => t.name === 'get_leaderboard',
       )!;
-      const result: any = await tool.handler({}, makeTurnContext(currentUser));
+      const result = requireRecord(
+        await tool.handler({}, makeTurnContext(currentUser)),
+      );
 
       expect(result.partial).toBe(true);
       expect(result.incompleteReason).toContain('incomplete');
@@ -314,9 +356,11 @@ describe('agentTools', () => {
       const tool = createReadOnlyTools().find(
         t => t.name === 'get_recent_activity',
       )!;
-      const result: any = await tool.handler(
-        { limit: 10, onlyInvolvingMe: true },
-        makeTurnContext(currentUser),
+      const result = requireRecord(
+        await tool.handler(
+          { limit: 10, onlyInvolvingMe: true },
+          makeTurnContext(currentUser),
+        ),
       );
 
       expect(mockGetZapActivity).toHaveBeenCalledWith({
@@ -361,6 +405,55 @@ describe('agentTools', () => {
         limit: 20,
         userAadObjectId: undefined,
       });
+    });
+
+    test('falls back to the default limit rather than passing NaN or a fraction through', async () => {
+      mockGetZapActivity.mockResolvedValue(activityResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_recent_activity',
+      )!;
+
+      // NaN survived Math.min/Math.max and reached the query; 10.5 reached
+      // Array.prototype.slice.
+      for (const limit of [Number.NaN, 10.5, Number.POSITIVE_INFINITY, '10']) {
+        await tool.handler({ limit }, makeTurnContext(currentUser));
+        expect(mockGetZapActivity).toHaveBeenLastCalledWith({
+          limit: 20,
+          userAadObjectId: undefined,
+        });
+      }
+    });
+
+    test('rejects unknown arguments rather than ignoring them', async () => {
+      mockGetZapActivity.mockResolvedValue(activityResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_recent_activity',
+      )!;
+
+      const result = requireRecord(
+        await tool.handler({ count: 5 }, makeTurnContext(currentUser)),
+      );
+
+      expect(result.error).toContain('count');
+      expect(mockGetZapActivity).not.toHaveBeenCalled();
+    });
+
+    test('falls back to the defaults when the arguments are not an object', async () => {
+      mockGetZapActivity.mockResolvedValue(activityResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_recent_activity',
+      )!;
+
+      // The Foundry runner refuses these before a handler sees them; the
+      // handler stays safe on its own so the guarantee does not rest on one
+      // caller.
+      for (const args of [null, undefined, 'all of them', 7, []]) {
+        await tool.handler(args, makeTurnContext(currentUser));
+        expect(mockGetZapActivity).toHaveBeenLastCalledWith({
+          limit: 20,
+          userAadObjectId: undefined,
+        });
+      }
     });
   });
 
@@ -411,11 +504,49 @@ describe('agentTools', () => {
         item => item.name === 'get_recent_meetings',
       )!;
 
-      const result: any = await tool.handler({}, makeGraphContext());
+      const result = requireRecord(await tool.handler({}, makeGraphContext()));
 
       expect(result).toMatchObject({ connected: false });
       expect(result.message).toMatch(/connect calendar/);
       expect(mockGetRecentMeetings).not.toHaveBeenCalled();
+    });
+
+    test('falls back to the default window when the arguments are not an object', async () => {
+      mockGetRecentMeetings.mockResolvedValue([]);
+      const tool = createReadOnlyTools().find(
+        item => item.name === 'get_recent_meetings',
+      )!;
+
+      for (const args of [null, [], 'last week']) {
+        await expect(
+          tool.handler(args, makeGraphContext('graph-token')),
+        ).resolves.toEqual({ connected: true, periodDays: 7, meetings: [] });
+        expect(mockGetRecentMeetings).toHaveBeenLastCalledWith(
+          'graph-token',
+          7,
+        );
+      }
+    });
+
+    test('rejects unknown arguments on the Graph tools rather than ignoring them', async () => {
+      mockGetRecentMeetings.mockResolvedValue([]);
+      mockGetRelevantPeople.mockResolvedValue([]);
+
+      const meetings = requireRecord(
+        await createReadOnlyTools()
+          .find(item => item.name === 'get_recent_meetings')!
+          .handler({ weeks: 2 }, makeGraphContext('graph-token')),
+      );
+      expect(meetings.error).toContain('weeks');
+      expect(mockGetRecentMeetings).not.toHaveBeenCalled();
+
+      const collaborators = requireRecord(
+        await createReadOnlyTools()
+          .find(item => item.name === 'get_frequent_collaborators')!
+          .handler({ top: 3 }, makeGraphContext('graph-token')),
+      );
+      expect(collaborators.error).toContain('top');
+      expect(mockGetRelevantPeople).not.toHaveBeenCalled();
     });
 
     test('returns relevant collaborators without exposing message content', async () => {

@@ -309,13 +309,11 @@ export async function runConversationalTurn(
     }
 
     nextInput = await Promise.all(
-      functionCalls.map(
-        async (call): Promise<FunctionCallOutput> => ({
-          type: 'function_call_output',
-          call_id: call.call_id,
-          output: await runToolCall(call, turnContext),
-        }),
-      ),
+      functionCalls.map(async (call): Promise<FunctionCallOutput> => ({
+        type: 'function_call_output',
+        call_id: call.call_id,
+        output: await runToolCall(call, turnContext),
+      })),
     );
   }
 

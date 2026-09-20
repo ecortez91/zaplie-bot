@@ -107,9 +107,7 @@ export class ShowLeaderboardCommand extends SSOCommand {
       // Silence is the wrong answer to a failed lookup: the user typed a
       // command and must be told it did not work.
       if (!users) {
-        console.error(
-          'Leaderboard unavailable: LNbits returned no user list.',
-        );
+        console.error('Leaderboard unavailable: LNbits returned no user list.');
         await context.sendActivity(LEADERBOARD_UNAVAILABLE_MESSAGE);
         return;
       }
