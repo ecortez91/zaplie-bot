@@ -73,8 +73,9 @@ const getUser = async (userId: string): Promise<User | null> => {
   };
 };
 
-// The allowance schedule lives in the bot's top-up job and the gateway exposes
-// no route for it, so reporting none beats inventing an amount and a date.
+// The allowance schedule lives in the LNbits allowance extension and the
+// gateway exposes no route for it, so reporting none beats inventing an
+// amount and a date.
 const getAllowance = async (_userId: string): Promise<Allowance | null> => null;
 
 export { getAllUsersFromAPI, getUsers, getUser, getAllowance };
