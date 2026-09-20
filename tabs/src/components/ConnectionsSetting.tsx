@@ -204,11 +204,18 @@ const ConnectionsSetting: FunctionComponent = () => {
                 automations.
               </p>
             )}
-            {loading ? (
-              <span className={connectionStyles.visuallyHidden} role="status">
-                Loading GitHub connection…
-              </span>
-            ) : null}
+            {/* One persistent polite live region: it is always rendered, so a
+                screen reader hears the settled state as well as the loading
+                announcement it replaces. */}
+            <span className={connectionStyles.visuallyHidden} role="status">
+              {loading
+                ? 'Loading GitHub connection…'
+                : loadError
+                  ? 'GitHub connection unavailable.'
+                  : githubIdentity
+                    ? `GitHub connected as @${githubIdentity.providerHandle}.`
+                    : 'GitHub not connected.'}
+            </span>
           </div>
         </div>
 
