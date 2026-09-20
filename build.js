@@ -91,11 +91,22 @@ for (const [name, value] of [
 // wildcard, and it has to match the tab URL actually in use — so derive it
 // from that URL. An explicit TAB_DOMAIN is only trusted for the local tunnel,
 // where the tunnel task writes the endpoint and the domain together.
-const tabDomain =
-  (tunnelEndpoint && envConfig.TAB_DOMAIN) || parseUrl(contentUrl).hostname;
+const contentHostname = parseUrl(contentUrl).hostname;
+const tabDomain = (tunnelEndpoint && envConfig.TAB_DOMAIN) || contentHostname;
 if (!/^[A-Za-z0-9.-]+$/.test(tabDomain)) {
   console.error(
     'Error: TAB_DOMAIN must be a bare hostname, with no scheme, port or path.',
+  );
+  process.exit(1);
+}
+
+// A TAB_DOMAIN that does not match the tab URL would leave the host Teams
+// actually loads out of validDomains, so reject the mismatched pair instead
+// of generating a manifest that cannot frame the tab.
+if (tabDomain !== contentHostname) {
+  console.error(
+    'Error: TAB_DOMAIN does not match the host of the tab URL in use — the ' +
+      'local tunnel task writes TAB_ENDPOINT and TAB_DOMAIN together.',
   );
   process.exit(1);
 }
