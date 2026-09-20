@@ -7,6 +7,7 @@ import {
   getWalletTransactionsSince,
   payInvoice,
   sendZap,
+  newIdempotencyKey,
 } from './payments';
 
 jest.mock('./gateway', () => ({
@@ -147,16 +148,79 @@ describe('lnbits payments', () => {
     test('posts the recipient user id, never a wallet key', async () => {
       mockApiRequest.mockResolvedValueOnce({ payment_hash: 'hash-1' });
 
-      await sendZap('user-2', 21, 'Nice work');
+      await sendZap('user-2', 21, 'Nice work', 'zap-request-00000001');
 
       expect(mockApiRequest).toHaveBeenCalledWith('/zaps', {
         method: 'POST',
+        headers: { 'Idempotency-Key': 'zap-request-00000001' },
         body: JSON.stringify({
           recipientUserId: 'user-2',
           amount: 21,
           memo: 'Nice work',
         }),
       });
+    });
+
+    // The key is required, so a caller that retries must pass the same one.
+    test('replays the same key on a retry and a new key after success', async () => {
+      mockApiRequest.mockRejectedValueOnce(new Error('Request timed out'));
+      await expect(
+        sendZap('user-2', 21, 'Nice work', 'zap-request-00000001'),
+      ).rejects.toThrow('Request timed out');
+
+      mockApiRequest.mockResolvedValueOnce({ payment_hash: 'hash-1' });
+      await sendZap('user-2', 21, 'Nice work', 'zap-request-00000001');
+
+      const keys = mockApiRequest.mock.calls.map(
+        call => (call[1] as { headers: Record<string, string> }).headers,
+      );
+      expect(keys[0]['Idempotency-Key']).toBe('zap-request-00000001');
+      expect(keys[1]['Idempotency-Key']).toBe('zap-request-00000001');
+    });
+  });
+
+  // The generated key has to satisfy the gateway's own key pattern, or every
+  // zap the portal sends would be rejected with 400. jsdom has no Web Crypto,
+  // so each source is stubbed in turn.
+  describe('newIdempotencyKey', () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    const stubCrypto = (value: unknown) =>
+      Object.defineProperty(globalThis, 'crypto', {
+        value,
+        configurable: true,
+        writable: true,
+      });
+
+    afterEach(() => {
+      if (original) Object.defineProperty(globalThis, 'crypto', original);
+      else delete (globalThis as { crypto?: unknown }).crypto;
+    });
+
+    test('prefers randomUUID and the gateway accepts it', () => {
+      stubCrypto({ randomUUID: () => '123e4567-e89b-12d3-a456-426614174000' });
+
+      expect(newIdempotencyKey()).toBe('123e4567-e89b-12d3-a456-426614174000');
+      expect(newIdempotencyKey()).toMatch(/^[A-Za-z0-9._~-]{16,128}$/);
+    });
+
+    test('falls back to random bytes the gateway accepts', () => {
+      stubCrypto({
+        getRandomValues: (bytes: Uint8Array) => {
+          bytes.forEach((_, index) => {
+            bytes[index] = index;
+          });
+          return bytes;
+        },
+      });
+
+      expect(newIdempotencyKey()).toBe('000102030405060708090a0b0c0d0e0f');
+      expect(newIdempotencyKey()).toMatch(/^[A-Za-z0-9._~-]{16,128}$/);
+    });
+
+    test('refuses to mint a key with no Web Crypto', () => {
+      stubCrypto(undefined);
+
+      expect(() => newIdempotencyKey()).toThrow('no Web Crypto');
     });
   });
 });

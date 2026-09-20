@@ -21,17 +21,29 @@ const migrateRewardAmounts = (rewardAmounts) => {
   );
 };
 
-const maxRewardSats = () => {
-  const configured = process.env.REWARDS_MAX_AMOUNT_SATS;
-  if (configured === undefined || configured === '') {
-    return DEFAULT_MAX_REWARD_SATS;
+// Every sats ceiling this backend reads is parsed here, so a malformed value
+// fails closed everywhere instead of silently widening one cap and rejecting
+// another. Shared with the LNbits gateway's ZAP_MAX_AMOUNT_SATS.
+const positiveIntFromEnv = (name, fallback) => {
+  const configured = process.env[name];
+  // Whitespace-only is unset, not malformed — matching src/services/envNumbers.ts
+  // in the bot. One variable set once on both apps cannot be valid for one and a
+  // startup failure for the other.
+  if (configured === undefined || configured.trim() === '') {
+    return fallback;
   }
-  const value = Number(configured);
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error('REWARDS_MAX_AMOUNT_SATS must be a positive integer');
+  // Decimal digits only: `Number()` would accept `0x10` and `1e3`, which are
+  // not what an operator typing a sats ceiling meant.
+  const trimmed = configured.trim();
+  const value = /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : NaN;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
   }
   return value;
 };
+
+const maxRewardSats = () =>
+  positiveIntFromEnv('REWARDS_MAX_AMOUNT_SATS', DEFAULT_MAX_REWARD_SATS);
 
 const validateRewardAmountPatch = (rewardAmounts) => {
   if (
@@ -73,5 +85,6 @@ module.exports = {
   DEFAULT_REWARD_AMOUNTS,
   migrateRewardAmounts,
   maxRewardSats,
+  positiveIntFromEnv,
   validateRewardAmountPatch,
 };

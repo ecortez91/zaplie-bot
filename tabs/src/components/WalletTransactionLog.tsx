@@ -263,7 +263,7 @@ const WalletTransactionLog: React.FC<WalletTransactionLogProps> = ({
   if (!rewardNameContext) {
     return null; // or handle the case where the context is not available
   }
-  const rewardsName = rewardNameContext.rewardName;
+  const rewardsName = rewardNameContext.rewardNameLabel;
 
   if (loading) {
     return <div>Loading...</div>;

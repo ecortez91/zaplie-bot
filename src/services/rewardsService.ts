@@ -8,6 +8,7 @@ import { getAutomations } from './fetchAutomations';
 import { resolveRewardRecipientByGithubId } from './identityService';
 import { createPendingReward } from './pendingRewardsService';
 import { toPaymentExtraWallet } from './paymentExtra';
+import { positiveIntFromEnv } from './envNumbers';
 
 const TREASURY_DISPLAY_NAME = 'Automation';
 const GITHUB_REWARD_EVENT_TYPES = [
@@ -164,13 +165,11 @@ export async function resolveAmountSats(
   return amountSats;
 }
 
-// 10000 matches the interactive zap card's ceiling
+// 10000 matches the portal's documented default for this variable.
+// Parsed by the shared strict parser so the bot and the portal backend agree on
+// what a valid REWARDS_MAX_AMOUNT_SATS is — one variable, one validity.
 function maxAmountSats(): number {
-  const cap = Number(process.env.REWARDS_MAX_AMOUNT_SATS ?? 10000);
-  if (!Number.isInteger(cap) || cap <= 0) {
-    throw new Error('REWARDS_MAX_AMOUNT_SATS must be a positive integer');
-  }
-  return cap;
+  return positiveIntFromEnv('REWARDS_MAX_AMOUNT_SATS', 10000);
 }
 
 function requiredEnv(name: string): string {

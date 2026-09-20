@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { isFiniteNumber } from './validators';
 
 export type AutomationAudience = 'teammates' | 'copilots' | 'customers';
 
@@ -27,9 +28,6 @@ export interface AutomationsStats {
   engagementByAudience: Record<AutomationAudience, AutomationRecipient[]>;
   recentPayments: AutomationHistoryItem[];
 }
-
-const isFiniteNumber = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isFinite(value);
 
 const isNullableString = (value: unknown): value is string | null =>
   value === null || typeof value === 'string';

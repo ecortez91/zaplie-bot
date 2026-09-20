@@ -15,6 +15,10 @@ import { acquireIdToken, isZaplieAdmin } from '../services/adminRole';
 const RewardsNameSetting: FunctionComponent = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [currency, setCurrency] = useState('');
+  // "Has the admin typed into the field", not "is the field open". A failed
+  // save leaves isEditing true with no way to cancel, so keying the sync on
+  // isEditing alone would strand the field on a value the context moved past.
+  const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -28,11 +32,13 @@ const RewardsNameSetting: FunctionComponent = () => {
   const { instance, accounts } = useMsal();
   const isAdmin = isZaplieAdmin(accounts[0]);
 
+  // Only mirror the shared value into the field while it is untouched: a
+  // provider retry resolving mid-edit would otherwise wipe the admin's typing.
   useEffect(() => {
-    if (rewardName !== null) {
+    if (rewardName !== null && !touched) {
       setCurrency(rewardName);
     }
-  }, [rewardName]);
+  }, [rewardName, touched]);
 
   const handleEditClick = () => {
     setJustSaved(false);
@@ -61,6 +67,7 @@ const RewardsNameSetting: FunctionComponent = () => {
       );
       setCurrency(data.rewardName);
       setRewardName(data.rewardName);
+      setTouched(false);
       setIsEditing(false);
       setJustSaved(true);
       toast.success('Reward name has been updated successfully!');
@@ -103,6 +110,7 @@ const RewardsNameSetting: FunctionComponent = () => {
               value={currency}
               onChange={event => {
                 setCurrency(event.target.value);
+                setTouched(true);
                 setSaveError(null);
                 setJustSaved(false);
               }}

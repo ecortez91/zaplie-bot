@@ -8,8 +8,19 @@ import React, {
 } from 'react';
 import { getRewardName } from '../apiService';
 
+// Shown until /api/reward-name answers, and whenever it fails or answers with a
+// payload we reject. Interpolating the raw nullable value printed the literal
+// word "null" in balances and tooltips.
+export const DEFAULT_REWARD_NAME = 'sats';
+
 interface RewardNameContextProps {
+  /**
+   * The configured name, or null while it is loading or after a failure.
+   * Only read this where the difference genuinely matters (the admin setting).
+   */
   rewardName: string | null;
+  /** Always a string: what every other component should render. */
+  rewardNameLabel: string;
   setRewardName: React.Dispatch<React.SetStateAction<string | null>>;
   isLoading?: boolean;
   error?: Error | null;
@@ -18,6 +29,7 @@ interface RewardNameContextProps {
 
 export const RewardNameContext = createContext<RewardNameContextProps>({
   rewardName: null,
+  rewardNameLabel: DEFAULT_REWARD_NAME,
   setRewardName: () => {},
   isLoading: true,
   error: null,
@@ -69,6 +81,7 @@ export const RewardNameProvider: React.FC<{ children: ReactNode }> = ({
     <RewardNameContext.Provider
       value={{
         rewardName,
+        rewardNameLabel: rewardName ?? DEFAULT_REWARD_NAME,
         setRewardName,
         isLoading,
         error,

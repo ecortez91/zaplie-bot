@@ -115,6 +115,7 @@ describe('RewardsNameSetting', () => {
 
     await renderSetting({
       rewardName: null,
+      rewardNameLabel: 'sats',
       setRewardName: jest.fn(),
       isLoading: false,
       error: new Error('Configuration unavailable'),
@@ -136,6 +137,7 @@ describe('RewardsNameSetting', () => {
 
     await renderSetting({
       rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
       setRewardName,
       isLoading: false,
       error: null,
@@ -168,6 +170,7 @@ describe('RewardsNameSetting', () => {
 
     await renderSetting({
       rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
       setRewardName: jest.fn(),
       isLoading: false,
       error: null,
@@ -189,5 +192,37 @@ describe('RewardsNameSetting', () => {
       (container.querySelector('input') as HTMLInputElement).disabled,
     ).toBe(false);
     expect(mockToastError).toHaveBeenCalledWith('Error updating reward name.');
+  });
+
+  test('keeps an in-progress edit when a provider retry resolves', async () => {
+    await renderSetting({
+      rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
+      setRewardName: jest.fn(),
+      isLoading: false,
+      error: null,
+      retry: jest.fn(),
+    });
+
+    await act(async () => {
+      getButton('Edit').click();
+    });
+    const input = container.querySelector('input');
+    if (!input) throw new Error('Reward name input was not rendered.');
+    await act(async () => {
+      setInputValue(input, 'Karma');
+    });
+
+    // A provider retry resolving mid-edit pushes a new context value through.
+    await renderSetting({
+      rewardName: 'Points',
+      rewardNameLabel: 'Points',
+      setRewardName: jest.fn(),
+      isLoading: false,
+      error: null,
+      retry: jest.fn(),
+    });
+
+    expect(container.querySelector('input')?.value).toBe('Karma');
   });
 });

@@ -95,7 +95,7 @@ const WalletAllowanceCard: React.FC<AllowanceCardProps> = () => {
   if (!rewardNameContext) {
     return null; // or handle the case where the context is not available
   }
-  const rewardsName = rewardNameContext.rewardName;
+  const rewardsName = rewardNameContext.rewardNameLabel;
   return (
     <>
       <div className="wallet-container">

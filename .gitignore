@@ -33,9 +33,12 @@ appPackage/manifest.json
 tabs/backend/identities.json
 tabs/backend/pending-rewards.json
 tabs/backend/connections.json
+tabs/backend/lnbits-zap-idempotency.json
+tabs/backend/lnbits-zap-idempotency.json.lock
+tabs/backend/lnbits-zap-idempotency.json.lock.stale.*
+tabs/backend/lnbits-zap-idempotency.json.*.tmp
 tabs/backend/webhook-keys.json
 tabs/backend/data.json
-tabs/backend/lnbits-zap-idempotency.json
 
 # Local bot data directory for the durable Zap ledger; deployed instances
 # point ZAPLIE_DATA_DIR outside the app.

@@ -423,3 +423,88 @@ describe('payInvoice', () => {
     ).rejects.toThrow('fetch failed');
   });
 });
+
+describe('payment reads', () => {
+  test('sends a bounded timeout so a stalled LNbits cannot hang a turn', async () => {
+    fetchMock.mockImplementationOnce(async () => jsonResponse([]));
+
+    await service.getPayments('ink-1', 1000, 0);
+
+    const { url, init } = lastRequest();
+    expect(url).toBe(`${BASE}/api/v1/payments?limit=1000&offset=0`);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test('rejects a malformed page instead of pasting it into the URL', async () => {
+    // A bad page would come back as a short list, which reads exactly like
+    // "no more payments" and silently truncates the history.
+    await expect(service.getPayments('ink-1', 0)).rejects.toThrow(
+      /Invalid payments page limit/,
+    );
+    await expect(service.getPayments('ink-1', 10.5)).rejects.toThrow(
+      /Invalid payments page limit/,
+    );
+    await expect(service.getPayments('ink-1', Number.NaN)).rejects.toThrow(
+      /Invalid payments page limit/,
+    );
+    await expect(service.getPayments('ink-1', 100, -1)).rejects.toThrow(
+      /Invalid payments page offset/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('throws on an error status rather than reporting no payments', async () => {
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse({ detail: 'slow down' }, { status: 429 }),
+    );
+
+    await expect(service.getPayments('ink-1')).rejects.toThrow(/429/);
+  });
+
+  test('getAllPaymentsPage reads the paginated endpoint as the superuser', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () => jsonResponse([{ id: 'p1' }]));
+
+    const payments = await service.getAllPaymentsPage(1000, 2000);
+
+    expect(payments).toEqual([{ id: 'p1' }]);
+    const { url, init } = lastRequest();
+    expect(url).toContain('/api/v1/payments/all/paginated?');
+    expect(url).toContain('limit=1000');
+    expect(url).toContain('offset=2000');
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test('getAllPaymentsPage unwraps the shapes LNbits versions have shipped', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse({ data: [{ id: 'p1' }] }),
+    );
+
+    await expect(service.getAllPaymentsPage(10, 0)).resolves.toEqual([
+      { id: 'p1' },
+    ]);
+  });
+
+  test('getAllPaymentsPage signals unavailability so callers can fall back', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse({ detail: 'Not Found' }, { status: 404 }),
+    );
+
+    await expect(service.getAllPaymentsPage(10, 0)).rejects.toBeInstanceOf(
+      service.PaginatedPaymentsUnsupportedError,
+    );
+  });
+
+  test('getAllPaymentsPage still throws plainly on a server error', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse({ detail: 'boom' }, { status: 500 }),
+    );
+
+    const error = await service.getAllPaymentsPage(10, 0).catch(e => e);
+    expect(error).not.toBeInstanceOf(service.PaginatedPaymentsUnsupportedError);
+    expect(String(error)).toContain('500');
+  });
+});
