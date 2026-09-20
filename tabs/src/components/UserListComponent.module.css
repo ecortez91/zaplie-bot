@@ -66,6 +66,10 @@
   align-self: stretch;
   width: 100%;
   min-width: 0;
+  /* .list has a 640px floor, so without this the table pushes the card and
+     the page sideways whenever its parent is narrower than that — which
+     happens well above the mobile breakpoint. */
+  overflow-x: auto;
 }
 
 .list {
@@ -204,8 +208,19 @@
     gap: var(--space-3);
   }
 
+  /* Visually hidden rather than display:none — the latter drops every column
+     header out of the accessibility tree, and the ::before labels below are
+     decorative text, not header associations. */
   .headerRow {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .bodyRow {

@@ -325,6 +325,12 @@ describe('UserListComponent', () => {
       );
     });
 
-    expect(container.textContent).toContain('No users found.');
+    const empty = container.querySelector('[role="status"]');
+    expect(empty?.textContent).toContain('No users found.');
+    // role="status" is not a valid child of a table, so the message lives
+    // outside it.
+    expect(
+      container.querySelector('[role="table"] [role="status"]'),
+    ).toBeNull();
   });
 });

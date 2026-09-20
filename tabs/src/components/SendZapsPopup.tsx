@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useContext, useRef } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useContext,
+  useRef,
+} from 'react';
 import styles from './SendZapsPopup.module.css';
 import { RewardNameContext } from './RewardNameContext';
 import { isFunded } from '../services/lnbits/walletSelection';
@@ -40,6 +46,9 @@ const TERMINAL_ZAP_ERRORS = [
   /cannot be retried safely/i,
   /already used for another zap/i,
 ];
+
+export const BALANCE_UNAVAILABLE_ERROR =
+  'Your allowance balance is unavailable, so zaps cannot be sent right now.';
 
 const isDoNotRetryError = (message: string | null) =>
   Boolean(
@@ -93,76 +102,76 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const rewardNameContext = useContext(RewardNameContext);
   const rewardsName = rewardNameContext.rewardNameLabel;
 
-  useEffect(() => {
-    const loadUsers = async () => {
-      setIsLoadingUsers(true);
-      try {
-        const account = accounts[0];
-        if (!account?.localAccountId) {
+  const loadUsers = useCallback(async () => {
+    setIsLoadingUsers(true);
+    try {
+      const account = accounts[0];
+      if (!account?.localAccountId) {
+        setIsLoadingUsers(false);
+        return;
+      }
+
+      // Get users from cache or fetch them
+      let allUsers = cache['allUsers'] as User[];
+      if (!allUsers || allUsers.length === 0) {
+        const fetchedUsers = await getUsers({});
+        if (fetchedUsers && fetchedUsers.length > 0) {
+          allUsers = fetchedUsers;
+          setCache('allUsers', fetchedUsers);
+        } else {
           setIsLoadingUsers(false);
           return;
         }
-
-        // Get users from cache or fetch them
-        let allUsers = cache['allUsers'] as User[];
-        if (!allUsers || allUsers.length === 0) {
-          const fetchedUsers = await getUsers({});
-          if (fetchedUsers && fetchedUsers.length > 0) {
-            allUsers = fetchedUsers;
-            setCache('allUsers', fetchedUsers);
-          } else {
-            setIsLoadingUsers(false);
-            return;
-          }
-        }
-
-        // Fetch current user's wallet
-        const currentUserData = allUsers.find(
-          u => u.aadObjectId === account.localAccountId,
-        );
-
-        if (currentUserData) {
-          // Always fetch fresh wallet data to get accurate balance
-          const wallets = await getUserWallets(currentUserData.id);
-          const allowanceWallet = wallets?.find(w =>
-            w.name.toLowerCase().includes('allowance'),
-          );
-          // A balance the gateway could not read is null, not 0. Treating it
-          // as 0 here would block zaps while claiming the wallet is empty, so
-          // it stays null and the UI says the balance is unavailable.
-          const currentBalance =
-            allowanceWallet && isFunded(allowanceWallet)
-              ? allowanceWallet.balance_msat / 1000
-              : null;
-
-          setCurrentUserWallets({
-            allowance: allowanceWallet || null,
-            balance: currentBalance,
-          });
-        }
-
-        // Filter out current user - wallet fetching happens on user selection
-        const otherUsers = allUsers.filter(
-          u => u.aadObjectId !== account.localAccountId,
-        );
-
-        // Initialize users without wallet data - will fetch on selection
-        const usersWithoutWallets: UserWithWallet[] = otherUsers.map(user => ({
-          ...user,
-          privateWallet: null,
-        }));
-
-        setUsers(usersWithoutWallets);
-      } catch (err) {
-        setError('Failed to load users');
-      } finally {
-        setIsLoadingUsers(false);
       }
-    };
 
-    loadUsers();
+      // Fetch current user's wallet
+      const currentUserData = allUsers.find(
+        u => u.aadObjectId === account.localAccountId,
+      );
+
+      if (currentUserData) {
+        // Always fetch fresh wallet data to get accurate balance
+        const wallets = await getUserWallets(currentUserData.id);
+        const allowanceWallet = wallets?.find(w =>
+          w.name.toLowerCase().includes('allowance'),
+        );
+        // A balance the gateway could not read is null, not 0. Treating it
+        // as 0 here would block zaps while claiming the wallet is empty, so
+        // it stays null and the UI says the balance is unavailable.
+        const currentBalance =
+          allowanceWallet && isFunded(allowanceWallet)
+            ? allowanceWallet.balance_msat / 1000
+            : null;
+
+        setCurrentUserWallets({
+          allowance: allowanceWallet || null,
+          balance: currentBalance,
+        });
+      }
+
+      // Filter out current user - wallet fetching happens on user selection
+      const otherUsers = allUsers.filter(
+        u => u.aadObjectId !== account.localAccountId,
+      );
+
+      // Initialize users without wallet data - will fetch on selection
+      const usersWithoutWallets: UserWithWallet[] = otherUsers.map(user => ({
+        ...user,
+        privateWallet: null,
+      }));
+
+      setUsers(usersWithoutWallets);
+    } catch (err) {
+      setError('Failed to load users');
+    } finally {
+      setIsLoadingUsers(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts]); // cache and setCache are from context and are stable, intentionally excluded
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
 
   // Fetch wallet for selected user on demand
   const handleUserSelect = async (userId: string) => {
@@ -232,9 +241,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
 
     // Balance validation
     if (currentUserWallets.balance === null) {
-      setError(
-        'Your allowance balance is unavailable, so zaps cannot be sent right now.',
-      );
+      setError(BALANCE_UNAVAILABLE_ERROR);
       return;
     }
     if (zapAmount > currentUserWallets.balance) {
@@ -569,7 +576,18 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
             <button
               className={styles.closeButton}
               onClick={
-                isDoNotRetryError(error) ? handleClose : () => setError(null)
+                isDoNotRetryError(error)
+                  ? handleClose
+                  : () => {
+                      setError(null);
+                      // For a stale balance, clearing the message is not
+                      // enough — the next Send would fail identically on the
+                      // same null. Every other error keeps its composed zap,
+                      // because reloading would discard it.
+                      if (error === BALANCE_UNAVAILABLE_ERROR) {
+                        void loadUsers();
+                      }
+                    }
               }
             >
               {isDoNotRetryError(error) ? 'Close' : 'Try Again'}

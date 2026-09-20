@@ -192,6 +192,10 @@ describe('WalletInfoCard', () => {
 
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(container.textContent).toContain('ask support to merge them');
+    // The warning names the wallet on screen, because the tie-break is only
+    // stable, not provably the right wallet.
+    expect(container.textContent).toContain('private-1');
+    expect(container.textContent).toContain('2 wallets');
     expect(getButton('Receive').disabled).toBe(false);
     expect(getButton('Send').disabled).toBe(false);
   });

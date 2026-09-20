@@ -9,7 +9,7 @@ import './WalletInfoCard.css';
 import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
 import {
-  DUPLICATE_WALLET_WARNING,
+  duplicateWalletWarning,
   isFunded,
   selectWalletByName,
 } from '../services/lnbits/walletSelection';
@@ -107,7 +107,10 @@ const WalletYourWalletInfoCard: React.FC = () => {
           ? privateWallet.balance_msat / 1000
           : null,
         user: { ...user, privateWallet },
-        warning: match.matchCount > 1 ? DUPLICATE_WALLET_WARNING : null,
+        warning:
+          match.matchCount > 1
+            ? duplicateWalletWarning(privateWallet, match.matchCount)
+            : null,
       });
     } catch {
       if (requestId === requestIdRef.current) {

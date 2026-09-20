@@ -178,62 +178,65 @@ const UserListComponent: FunctionComponent = () => {
               Allowance remaining
             </span>
           </div>
-          {users.length === 0 ? (
-            <div className={styles.stateMessage} role="row">
-              <span role="cell">No users found.</span>
-            </div>
-          ) : (
-            [...users]
-              .sort((a, b) => a.displayName.localeCompare(b.displayName))
-              .map(user => (
-                <div key={user.id} className={styles.bodyRow} role="row">
-                  <span role="cell" className={styles.colUser}>
-                    <img
-                      className={styles.avatarIcon}
-                      alt=""
-                      src={user.profileImg ? user.profileImg : 'profile.png'}
-                    />
-                    <span className={styles.userName}>
-                      {user.displayName &&
-                      !user.displayName.match(/^[a-f0-9]{32}$/)
-                        ? user.displayName
-                        : user.email || 'Unknown'}
+          {users.length === 0
+            ? null
+            : [...users]
+                .sort((a, b) => a.displayName.localeCompare(b.displayName))
+                .map(user => (
+                  <div key={user.id} className={styles.bodyRow} role="row">
+                    <span role="cell" className={styles.colUser}>
+                      <img
+                        className={styles.avatarIcon}
+                        alt=""
+                        src={user.profileImg ? user.profileImg : 'profile.png'}
+                      />
+                      <span className={styles.userName}>
+                        {user.displayName &&
+                        !user.displayName.match(/^[a-f0-9]{32}$/)
+                          ? user.displayName
+                          : user.email || 'Unknown'}
+                      </span>
                     </span>
-                  </span>
-                  <span
-                    role="cell"
-                    className={styles.colType}
-                    data-label="User type"
-                  >
-                    {user.type || 'Not specified'}
-                  </span>
-                  <span
-                    role="cell"
-                    data-label="Balance"
-                    className={`${styles.colBalance} ${
-                      user.privateWallet && isFunded(user.privateWallet)
-                        ? styles.amount
-                        : styles.amountMuted
-                    }`}
-                  >
-                    {formatBalance(user.privateWallet, rewardNameLabel)}
-                  </span>
-                  <span
-                    role="cell"
-                    data-label="Allowance remaining"
-                    className={`${styles.colAllowance} ${
-                      user.allowanceWallet && isFunded(user.allowanceWallet)
-                        ? styles.amount
-                        : styles.amountMuted
-                    }`}
-                  >
-                    {formatBalance(user.allowanceWallet, rewardNameLabel)}
-                  </span>
-                </div>
-              ))
-          )}
+                    <span
+                      role="cell"
+                      className={styles.colType}
+                      data-label="User type"
+                    >
+                      {user.type || 'Not specified'}
+                    </span>
+                    <span
+                      role="cell"
+                      data-label="Balance"
+                      className={`${styles.colBalance} ${
+                        user.privateWallet && isFunded(user.privateWallet)
+                          ? styles.amount
+                          : styles.amountMuted
+                      }`}
+                    >
+                      {formatBalance(user.privateWallet, rewardNameLabel)}
+                    </span>
+                    <span
+                      role="cell"
+                      data-label="Allowance remaining"
+                      className={`${styles.colAllowance} ${
+                        user.allowanceWallet && isFunded(user.allowanceWallet)
+                          ? styles.amount
+                          : styles.amountMuted
+                      }`}
+                    >
+                      {formatBalance(user.allowanceWallet, rewardNameLabel)}
+                    </span>
+                  </div>
+                ))}
         </div>
       </div>
+      {users.length === 0 && (
+        /* Outside the table: role="status" is not a valid child of a table,
+           and the message must be announced when loading finishes empty. */
+        <p className={styles.stateMessage} role="status">
+          No users found.
+        </p>
+      )}
       <div className={styles.poweredby}>
         <div className={styles.poweredBy}>
           <b className={styles.poweredBy1}>Powered by</b>

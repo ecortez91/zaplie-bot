@@ -51,9 +51,17 @@ export interface WalletMatch {
  * find-or-create with no lock, so two concurrent first turns — or an admin
  * adding a second "Private" by hand — genuinely produce two. Refusing to
  * render then left the user permanently locked out of their own wallet with a
- * "Try again" button that could never help. Instead the oldest wallet wins
- * (lowest id, so the choice is stable across reloads) and the caller surfaces
- * a warning.
+ * "Try again" button that could never help.
+ *
+ * The tie-break is the lexicographically smallest id. That is a *stable*
+ * choice, not a chronological one: LNbits wallet ids are random UUIDs, the
+ * wallet model carries no creation timestamp, and LNbits documents no order
+ * for the list, so nothing here can identify the older wallet. Sorting only
+ * guarantees that every view and every reload picks the same one, instead of
+ * the account silently changing wallet depending on response order. The
+ * caller surfaces a warning naming the chosen wallet so a wrong pick is
+ * visible rather than silent; picking authoritatively would need the chosen
+ * wallet id persisted at provisioning time (see the PR discussion).
  */
 export const selectWalletByName = (
   wallets: Wallet[],
@@ -69,9 +77,14 @@ export const selectWalletByName = (
     return { wallet: null, matchCount: 0, foreignMatch: named.length > 0 };
   }
 
+  // Stable, not chronological — see the doc comment above.
   const [wallet] = [...owned].sort((a, b) => a.id.localeCompare(b.id));
   return { wallet, matchCount: owned.length, foreignMatch: false };
 };
 
-export const DUPLICATE_WALLET_WARNING =
-  'More than one wallet with this name exists on your account. Showing the oldest — ask support to merge them.';
+/**
+ * Names the wallet on screen, because the pick is only stable, not provably
+ * the right one: if it is the wrong wallet, the id is what support needs.
+ */
+export const duplicateWalletWarning = (wallet: Wallet, count: number): string =>
+  `${count} wallets on your account share this name. Showing ${wallet.id} — ask support to merge them.`;

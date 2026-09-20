@@ -1,4 +1,4 @@
-import React, { useContext, useId, useState } from 'react';
+import React, { useContext, useEffect, useId, useRef, useState } from 'react';
 import styles from './PurchasePopup.module.css';
 import { RewardNameContext } from './RewardNameContext';
 
@@ -16,6 +16,59 @@ const PurchasePopup: React.FC<PurchasePopupProps> = ({
   const { rewardNameLabel } = useContext(RewardNameContext);
   const [error, setError] = useState<string | null>(null);
   const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // `aria-modal` is only a promise to assistive tech; it does not move or trap
+  // focus, and it does not make Escape work. Without this, focus stayed on the
+  // Request button behind the overlay, Tab walked out into the page under the
+  // dialog, and there was no keyboard way to dismiss it.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+
+    const focusable = () =>
+      Array.from(
+        dialog?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+
+    (focusable()[0] ?? dialog)?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const items = focusable();
+      if (items.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      const outside = !dialog?.contains(active);
+
+      if (event.shiftKey && (active === first || outside)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || outside)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      previouslyFocused?.focus?.();
+    };
+  }, [onClose]);
   const storeOwnerEmail =
     process.env.REACT_APP_LNBITS_STORE_OWNER_EMAIL?.trim();
 
@@ -41,10 +94,12 @@ const PurchasePopup: React.FC<PurchasePopupProps> = ({
       onClick={event => event.target === event.currentTarget && onClose()}
     >
       <div
+        ref={dialogRef}
         className={styles.popup}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
       >
         <h2 id={titleId} className={styles.title}>
           {hasEnoughSats ? 'Request reward' : 'Not enough balance'}
