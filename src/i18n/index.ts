@@ -5,7 +5,9 @@
 // for any `es-*` client and in English for everything else. Only bot copy is
 // translated: LNbits wallet names, display names, amounts and the reward
 // label are data and pass through untouched, and the command words people
-// type stay English (they are matched by SSOCommandMap).
+// type stay English (they are matched by SSOCommandMap). The zap card and
+// its receipt use the same keys, so a card built for a Spanish client is
+// Spanish end to end.
 //
 // The dictionaries are typed objects rather than JSON files so a Spanish key
 // that is missing fails the build, and `{{name}}` placeholders are filled by
@@ -59,6 +61,27 @@ export const en = {
     'Work signals connected — ask me about recent meetings or collaborators!',
   signInFailed:
     'Sign-in could not be completed. Type "{{command}}" to try again.',
+  cardReceiverLabel: 'Receiver',
+  cardReceiverPlaceholder: 'Select one or more recipient wallets',
+  cardReceiverError: 'You must select at least one person to zap',
+  cardMessageLabel: 'Message',
+  cardMessagePlaceholder: 'Thanks for helping me with the proposal!',
+  cardMessageError: 'You should tell them why you are zapping them',
+  cardAmountLabel: 'Amount ({{rewardName}})',
+  cardAmountError:
+    'You must specify an amount between 1 and 10,000 {{rewardName}}',
+  cardBalance: '**Current Available Balance ({{rewardName}}):** {{balance}}',
+  cardSendButton: 'Send Zap',
+  receiptTitle: 'Zap sent!',
+  receiptReceiver: 'Receiver:',
+  receiptReceivers: 'Receivers:',
+  receiptFailed: '**Failed Receivers:**\n{{list}}',
+  receiptNeedsChecking:
+    '**Needs checking:**\n{{list}}\nPayment outcome uncertain — an admin should verify before retrying.',
+  receiptMessage: 'Message:',
+  receiptAmount: 'Amount ({{rewardName}}):',
+  receiptTotal: 'Total Sent ({{rewardName}}):',
+  receiptRemaining: 'Remaining Amount ({{rewardName}}):',
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -112,6 +135,26 @@ export const es: Record<MessageKey, string> = {
     'Señales de trabajo conectadas. Pregúntame por reuniones o colaboradores recientes.',
   signInFailed:
     'No se pudo completar el inicio de sesión. Escribe "{{command}}" para intentarlo de nuevo.',
+  cardReceiverLabel: 'Destinatario',
+  cardReceiverPlaceholder: 'Selecciona una o más carteras destinatarias',
+  cardReceiverError: 'Debes seleccionar al menos a una persona',
+  cardMessageLabel: 'Mensaje',
+  cardMessagePlaceholder: '¡Gracias por ayudarme con la propuesta!',
+  cardMessageError: 'Cuéntales por qué les envías el zap',
+  cardAmountLabel: 'Cantidad ({{rewardName}})',
+  cardAmountError: 'Debes indicar una cantidad entre 1 y 10,000 {{rewardName}}',
+  cardBalance: '**Saldo disponible ({{rewardName}}):** {{balance}}',
+  cardSendButton: 'Enviar zap',
+  receiptTitle: '¡Zap enviado!',
+  receiptReceiver: 'Destinatario:',
+  receiptReceivers: 'Destinatarios:',
+  receiptFailed: '**Destinatarios fallidos:**\n{{list}}',
+  receiptNeedsChecking:
+    '**Por verificar:**\n{{list}}\nResultado del pago incierto; un administrador debe verificarlo antes de reintentar.',
+  receiptMessage: 'Mensaje:',
+  receiptAmount: 'Cantidad ({{rewardName}}):',
+  receiptTotal: 'Total enviado ({{rewardName}}):',
+  receiptRemaining: 'Saldo restante ({{rewardName}}):',
 };
 
 export type Dictionaries = Record<Locale, Record<MessageKey, string>>;

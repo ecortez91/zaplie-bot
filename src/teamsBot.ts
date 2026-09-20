@@ -297,15 +297,18 @@ export class TeamsBot extends TeamsActivityHandler {
             // recipients this submit processed. Recipients already settled by
             // an earlier submit of the same card were skipped and are not
             // relisted.
-            const updatedCard = buildZapReceiptCard({
-              recipients: successfulRecipients,
-              failedRecipients,
-              uncertainRecipients,
-              message: zapMessage,
-              amount,
-              remainingBalance,
-              rewardName: globalRewardName,
-            });
+            const updatedCard = buildZapReceiptCard(
+              {
+                recipients: successfulRecipients,
+                failedRecipients,
+                uncertainRecipients,
+                message: zapMessage,
+                amount,
+                remainingBalance,
+                rewardName: globalRewardName,
+              },
+              locale,
+            );
 
             const updatedMessage = MessageFactory.attachment(
               CardFactory.adaptiveCard(updatedCard),

@@ -7,7 +7,8 @@ import {
   getWalletBalance,
 } from '../services/lnbitsService';
 import { UserService } from '../services/userService';
-import { GENERIC_ERROR_MESSAGE } from '../messages';
+import { genericErrorMessage } from '../messages';
+import { Locale, resolveLocale, t } from '../i18n';
 
 const adminKey = process.env.LNBITS_ADMINKEY as string;
 const lnbitsLabel = process.env.LNBITS_POINTS_LABEL as string;
@@ -21,7 +22,10 @@ export class SendZapCommand extends SSOCommand {
 
       // Await the createZapCard function and log the result
       const currentUser = context.turnState.get('user');
-      const card = await createZapCard(currentUser, globalRewardName);
+      // Optional chaining: a language mismatch or a bare context must never
+      // fail a turn, and the error path below runs for any failure.
+      const locale = resolveLocale(context.activity?.locale);
+      const card = await createZapCard(currentUser, globalRewardName, locale);
       console.log('createZapCard:', card); // Log the card content
 
       // Create the message with the adaptive card
@@ -35,7 +39,9 @@ export class SendZapCommand extends SSOCommand {
       // The details belong in the logs: an LNbits error message can carry
       // wallet ids or configuration names into the chat.
       console.error('SendZapCommand failed:', error);
-      await context.sendActivity(GENERIC_ERROR_MESSAGE);
+      await context.sendActivity(
+        genericErrorMessage(resolveLocale(context.activity?.locale)),
+      );
     }
   }
 }
@@ -90,7 +96,10 @@ const receiptRow = (label: string, value: string) => ({
 // The read-only receipt a zap card turns into once a submit finishes. It
 // reports the recipients this submit processed — recipients already settled by
 // an earlier submit of the same card are not repeated here.
-export function buildZapReceiptCard(receipt: ZapReceipt) {
+export function buildZapReceiptCard(
+  receipt: ZapReceipt,
+  locale: Locale = 'en',
+) {
   const {
     recipients,
     failedRecipients = [],
@@ -101,7 +110,10 @@ export function buildZapReceiptCard(receipt: ZapReceipt) {
     rewardName,
   } = receipt;
 
-  const receiverLabel = recipients.length > 1 ? 'Receivers:' : 'Receiver:';
+  const receiverLabel =
+    recipients.length > 1
+      ? t(locale, 'receiptReceivers')
+      : t(locale, 'receiptReceiver');
   const totalAmountSent = recipients.length * amount;
   const bulletList = (names: string[]): string =>
     names.map(name => `- ${name}`).join('\n');
@@ -111,7 +123,7 @@ export function buildZapReceiptCard(receipt: ZapReceipt) {
     body: [
       {
         type: 'TextBlock',
-        text: 'Zap sent!',
+        text: t(locale, 'receiptTitle'),
         weight: 'Bolder',
         size: 'Large',
         color: 'Good',
@@ -121,7 +133,9 @@ export function buildZapReceiptCard(receipt: ZapReceipt) {
         ? [
             {
               type: 'TextBlock',
-              text: `**Failed Receivers:**\n${bulletList(failedRecipients)}`,
+              text: t(locale, 'receiptFailed', {
+                list: bulletList(failedRecipients),
+              }),
               wrap: true,
               color: 'Attention',
             },
@@ -134,27 +148,29 @@ export function buildZapReceiptCard(receipt: ZapReceipt) {
         ? [
             {
               type: 'TextBlock',
-              text:
-                `**Needs checking:**\n${bulletList(uncertainRecipients)}\n` +
-                'Payment outcome uncertain — an admin should verify before ' +
-                'retrying.',
+              text: t(locale, 'receiptNeedsChecking', {
+                list: bulletList(uncertainRecipients),
+              }),
               wrap: true,
               color: 'Warning',
             },
           ]
         : []),
-      receiptRow('Message:', message),
-      receiptRow(`Amount (${rewardName}):`, amount.toLocaleString()),
+      receiptRow(t(locale, 'receiptMessage'), message),
+      receiptRow(
+        t(locale, 'receiptAmount', { rewardName }),
+        amount.toLocaleString(),
+      ),
       ...(recipients.length > 1
         ? [
             receiptRow(
-              `Total Sent (${rewardName}):`,
+              t(locale, 'receiptTotal', { rewardName }),
               totalAmountSent.toLocaleString(),
             ),
           ]
         : []),
       receiptRow(
-        `Remaining Amount (${rewardName}):`,
+        t(locale, 'receiptRemaining', { rewardName }),
         remainingBalance.toLocaleString(),
       ),
     ],
@@ -246,13 +262,16 @@ export async function SendZap(
       );
       console.log('Remaining Balance:', remainingBalance);
 
-      const updatedCard = buildZapReceiptCard({
-        recipients: [receiver.displayName],
-        message: zapMessage,
-        amount: zapAmount,
-        remainingBalance,
-        rewardName: globalRewardName,
-      });
+      const updatedCard = buildZapReceiptCard(
+        {
+          recipients: [receiver.displayName],
+          message: zapMessage,
+          amount: zapAmount,
+          remainingBalance,
+          rewardName: globalRewardName,
+        },
+        resolveLocale(context.activity?.locale),
+      );
 
       // Update responsive card in message
       const updatedMessage = MessageFactory.attachment(
@@ -287,7 +306,11 @@ export async function SendZap(
 }
 
 // Function to create an adaptive card
-async function createZapCard(sender: User, globalRewardName: string) {
+async function createZapCard(
+  sender: User,
+  globalRewardName: string,
+  locale: Locale,
+) {
   console.log('Creating Zap Card ...');
   const walletChoices = await populateWalletChoices();
 
@@ -297,35 +320,38 @@ async function createZapCard(sender: User, globalRewardName: string) {
   const cardBody = [
     {
       type: 'Input.ChoiceSet',
-      label: 'Receiver',
+      label: t(locale, 'cardReceiverLabel'),
       id: 'zapReceiverId',
-      placeholder: 'Select one or more recipient wallets',
+      placeholder: t(locale, 'cardReceiverPlaceholder'),
       choices: walletChoices,
       isRequired: true,
       isMultiSelect: true,
-      errorMessage: 'You must select at least one person to zap',
+      errorMessage: t(locale, 'cardReceiverError'),
     },
     {
       type: 'Input.Text',
-      label: `Message`,
+      label: t(locale, 'cardMessageLabel'),
       size: 'medium',
       id: 'zapMessage',
       isRequired: true,
-      placeholder: 'Thanks for helping me with the proposal!',
-      errorMessage: 'You should tell them why you are zapping them',
+      placeholder: t(locale, 'cardMessagePlaceholder'),
+      errorMessage: t(locale, 'cardMessageError'),
     },
     {
       type: 'Input.Text',
       id: 'zapAmount',
       placeholder: '100',
-      label: `Amount (${globalRewardName})`,
+      label: t(locale, 'cardAmountLabel', { rewardName: globalRewardName }),
       regex: '^(?:10000|[1-9][0-9]{0,3})$',
       isRequired: true,
-      errorMessage: `You must specify an amount between 1 and 10,000 ${lnbitsLabel}`,
+      errorMessage: t(locale, 'cardAmountError', { rewardName: lnbitsLabel }),
     },
     {
       type: 'TextBlock',
-      text: `**Current Available Balance (${globalRewardName}):** ${currentBalance}`,
+      text: t(locale, 'cardBalance', {
+        rewardName: globalRewardName,
+        balance: currentBalance,
+      }),
       wrap: true,
       color: 'Good',
     },
@@ -352,7 +378,7 @@ async function createZapCard(sender: User, globalRewardName: string) {
     actions: [
       {
         type: 'Action.Submit',
-        title: 'Send Zap',
+        title: t(locale, 'cardSendButton'),
         data: {
           action: 'submitZaps',
         },
