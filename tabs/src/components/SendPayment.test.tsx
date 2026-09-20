@@ -28,6 +28,23 @@ describe('SendPayment invoice parsing', () => {
     });
   });
 
+  test('rejects an amount it cannot represent exactly', () => {
+    // Past Number.MAX_SAFE_INTEGER, so Number() would round it and the box
+    // would show an amount the invoice does not encode.
+    mockDecode.mockReturnValue({
+      paymentRequest: 'lnbc1invoice',
+      sections: [
+        { name: 'amount', letters: '9007199254741', value: '9007199254740993' },
+      ],
+      expiry: 3600,
+      route_hints: [],
+    });
+
+    expect(() => parseInvoice('lnbc1invoice')).toThrow(
+      'The invoice amount could not be read.',
+    );
+  });
+
   test('rejects amountless invoices instead of inventing an amount', () => {
     mockDecode.mockReturnValue({
       paymentRequest: 'lnbc1invoice',

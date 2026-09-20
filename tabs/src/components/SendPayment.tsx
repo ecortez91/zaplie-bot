@@ -200,6 +200,13 @@ const SendPayment: React.FC<SendPopupProps> = ({
 
                 if (processedValue) {
                   decodeAndSetInvoice(processedValue);
+                } else {
+                  // Clearing the box has to clear what was parsed from the old
+                  // invoice too, or the read-only amount and note stay on
+                  // screen describing an invoice that is no longer there.
+                  setInvoiceAmount(null);
+                  setInvoiceMemo(null);
+                  setInvoiceError(null);
                 }
               }}
               className={styles.textarea}
