@@ -239,8 +239,12 @@ const SendPayment: React.FC<SendPopupProps> = ({
                 {invoiceAmount !== null && (
                   <input
                     type="text"
-                    value={`${invoiceAmount} ${
-                      invoiceMemo ? ` ${rewardsName}. Note: ${invoiceMemo}` : ''
+                    aria-label="Invoice amount"
+                    // The unit belongs to the amount, not to the note, so it
+                    // is rendered whether or not the invoice carries a memo -
+                    // a bare number on a payment screen is ambiguous.
+                    value={`${invoiceAmount} ${rewardsName}${
+                      invoiceMemo ? `. Note: ${invoiceMemo}` : ''
                     }`}
                     readOnly
                     className={styles.inputField}

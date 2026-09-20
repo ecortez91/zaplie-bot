@@ -69,7 +69,7 @@ const alertText = () =>
 const readOnlyAmount = () =>
   (
     container.querySelector(
-      'input[type="text"][readonly]',
+      'input[aria-label="Invoice amount"]',
     ) as HTMLInputElement | null
   )?.value ?? null;
 
@@ -107,7 +107,8 @@ describe('SendPayment invoice entry', () => {
 
     expect(sendButton().disabled).toBe(false);
     expect(alertText()).toBeNull();
-    expect(readOnlyAmount()).toContain('2000000');
+    // The unit sits with the amount, not inside the note.
+    expect(readOnlyAmount()).toBe('2000000 sats. Note: 1 cup coffee');
   });
 
   test('strips a lightning: prefix before decoding', async () => {
