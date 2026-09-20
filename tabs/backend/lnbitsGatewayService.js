@@ -199,21 +199,66 @@ const sanitizeWallet = (wallet) => ({
   deleted: wallet.deleted === true,
 });
 
-const sanitizePayment = (payment) => ({
-  checking_id: payment.checking_id || payment.payment_hash || payment.id || '',
-  payment_hash: payment.payment_hash,
-  // LNbits v1 dropped the boolean `pending` field in favour of `status`;
-  // derive it so in-flight payments are not misread as settled.
-  pending:
-    payment.pending === true ||
-    String(payment.status || '').toLowerCase() === 'pending',
-  amount: Number(payment.amount || 0),
-  fee: Number(payment.fee || 0),
-  memo: payment.memo || '',
-  time: payment.time,
-  extra: redactSensitive(payment.extra || {}),
-  wallet_id: payment.wallet_id,
-});
+const validPaymentId = (value) =>
+  typeof value === 'string' && value.length > 0 && value.length <= 256;
+
+const requirePaymentId = (payment) => {
+  const paymentId = [payment.checking_id, payment.payment_hash, payment.id].find(
+    validPaymentId,
+  );
+  if (!paymentId) {
+    throw new LnbitsGatewayError(
+      'LNbits payment response is missing a stable identifier',
+    );
+  }
+  return paymentId;
+};
+
+const sanitizePayment = (payment) => {
+  const paymentId = requirePaymentId(payment);
+  return {
+    checking_id: paymentId,
+    payment_hash: validPaymentId(payment.payment_hash)
+      ? payment.payment_hash
+      : undefined,
+    // LNbits v1 dropped the boolean `pending` field in favour of `status`;
+    // derive it so in-flight payments are not misread as settled.
+    pending:
+      payment.pending === true ||
+      String(payment.status || '').toLowerCase() === 'pending',
+    amount: Number(payment.amount || 0),
+    fee: Number(payment.fee || 0),
+    memo: payment.memo || '',
+    time: payment.time,
+    extra: redactSensitive(payment.extra || {}),
+    wallet_id: payment.wallet_id,
+  };
+};
+
+// Listing is a different risk than reading one payment. The feed, the
+// leaderboard and the transaction log each pull thousands of rows through these
+// endpoints, so letting one unidentifiable record throw would blank all three
+// for every user over a single bad row. Drop it with a warning instead — the
+// bot's own history walk (src/services/zapHistoryService.ts) already skips rows
+// it cannot key. Single-record paths keep the throw.
+const sanitizePaymentPage = (payments, source) =>
+  payments.flatMap((payment) => {
+    try {
+      return [sanitizePayment(payment)];
+    } catch (error) {
+      // Identifying fields only: the record itself carries memos and extra.
+      // Every interpolated value is upstream- or request-controlled, so the
+      // format string stays constant and they go in as arguments.
+      console.warn(
+        'Dropped an unusable LNbits payment:',
+        error.message,
+        `source=${source}`,
+        `wallet_id=${payment?.wallet_id ?? 'unknown'}`,
+        `time=${payment?.time ?? 'unknown'}`,
+      );
+      return [];
+    }
+  });
 
 const listRawUsers = async () => {
   const body = await lnbitsRequest('/users/api/v1/user');
@@ -348,7 +393,7 @@ const listWalletPayments = async (walletId, limit = 100) => {
   if (!Array.isArray(payments)) {
     throw new LnbitsGatewayError('LNbits payments response is malformed');
   }
-  return payments.map(sanitizePayment);
+  return sanitizePaymentPage(payments, `wallet ${walletId}`);
 };
 
 const getInvoicePayment = async (walletId, invoiceId, aadObjectId) => {
@@ -369,9 +414,6 @@ const getWalletPayLinks = async (walletId, aadObjectId) => {
     ),
   );
 };
-
-const validPaymentId = (value) =>
-  typeof value === 'string' && value.length > 0 && value.length <= 256;
 
 const createInvoice = async (wallet, amount, memo) => {
   const result = await lnbitsRequest('/api/v1/payments', {
@@ -655,7 +697,7 @@ const getAllPayments = async ({ limit = 1000, offset = 0, direction = 'desc' }) 
   if (!Array.isArray(payments)) {
     throw new LnbitsGatewayError('LNbits payments response is malformed');
   }
-  return payments.map(sanitizePayment);
+  return sanitizePaymentPage(payments, 'the tenant-wide payments page');
 };
 
 const resetCachesForTests = () => {
