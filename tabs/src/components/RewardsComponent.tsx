@@ -46,10 +46,15 @@ const isReward = (value: unknown): value is Reward => {
     !!reward &&
     typeof reward === 'object' &&
     typeof reward.id === 'string' &&
-    reward.id.length > 0 &&
+    reward.id.trim().length > 0 &&
     typeof reward.name === 'string' &&
+    reward.name.trim().length > 0 &&
     typeof reward.shortDescription === 'string' &&
-    Number.isFinite(reward.price)
+    // A price must be a whole, non-negative number of units. A negative price
+    // would make the eligibility check pass against any balance, and a
+    // fractional one would reach the request email as "12.5 sats".
+    Number.isSafeInteger(reward.price) &&
+    reward.price >= 0
   );
 };
 
@@ -60,8 +65,14 @@ const RewardsComponent: FunctionComponent = () => {
   const [selectedReward, setSelectedReward] = useState<Reward | null>(null);
   const [hasEnoughSats, setHasEnoughSats] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Two independent failures with two different retries: the catalogue load
+  // retries through loadRewards, an eligibility check retries by clicking the
+  // same reward again. Sharing one error made "Try again" reload the
+  // catalogue after a wallet failure, which could never fix it.
   const [error, setError] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
   const [droppedCount, setDroppedCount] = useState(0);
+  const [checkingReward, setCheckingReward] = useState<string | null>(null);
 
   const loadRewards = useCallback(async () => {
     const storeId = getStoreId();
@@ -73,6 +84,7 @@ const RewardsComponent: FunctionComponent = () => {
 
     setLoading(true);
     setError(null);
+    setRequestError(null);
     setDroppedCount(0);
     try {
       const response = await getNostrRewards(storeId);
@@ -109,7 +121,11 @@ const RewardsComponent: FunctionComponent = () => {
   }, [loadRewards]);
 
   const handleRequestClick = async (price: number, reward: Reward) => {
-    setError(null);
+    // One check at a time: a slow earlier click must not resolve after a later
+    // one and swap the popup to the wrong reward.
+    if (checkingReward) return;
+    setRequestError(null);
+    setCheckingReward(reward.id);
 
     try {
       // index.tsx sets the active account; accounts[0] is only the fallback.
@@ -147,12 +163,14 @@ const RewardsComponent: FunctionComponent = () => {
 
       setHasEnoughSats(privateWallet.balance_msat / 1000 >= price);
       setSelectedReward(reward);
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
+    } catch (caught) {
+      setRequestError(
+        caught instanceof Error
+          ? caught.message
           : 'Unable to check reward eligibility.',
       );
+    } finally {
+      setCheckingReward(null);
     }
   };
 
@@ -167,6 +185,13 @@ const RewardsComponent: FunctionComponent = () => {
               Try again
             </button>
           )}
+        </div>
+      )}
+      {requestError && (
+        <div className={styles.error} role="alert">
+          {/* No retry button: the retry for this is clicking the reward
+              again, which reruns exactly the check that failed. */}
+          <span>{requestError}</span>
         </div>
       )}
       {droppedCount > 0 && (
@@ -200,7 +225,7 @@ const RewardsComponent: FunctionComponent = () => {
                     className={styles.productDetails}
                     href={productUrl}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                   >
                     Product details
                   </a>
@@ -216,8 +241,11 @@ const RewardsComponent: FunctionComponent = () => {
                   className={styles.buyButton}
                   onClick={() => void handleRequestClick(reward.price, reward)}
                   aria-label={`Request ${reward.name}`}
+                  disabled={checkingReward !== null}
                 >
-                  Request reward
+                  {checkingReward === reward.id
+                    ? 'Checking…'
+                    : 'Request reward'}
                 </button>
               </article>
             );

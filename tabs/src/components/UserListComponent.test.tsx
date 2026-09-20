@@ -155,10 +155,14 @@ describe('UserListComponent', () => {
 
     // The error state is retryable rather than terminal.
     mockGetUsers.mockResolvedValue([user]);
-    act(() => {
+    // This test uses React's raw createRoot API, which is not auto-wrapped.
+    // eslint-disable-next-line testing-library/no-unnecessary-act
+    await act(async () => {
       alert?.querySelector('button')?.click();
     });
     expect(mockGetUsers).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[role="table"]')).not.toBeNull();
+    expect(container.textContent).toContain('Ada Lovelace');
   });
 
   test('loads wallets a bounded number of requests at a time', async () => {

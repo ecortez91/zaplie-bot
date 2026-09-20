@@ -71,26 +71,31 @@ describe('RewardsComponent', () => {
     document.body.appendChild(container);
     const root: Root = createRoot(container);
 
-    // This test uses React's raw createRoot API, which is not auto-wrapped.
-    // eslint-disable-next-line testing-library/no-unnecessary-act
-    await act(async () => {
-      root.render(
-        <RewardNameContext.Provider value={rewardName}>
-          <RewardsComponent />
-        </RewardNameContext.Provider>,
+    try {
+      // This test uses React's raw createRoot API, which is not auto-wrapped.
+      // eslint-disable-next-line testing-library/no-unnecessary-act
+      await act(async () => {
+        root.render(
+          <RewardNameContext.Provider value={rewardName}>
+            <RewardsComponent />
+          </RewardNameContext.Provider>,
+        );
+      });
+
+      expect(container.textContent).toContain('Coffee');
+      expect(container.textContent).toContain(
+        '3 rewards could not be displayed',
       );
-    });
-
-    expect(container.textContent).toContain('Coffee');
-    expect(container.textContent).toContain('3 rewards could not be displayed');
-    expect(container.textContent).not.toContain('NaN');
-    expect(container.querySelector('[role="alert"]')).toBeNull();
-
-    // This test uses React's raw createRoot API, which is not auto-wrapped.
-    // eslint-disable-next-line testing-library/no-unnecessary-act
-    await act(async () => root.unmount());
-    container.remove();
-    delete process.env.REACT_APP_LNBITS_STORE_ID;
+      expect(container.textContent).not.toContain('NaN');
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      // A failed assertion must still detach the container, or it leaks into
+      // the next test that shares this document.
+      // eslint-disable-next-line testing-library/no-unnecessary-act
+      await act(async () => root.unmount());
+      container.remove();
+      delete process.env.REACT_APP_LNBITS_STORE_ID;
+    }
   });
 
   test('fails closed when the rewards store is not configured', async () => {
@@ -100,25 +105,26 @@ describe('RewardsComponent', () => {
     document.body.appendChild(container);
     const root: Root = createRoot(container);
 
-    // This test uses React's raw createRoot API, which is not auto-wrapped.
-    // eslint-disable-next-line testing-library/no-unnecessary-act
-    await act(async () => {
-      root.render(
-        <RewardNameContext.Provider value={rewardName}>
-          <RewardsComponent />
-        </RewardNameContext.Provider>,
+    try {
+      // This test uses React's raw createRoot API, which is not auto-wrapped.
+      // eslint-disable-next-line testing-library/no-unnecessary-act
+      await act(async () => {
+        root.render(
+          <RewardNameContext.Provider value={rewardName}>
+            <RewardsComponent />
+          </RewardNameContext.Provider>,
+        );
+      });
+
+      expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+        'Rewards are not configured for this environment.',
       );
-    });
-
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      'Rewards are not configured for this environment.',
-    );
-    expect(container.textContent).not.toContain('No rewards are available.');
-    expect(container.textContent).not.toContain('Loading rewards');
-
-    // This test uses React's raw createRoot API, which is not auto-wrapped.
-    // eslint-disable-next-line testing-library/no-unnecessary-act
-    await act(async () => root.unmount());
-    container.remove();
+      expect(container.textContent).not.toContain('No rewards are available.');
+      expect(container.textContent).not.toContain('Loading rewards');
+    } finally {
+      // eslint-disable-next-line testing-library/no-unnecessary-act
+      await act(async () => root.unmount());
+      container.remove();
+    }
   });
 });
