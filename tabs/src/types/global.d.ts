@@ -25,9 +25,18 @@ interface Wallet {
   id: string;
   name: string;
   user: string;
-  balance_msat: number;
+  /**
+   * null when the gateway could not read a finite balance from LNbits.
+   * Render it as unavailable — never coerce it to 0, which is what the old
+   * `Number(x || 0)` sanitiser did and what made a failed read look like an
+   * empty wallet.
+   */
+  balance_msat: number | null;
   deleted: boolean;
 }
+
+/** A wallet the gateway gave a finite balance for. */
+type FundedWallet = Wallet & { balance_msat: number };
 
 interface User {
   id: string;
