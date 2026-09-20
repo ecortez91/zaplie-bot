@@ -9,7 +9,11 @@ import pasteInvoice from '../images/PasteInvoice.svg';
 import loaderGif from '../images/Loader.gif';
 import { payInvoice } from '../services/lnbits/payments';
 import { RewardNameContext } from './RewardNameContext';
-import { parseInvoice } from '../utils/lightningInvoice';
+import {
+  INVOICE_ERRORS,
+  isInvoiceErrorMessage,
+  parseInvoice,
+} from '../utils/lightningInvoice';
 
 interface SendPopupProps {
   onClose: () => void;
@@ -103,10 +107,11 @@ const SendPayment: React.FC<SendPopupProps> = ({
   };
 
   // An amountless invoice used to leave the amount box editable, but the typed
-  // value was never sent: the gateway's pay route accepts only
-  // `paymentRequest` (see tabs/backend/lnbitsRoutes.js), so the wallet would be
-  // asked to pay an invoice with no amount at all. Reject it here instead of
-  // letting Send look armed.
+  // value was never sent: `payInvoice` posts only `{ paymentRequest }` to the
+  // gateway, whose POST /wallets/:walletId/payments route rejects any other
+  // body key (`PAYMENT_BODY_KEYS` in tabs/backend/lnbitsRoutes.js). The wallet
+  // would be asked to pay an invoice with no amount at all, so reject it here
+  // instead of letting Send look armed.
   const decodeAndSetInvoice = (processedInvoice: string) => {
     try {
       const parsed = parseInvoice(processedInvoice);
@@ -118,10 +123,14 @@ const SendPayment: React.FC<SendPopupProps> = ({
       setInvoice(processedInvoice);
       setInvoiceAmount(null);
       setInvoiceMemo(null);
+      // light-bolt11-decoder throws its own low-level text (for example
+      // 'Wrong string length: 5 (lnbc1). Expected (8..9007199254740991)').
+      // Only the messages parseInvoice raises itself are written for a user,
+      // so anything else is replaced rather than shown raw.
       setInvoiceError(
-        error instanceof Error
+        error instanceof Error && isInvoiceErrorMessage(error.message)
           ? error.message
-          : 'Enter a valid Lightning invoice.',
+          : INVOICE_ERRORS.undecodable,
       );
     }
   };
