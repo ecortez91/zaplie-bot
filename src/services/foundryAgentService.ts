@@ -272,10 +272,21 @@ export async function runConversationalTurn(
 
     // "null" and "[]" parse fine but break handlers that read named
     // properties, so they are refused here rather than inside every tool.
+    //
+    // Refused, not thrown: models routinely send "null" or "[]" for a tool
+    // that takes no arguments, and throwing would clear the conversation id
+    // and end the turn over a call the model can trivially repeat correctly.
+    // Handing the mistake back as tool output lets it self-correct in the
+    // next round, which is what agentTools' own validation errors do.
     if (!isRecord(args)) {
-      throw new Error(
+      console.warn(
         `foundryAgentService: the arguments for tool "${call.name}" are not a JSON object: ${call.arguments}`,
       );
+      return JSON.stringify({
+        error:
+          `Arguments for "${call.name}" must be a JSON object, got ${call.arguments}. ` +
+          'Send {} when the tool takes no arguments.',
+      });
     }
 
     const result = await tool.handler(args, context);

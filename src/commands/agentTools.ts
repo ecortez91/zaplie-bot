@@ -46,6 +46,12 @@ const LEADERBOARD_DAYS_PARAMETER = {
 // tool as parsed JSON without checking them against the schema — so the schema
 // documents the contract, it does not enforce it. Every handler therefore
 // takes `unknown` and narrows here.
+//
+// foundryAgentService already refuses a non-object before calling a handler,
+// so today the fallback only fires for a direct caller of the exported
+// ToolDefinition contract (the tests below are one). It stays because the
+// contract is `unknown`: a handler that reads named properties off whatever
+// it is handed is one refactor away from the crash this guard prevents.
 const toolArgs = (args: unknown): Record<string, unknown> =>
   isRecord(args) ? args : {};
 

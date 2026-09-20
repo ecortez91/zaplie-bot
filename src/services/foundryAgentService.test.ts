@@ -328,35 +328,53 @@ describe('foundryAgentService.runConversationalTurn', () => {
     );
   });
 
+  // A model sending "null" or "[]" for a no-argument tool is a mistake it can
+  // fix on the next round. Killing the turn over it would also clear the
+  // conversation id, so the fix is to hand the mistake back as tool output.
   test.each([
     ['null', 'null'],
     ['a JSON array', '[]'],
     ['a JSON string', '"bob"'],
   ])(
-    'rejects %s arguments, so handlers never read properties off a non-object',
+    'hands %s arguments back as a tool error instead of ending the turn',
     async (_label, argumentsJson) => {
-      mockResponsesCreate.mockResolvedValueOnce({
-        output: [
-          {
-            type: 'function_call',
-            name: noopTool.name,
-            call_id: 'call_not_an_object',
-            arguments: argumentsJson,
-          },
-        ],
-        output_text: '',
-      });
+      const handler = jest.fn<ToolDefinition['handler']>();
+      mockResponsesCreate
+        .mockResolvedValueOnce({
+          output: [
+            {
+              type: 'function_call',
+              name: noopTool.name,
+              call_id: 'call_not_an_object',
+              arguments: argumentsJson,
+            },
+          ],
+          output_text: '',
+        })
+        .mockResolvedValueOnce({ output: [], output_text: 'Let me retry.' });
 
-      await expect(
-        runConversationalTurn(
-          'do something',
-          'conv_existing',
-          [noopTool],
-          makeTurnContext(),
-        ),
-      ).rejects.toThrow(
-        `foundryAgentService: the arguments for tool "noop_tool" are not a JSON object: ${argumentsJson}`,
+      const result = await runConversationalTurn(
+        'do something',
+        'conv_existing',
+        [{ ...noopTool, handler }],
+        makeTurnContext(),
       );
+
+      expect(result.replyText).toBe('Let me retry.');
+      // The handler never sees a non-object, which is what the guard is for.
+      expect(handler).not.toHaveBeenCalled();
+
+      const fedBack =
+        mockResponsesCreate.mock.calls[
+          mockResponsesCreate.mock.calls.length - 1
+        ][0].input;
+      expect(fedBack).toEqual([
+        {
+          type: 'function_call_output',
+          call_id: 'call_not_an_object',
+          output: expect.stringContaining('must be a JSON object'),
+        },
+      ]);
     },
   );
 

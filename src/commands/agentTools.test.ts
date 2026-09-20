@@ -479,9 +479,9 @@ describe('agentTools', () => {
         t => t.name === 'get_recent_activity',
       )!;
 
-      // The Foundry runner refuses these before a handler sees them; the
-      // handler stays safe on its own so the guarantee does not rest on one
-      // caller.
+      // The Foundry runner refuses these before a handler sees them, so
+      // this exercises the handler's own guard: the exported contract takes
+      // `unknown`, and a handler must not crash on one.
       for (const args of [null, undefined, 'all of them', 7, []]) {
         await tool.handler(args, makeTurnContext(currentUser));
         expect(mockGetZapActivity).toHaveBeenLastCalledWith({

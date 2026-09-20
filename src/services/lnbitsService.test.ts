@@ -433,6 +433,9 @@ describe('getUserWallets', () => {
     ['deleted', 'true', 'boolean deleted'],
     ['balance_msat', '5000', 'number balance_msat'],
     ['inkey', 42, 'string inkey'],
+    // null is not "no balance": it would reach showMyBalanceCommand as a
+    // confident 0 sats for a wallet LNbits never said was empty.
+    ['balance_msat', null, 'number balance_msat'],
   ])(
     'rejects a wallet whose optional %s has the wrong type',
     async (field, value, expected) => {
@@ -456,6 +459,27 @@ describe('getUserWallets', () => {
     await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
       'getUserWallets: LNbits wallet at index 0 is missing string id, string name, string user',
     );
+  });
+
+  test('accepts an explicit null for the descriptive optional fields', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse([
+        {
+          id: 'w-1',
+          name: 'Alice - Private',
+          user: 'u-1',
+          admin: null,
+          adminkey: null,
+          inkey: null,
+          deleted: null,
+        },
+      ]),
+    );
+
+    await expect(
+      service.getUserWallets('admin-key', 'u-1'),
+    ).resolves.toHaveLength(1);
   });
 
   test('accepts a wallet that simply omits the optional fields', async () => {

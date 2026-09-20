@@ -116,13 +116,13 @@ export async function getAccessToken(
 
 interface RawLnbitsWallet {
   id: string;
-  admin?: string;
+  admin?: string | null;
   name: string;
   user: string;
-  adminkey?: string;
-  inkey?: string;
+  adminkey?: string | null;
+  inkey?: string | null;
   balance_msat?: number;
-  deleted?: boolean;
+  deleted?: boolean | null;
 }
 
 // LNbits declares id, name and user required on every wallet route this file
@@ -135,12 +135,18 @@ const REQUIRED_WALLET_FIELDS = ['id', 'name', 'user'] as const;
 // A row carrying deleted: "true" passes `deleted !== true` and stays visible,
 // and a non-number balance_msat becomes NaN the moment a caller divides it by
 // 1000 — so a wrong type here is validated, not certified by the cast below.
+//
+// `nullable` says whether LNbits may send an explicit null. It may for the
+// descriptive strings, and a null `deleted` reads exactly as an absent one.
+// It may not for balance_msat: null is not "no balance", and it would reach
+// showMyBalanceCommand as a confident 0 sats for a wallet LNbits never said
+// was empty.
 const OPTIONAL_WALLET_FIELDS = {
-  admin: 'string',
-  adminkey: 'string',
-  inkey: 'string',
-  balance_msat: 'number',
-  deleted: 'boolean',
+  admin: { type: 'string', nullable: true },
+  adminkey: { type: 'string', nullable: true },
+  inkey: { type: 'string', nullable: true },
+  balance_msat: { type: 'number', nullable: false },
+  deleted: { type: 'boolean', nullable: true },
 } as const;
 
 const invalidWalletFields = (value: unknown): string[] => {
@@ -153,13 +159,13 @@ const invalidWalletFields = (value: unknown): string[] => {
   ).map(field => `string ${field}`);
 
   const mistyped = Object.entries(OPTIONAL_WALLET_FIELDS)
-    .filter(
-      ([field, expected]) =>
-        value[field] !== undefined &&
-        value[field] !== null &&
-        typeof value[field] !== expected,
-    )
-    .map(([field, expected]) => `${expected} ${field}`);
+    .filter(([field, spec]) => {
+      const field_value = value[field];
+      if (field_value === undefined) return false;
+      if (field_value === null) return !spec.nullable;
+      return typeof field_value !== spec.type;
+    })
+    .map(([field, spec]) => `${spec.type} ${field}`);
 
   return [...missing, ...mistyped];
 };
