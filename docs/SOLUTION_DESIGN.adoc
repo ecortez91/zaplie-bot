@@ -362,7 +362,8 @@ English) and render through `t(locale, key, params)`; validation errors carry
 a key (`UserFacingError`) and are rendered where they are caught. Command
 words, LNbits wallet names, display names, amounts and the reward label are
 data and are never translated. The zap card and its receipt use the same
-keys; the Teams manifest follows in its own change.
+keys, and `appPackage/es.json` localises the manifest (name, descriptions and
+tab names; command titles stay English because the bot matches them).
 
 *Rationale:* Issue #110 asks for Spanish first. Two dictionaries and 30-odd
 keys do not justify a localisation framework, and a typed object gives
