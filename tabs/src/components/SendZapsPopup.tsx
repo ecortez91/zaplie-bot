@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import styles from './SendZapsPopup.module.css';
 import { RewardNameContext } from './RewardNameContext';
+import { isFunded } from '../services/lnbits/walletSelection';
 import { useCache } from '../utils/CacheContext';
 import { sendZap, newIdempotencyKey } from '../services/lnbits/payments';
 import { getUsers } from '../services/lnbits/users';
@@ -77,10 +78,11 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const [users, setUsers] = useState<UserWithWallet[]>([]);
   const [currentUserWallets, setCurrentUserWallets] = useState<{
     allowance: Wallet | null;
-    balance: number;
+    /** null when the gateway could not read the allowance balance. */
+    balance: number | null;
   }>({
     allowance: null,
-    balance: 0,
+    balance: null,
   });
   const [sendAnonymously, setSendAnonymously] = useState(false);
   const [selectedValue, setSelectedValue] = useState<string>('');
@@ -125,9 +127,13 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
           const allowanceWallet = wallets?.find(w =>
             w.name.toLowerCase().includes('allowance'),
           );
-          const currentBalance = allowanceWallet
-            ? allowanceWallet.balance_msat / 1000
-            : 0;
+          // A balance the gateway could not read is null, not 0. Treating it
+          // as 0 here would block zaps while claiming the wallet is empty, so
+          // it stays null and the UI says the balance is unavailable.
+          const currentBalance =
+            allowanceWallet && isFunded(allowanceWallet)
+              ? allowanceWallet.balance_msat / 1000
+              : null;
 
           setCurrentUserWallets({
             allowance: allowanceWallet || null,
@@ -225,6 +231,12 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
     }
 
     // Balance validation
+    if (currentUserWallets.balance === null) {
+      setError(
+        'Your allowance balance is unavailable, so zaps cannot be sent right now.',
+      );
+      return;
+    }
     if (zapAmount > currentUserWallets.balance) {
       setError(
         `Insufficient balance. You have ${currentUserWallets.balance} ${rewardsName} available.`,
@@ -280,7 +292,10 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
         setSuccess(true);
         // Optimistic update for immediate UI feedback
         // Fresh balance will be fetched from API when popup reopens
-        const updatedBalance = currentUserWallets.balance - zapAmount;
+        const updatedBalance =
+          currentUserWallets.balance === null
+            ? null
+            : currentUserWallets.balance - zapAmount;
         setCurrentUserWallets(prev => ({ ...prev, balance: updatedBalance }));
       } else {
         throw new Error('Payment failed');
@@ -463,7 +478,10 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
 
             {/* Balance Info */}
             <p className={styles.balanceText}>
-              Available balance: {currentUserWallets.balance.toLocaleString()}{' '}
+              Available balance:{' '}
+              {currentUserWallets.balance === null
+                ? 'unavailable'
+                : currentUserWallets.balance.toLocaleString()}{' '}
               {rewardsName}
             </p>
 

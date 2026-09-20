@@ -8,6 +8,11 @@ import React, {
 import './WalletInfoCard.css';
 import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
+import {
+  DUPLICATE_WALLET_WARNING,
+  isFunded,
+  selectWalletByName,
+} from '../services/lnbits/walletSelection';
 import { useMsal } from '@azure/msal-react';
 import SendPayment from './SendPayment';
 import ReceivePayment from './ReceivePayment';
@@ -16,10 +21,13 @@ import { RewardNameContext } from './RewardNameContext';
 type WalletState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; balance: number; user: User };
-
-const walletNameIsPrivate = (wallet: Wallet) =>
-  wallet.name.trim().toLowerCase() === 'private';
+  | {
+      status: 'ready';
+      /** null when the gateway could not read a balance — shown as unavailable. */
+      balance: number | null;
+      user: User;
+      warning: string | null;
+    };
 
 const WalletYourWalletInfoCard: React.FC = () => {
   const { instance, accounts } = useMsal();
@@ -68,17 +76,11 @@ const WalletYourWalletInfoCard: React.FC = () => {
       const wallets = await getUserWallets(user.id);
       if (requestId !== requestIdRef.current) return;
 
-      const privateWallets = wallets.filter(walletNameIsPrivate);
-      if (privateWallets.length !== 1) {
-        setWalletState({
-          status: 'error',
-          message: "We couldn't find your Private wallet.",
-        });
-        return;
-      }
+      const match = selectWalletByName(wallets, user.id, 'private');
 
-      const privateWallet = privateWallets[0];
-      if (privateWallet.user !== user.id) {
+      // A wallet under this name that belongs to somebody else is the one case
+      // where there is nothing safe to show: refuse it outright.
+      if (match.foreignMatch) {
         setWalletState({
           status: 'error',
           message: "We couldn't confirm your Private wallet belongs to you.",
@@ -86,18 +88,26 @@ const WalletYourWalletInfoCard: React.FC = () => {
         return;
       }
 
-      if (!Number.isFinite(privateWallet.balance_msat)) {
+      if (!match.wallet) {
         setWalletState({
           status: 'error',
-          message: "We couldn't read your Private wallet balance.",
+          message: "We couldn't find your Private wallet.",
         });
         return;
       }
 
+      const privateWallet = match.wallet;
+
       setWalletState({
         status: 'ready',
-        balance: privateWallet.balance_msat / 1000,
+        // A balance the gateway could not read renders as unavailable rather
+        // than a fabricated zero; receiving and sending still work, because
+        // neither depends on this number.
+        balance: isFunded(privateWallet)
+          ? privateWallet.balance_msat / 1000
+          : null,
         user: { ...user, privateWallet },
+        warning: match.matchCount > 1 ? DUPLICATE_WALLET_WARNING : null,
       });
     } catch {
       if (requestId === requestIdRef.current) {
@@ -147,12 +157,26 @@ const WalletYourWalletInfoCard: React.FC = () => {
         ) : (
           <>
             <div className="item">
-              <h1>{walletState.balance.toLocaleString()}</h1>
+              {walletState.balance === null ? (
+                <p className="wallet-balance-unavailable">
+                  Balance unavailable
+                </p>
+              ) : (
+                <h1>{walletState.balance.toLocaleString()}</h1>
+              )}
             </div>
-            <div className="item">{rewardNameLabel}</div>
+            {walletState.balance !== null && (
+              <div className="item">{rewardNameLabel}</div>
+            )}
           </>
         )}
       </div>
+
+      {walletReady && walletState.warning ? (
+        <p className="wallet-warning" role="status">
+          {walletState.warning}
+        </p>
+      ) : null}
 
       <div className="wallet-buttons">
         <button

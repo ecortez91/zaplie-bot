@@ -13,8 +13,14 @@ import { getUserWallets } from '../services/lnbits/wallets';
 import PurchasePopup from './PurchasePopup';
 import imagePlaceholder from '../images/imagePlaceholderNew.svg';
 import { RewardNameContext } from './RewardNameContext';
+import {
+  isFunded,
+  selectWalletByName,
+} from '../services/lnbits/walletSelection';
 
-const storeId = process.env.REACT_APP_LNBITS_STORE_ID?.trim();
+// Read per call rather than once at module load, so a test (and a re-render
+// after a config change) sees the current value.
+const getStoreId = () => process.env.REACT_APP_LNBITS_STORE_ID?.trim();
 
 const safeProductUrl = (value: string): string | null => {
   try {
@@ -28,13 +34,19 @@ const safeProductUrl = (value: string): string | null => {
 };
 
 // Fail closed on the payload too: a reward whose price is not a finite number
-// renders as "NaN" in the card and in the request email, and a missing
-// description throws on `.length`.
+// renders as "NaN" in the card and in the request email, a missing description
+// throws on `.length`, and a missing `id` collapses the React keys.
+//
+// One malformed product must not take the whole tab down with it, though, so
+// bad items are dropped and counted rather than rejecting the response — a
+// catalogue with a typo in it still sells the other rewards.
 const isReward = (value: unknown): value is Reward => {
   const reward = value as Reward | null;
   return (
     !!reward &&
     typeof reward === 'object' &&
+    typeof reward.id === 'string' &&
+    reward.id.length > 0 &&
     typeof reward.name === 'string' &&
     typeof reward.shortDescription === 'string' &&
     Number.isFinite(reward.price)
@@ -49,8 +61,10 @@ const RewardsComponent: FunctionComponent = () => {
   const [hasEnoughSats, setHasEnoughSats] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [droppedCount, setDroppedCount] = useState(0);
 
   const loadRewards = useCallback(async () => {
+    const storeId = getStoreId();
     if (!storeId) {
       setError('Rewards are not configured for this environment.');
       setLoading(false);
@@ -59,12 +73,26 @@ const RewardsComponent: FunctionComponent = () => {
 
     setLoading(true);
     setError(null);
+    setDroppedCount(0);
     try {
       const response = await getNostrRewards(storeId);
-      if (!Array.isArray(response) || !response.every(isReward)) {
+      if (!Array.isArray(response)) {
         throw new Error('The rewards service returned an invalid response.');
       }
-      setRewards(response);
+
+      const usable = response.filter(isReward);
+      const dropped = response.length - usable.length;
+      if (dropped > 0) {
+        console.warn(
+          `[rewards] Dropped ${dropped} of ${response.length} rewards with a missing id, name, description or price.`,
+        );
+      }
+      if (usable.length === 0 && response.length > 0) {
+        throw new Error('The rewards service returned an invalid response.');
+      }
+
+      setRewards(usable);
+      setDroppedCount(dropped);
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -99,23 +127,21 @@ const RewardsComponent: FunctionComponent = () => {
 
       const currentUser = matchingUsers[0];
       const wallets = await getUserWallets(currentUser.id);
-      const privateWallets = wallets.filter(
-        wallet => wallet.name.trim().toLowerCase() === 'private',
-      );
-      if (privateWallets.length !== 1) {
-        throw new Error('Your Private wallet is unavailable.');
-      }
-
-      const privateWallet = privateWallets[0];
-      // Same ownership check as WalletInfoCard: never judge eligibility from
-      // somebody else's balance.
-      if (privateWallet.user !== currentUser.id) {
+      // Same selection rule as WalletInfoCard: never judge eligibility from
+      // somebody else's balance, but a duplicate wallet resolves to the oldest
+      // rather than blocking the request.
+      const match = selectWalletByName(wallets, currentUser.id, 'private');
+      if (match.foreignMatch) {
         throw new Error(
           "We couldn't confirm your Private wallet belongs to you.",
         );
       }
+      if (!match.wallet) {
+        throw new Error('Your Private wallet is unavailable.');
+      }
 
-      if (!Number.isFinite(privateWallet.balance_msat)) {
+      const privateWallet = match.wallet;
+      if (!isFunded(privateWallet)) {
         throw new Error('Your Private wallet balance is unavailable.');
       }
 
@@ -136,12 +162,18 @@ const RewardsComponent: FunctionComponent = () => {
       {error && (
         <div className={styles.error} role="alert">
           <span>{error}</span>
-          {storeId && (
+          {getStoreId() && (
             <button type="button" onClick={() => void loadRewards()}>
               Try again
             </button>
           )}
         </div>
+      )}
+      {droppedCount > 0 && (
+        <p className={styles.noPointer} role="status">
+          {droppedCount} reward{droppedCount === 1 ? '' : 's'} could not be
+          displayed because the rewards service returned incomplete data.
+        </p>
       )}
       {loading ? (
         <p className={styles.noPointer}>Loading rewards…</p>

@@ -175,6 +175,55 @@ describe('WalletInfoCard', () => {
     ).toBe('private-1');
   });
 
+  test('picks the oldest of duplicate Private wallets and warns instead of locking out', async () => {
+    // userService.ts provisions wallets find-or-create with no lock, so two
+    // concurrent first turns genuinely produce two "Private" wallets. The old
+    // `length !== 1` check made that an unrecoverable lockout.
+    mockGetUsers.mockResolvedValue([user]);
+    mockGetUserWallets.mockResolvedValue([
+      { ...exactPrivateWallet, id: 'private-2', balance_msat: 99_000 },
+      exactPrivateWallet,
+    ]);
+
+    await renderWallet();
+    await eventually(() => {
+      expect(container.querySelector('h1')?.textContent).toBe('20');
+    });
+
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.textContent).toContain('ask support to merge them');
+    expect(getButton('Receive').disabled).toBe(false);
+    expect(getButton('Send').disabled).toBe(false);
+  });
+
+  test('renders an unavailable balance rather than a fabricated zero', async () => {
+    mockGetUsers.mockResolvedValue([user]);
+    mockGetUserWallets.mockResolvedValue([
+      { ...exactPrivateWallet, balance_msat: null },
+    ]);
+
+    await renderWallet();
+    await eventually(() => {
+      expect(container.textContent).toContain('Balance unavailable');
+    });
+
+    expect(container.querySelector('h1')).toBeNull();
+    expect(container.textContent).not.toContain('0');
+    // Receiving does not need a balance, so it stays available.
+    expect(getButton('Receive').disabled).toBe(false);
+  });
+
+  test('treats a wallet with no owner on a server-scoped list as owned', async () => {
+    mockGetUsers.mockResolvedValue([user]);
+    mockGetUserWallets.mockResolvedValue([{ ...exactPrivateWallet, user: '' }]);
+
+    await renderWallet();
+    await eventually(() => {
+      expect(container.querySelector('h1')?.textContent).toBe('20');
+    });
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
   test('shows an error and retries when the exact Private wallet is missing', async () => {
     mockGetUsers.mockResolvedValue([user]);
     mockGetUserWallets

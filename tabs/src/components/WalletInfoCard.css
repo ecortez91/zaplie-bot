@@ -150,3 +150,16 @@
     flex: 1 1 auto;
   }
 }
+
+.wallet-balance-unavailable {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--colorNeutralForeground3, #616161);
+}
+
+.wallet-warning {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: var(--colorPaletteDarkOrangeForeground1, #9a4f00);
+}

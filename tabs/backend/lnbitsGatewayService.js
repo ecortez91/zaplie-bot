@@ -191,11 +191,28 @@ const sanitizeUser = (user) => {
   };
 };
 
+// `Number(wallet.balance_msat || 0)` fabricated a balance: a missing, null or
+// unparseable value arrived at the browser as a real-looking 0, which then
+// satisfied every client-side `Number.isFinite` guard and rendered as a
+// confident "0 sats". Anything that is not a finite number (or a numeric
+// string, which LNbits does sometimes send) is passed through as null instead,
+// so the consumers can say "Unavailable" rather than invent a zero.
+const sanitizeBalanceMsat = (value) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
 const sanitizeWallet = (wallet) => ({
   id: wallet.id,
   name: wallet.name,
   user: wallet.user,
-  balance_msat: Number(wallet.balance_msat || 0),
+  balance_msat: sanitizeBalanceMsat(wallet.balance_msat),
   deleted: wallet.deleted === true,
 });
 
@@ -730,5 +747,6 @@ module.exports = {
   redactSensitive,
   sanitizePayment,
   sanitizeWallet,
+  sanitizeBalanceMsat,
   sendZap,
 };

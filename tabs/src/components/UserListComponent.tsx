@@ -11,6 +11,10 @@ import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
 import { useCache } from '../utils/CacheContext';
 import { RewardNameContext } from './RewardNameContext';
+import {
+  isFunded,
+  selectWalletByName,
+} from '../services/lnbits/walletSelection';
 
 // The wallet lookup is one request per user. Browsers cap concurrent requests
 // per host, so an unbounded fan-out leaves the surplus queued in the browser
@@ -40,24 +44,21 @@ const mapWithConcurrency = async <TIn, TOut>(
   return results;
 };
 
-// Fail closed: a substring match ("Private archive") or a duplicate name gives
-// no single right answer, and a wallet owned by somebody else must never be
-// attributed to this user. Anything but one exact, owned match renders as
-// "Unavailable" rather than a plausible-looking wrong balance.
+// Fail closed on the *value*, not on the row: a substring match
+// ("Private archive") or a wallet owned by somebody else is refused outright,
+// but a duplicate name resolves to the oldest wallet rather than blanking the
+// row, and a balance the gateway could not read renders as "Unavailable"
+// instead of a plausible-looking zero.
 export const selectOwnedWallet = (
   wallets: Wallet[],
   userId: string,
   name: string,
-): Wallet | null => {
-  const matches = wallets.filter(
-    wallet =>
-      wallet.name.trim().toLowerCase() === name && wallet.user === userId,
-  );
-  if (matches.length !== 1) return null;
+): Wallet | null => selectWalletByName(wallets, userId, name).wallet;
 
-  const wallet = matches[0];
-  return Number.isFinite(wallet.balance_msat) ? wallet : null;
-};
+const formatBalance = (wallet: Wallet | null, unit: string): string =>
+  wallet && isFunded(wallet)
+    ? `${Math.floor(wallet.balance_msat / 1000).toLocaleString()} ${unit}`
+    : 'Unavailable';
 
 const UserListComponent: FunctionComponent = () => {
   const [loading, setLoading] = useState(true);
@@ -210,27 +211,23 @@ const UserListComponent: FunctionComponent = () => {
                     role="cell"
                     data-label="Balance"
                     className={`${styles.colBalance} ${
-                      user.privateWallet ? styles.amount : styles.amountMuted
+                      user.privateWallet && isFunded(user.privateWallet)
+                        ? styles.amount
+                        : styles.amountMuted
                     }`}
                   >
-                    {user.privateWallet
-                      ? `${Math.floor(
-                          user.privateWallet.balance_msat / 1000,
-                        ).toLocaleString()} ${rewardNameLabel}`
-                      : 'Unavailable'}
+                    {formatBalance(user.privateWallet, rewardNameLabel)}
                   </span>
                   <span
                     role="cell"
                     data-label="Allowance remaining"
                     className={`${styles.colAllowance} ${
-                      user.allowanceWallet ? styles.amount : styles.amountMuted
+                      user.allowanceWallet && isFunded(user.allowanceWallet)
+                        ? styles.amount
+                        : styles.amountMuted
                     }`}
                   >
-                    {user.allowanceWallet
-                      ? `${Math.floor(
-                          user.allowanceWallet.balance_msat / 1000,
-                        ).toLocaleString()} ${rewardNameLabel}`
-                      : 'Unavailable'}
+                    {formatBalance(user.allowanceWallet, rewardNameLabel)}
                   </span>
                 </div>
               ))

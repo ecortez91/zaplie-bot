@@ -6,6 +6,7 @@ import Calendar from '../images/Calendar.svg';
 import { getWalletTransactionsSince } from '../services/lnbits/payments';
 import { getAllowance, getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
+import { isFunded } from '../services/lnbits/walletSelection';
 import { useMsal } from '@azure/msal-react';
 import { RewardNameContext } from './RewardNameContext';
 import SendZapsPopup from './SendZapsPopup';
@@ -53,8 +54,11 @@ const WalletAllowanceCard: React.FC<AllowanceCardProps> = () => {
             w.name.toLowerCase().includes('allowance'),
           );
 
-          if (allowanceWallet) {
-            const balance = (allowanceWallet.balance_msat ?? 0) / 1000;
+          // `?? 0` here used to turn a balance the gateway could not read into
+          // an empty-looking wallet and a 0% battery. A null balance now leaves
+          // the battery unset instead of asserting the allowance is spent.
+          if (allowanceWallet && isFunded(allowanceWallet)) {
+            const balance = allowanceWallet.balance_msat / 1000;
             setBalance(balance);
 
             const allowanceData = await getAllowance(currentUser.id);
