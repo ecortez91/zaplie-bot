@@ -235,6 +235,31 @@ const sanitizePayment = (payment) => {
   };
 };
 
+// Listing is a different risk than reading one payment. The feed, the
+// leaderboard and the transaction log each pull thousands of rows through these
+// endpoints, so letting one unidentifiable record throw would blank all three
+// for every user over a single bad row. Drop it with a warning instead — the
+// bot's own history walk (src/services/zapHistoryService.ts) already skips rows
+// it cannot key. Single-record paths keep the throw.
+const sanitizePaymentPage = (payments, source) =>
+  payments.flatMap((payment) => {
+    try {
+      return [sanitizePayment(payment)];
+    } catch (error) {
+      // Identifying fields only: the record itself carries memos and extra.
+      // Every interpolated value is upstream- or request-controlled, so the
+      // format string stays constant and they go in as arguments.
+      console.warn(
+        'Dropped an unusable LNbits payment:',
+        error.message,
+        `source=${source}`,
+        `wallet_id=${payment?.wallet_id ?? 'unknown'}`,
+        `time=${payment?.time ?? 'unknown'}`,
+      );
+      return [];
+    }
+  });
+
 const listRawUsers = async () => {
   const body = await lnbitsRequest('/users/api/v1/user');
   const users = Array.isArray(body) ? body : body?.data;
@@ -368,7 +393,7 @@ const listWalletPayments = async (walletId, limit = 100) => {
   if (!Array.isArray(payments)) {
     throw new LnbitsGatewayError('LNbits payments response is malformed');
   }
-  return payments.map(sanitizePayment);
+  return sanitizePaymentPage(payments, `wallet ${walletId}`);
 };
 
 const getInvoicePayment = async (walletId, invoiceId, aadObjectId) => {
@@ -672,7 +697,7 @@ const getAllPayments = async ({ limit = 1000, offset = 0, direction = 'desc' }) 
   if (!Array.isArray(payments)) {
     throw new LnbitsGatewayError('LNbits payments response is malformed');
   }
-  return payments.map(sanitizePayment);
+  return sanitizePaymentPage(payments, 'the tenant-wide payments page');
 };
 
 const resetCachesForTests = () => {

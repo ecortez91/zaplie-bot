@@ -230,6 +230,42 @@ test('payment serialization rejects records without a stable identifier', () => 
   );
 });
 
+test('one unidentifiable row is dropped, not the whole payments page', async (t) => {
+  installLnbitsStub();
+  const upstream = global.fetch;
+  global.fetch = async (url, init) => {
+    if (new URL(url).pathname === '/api/v1/payments') {
+      return jsonResponse([
+        { checking_id: 'good-1', amount: -10, time: 1, wallet_id: 'wallet-1' },
+        // No checking_id, payment_hash or id: LNbits cannot identify this row.
+        { amount: -20, time: 2, wallet_id: 'wallet-1', memo: 'private note' },
+        { payment_hash: 'good-2', amount: 30, time: 3, wallet_id: 'wallet-1' },
+      ]);
+    }
+    return upstream(url, init);
+  };
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  t.after(() => {
+    console.warn = originalWarn;
+  });
+
+  const payments = await listWalletPayments('wallet-1');
+
+  assert.deepEqual(
+    payments.map((payment) => payment.checking_id),
+    ['good-1', 'good-2'],
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /missing a stable identifier/);
+  assert.match(warnings[0], /wallet_id=wallet-1/);
+  assert.match(warnings[0], /time=2/);
+  // The dropped record's own content must not reach the log.
+  assert.ok(!warnings[0].includes('private note'));
+});
+
 test('invoice creation returns the exact stable invoice identifier', async (t) => {
   const originalFetch = global.fetch;
   const originalEnvironment = {
