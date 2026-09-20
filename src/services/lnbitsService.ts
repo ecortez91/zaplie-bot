@@ -131,10 +131,38 @@ interface RawLnbitsWallet {
 // from a complete one — and these lists drive balances and payments.
 const REQUIRED_WALLET_FIELDS = ['id', 'name', 'user'] as const;
 
-const missingWalletFields = (value: unknown): string[] =>
-  isRecord(value)
-    ? REQUIRED_WALLET_FIELDS.filter(field => typeof value[field] !== 'string')
-    : [...REQUIRED_WALLET_FIELDS];
+// The optional fields are only optional in their presence, not in their type.
+// A row carrying deleted: "true" passes `deleted !== true` and stays visible,
+// and a non-number balance_msat becomes NaN the moment a caller divides it by
+// 1000 — so a wrong type here is validated, not certified by the cast below.
+const OPTIONAL_WALLET_FIELDS = {
+  admin: 'string',
+  adminkey: 'string',
+  inkey: 'string',
+  balance_msat: 'number',
+  deleted: 'boolean',
+} as const;
+
+const invalidWalletFields = (value: unknown): string[] => {
+  // A row that is not an object at all is missing every required field.
+  if (!isRecord(value))
+    return REQUIRED_WALLET_FIELDS.map(field => `string ${field}`);
+
+  const missing = REQUIRED_WALLET_FIELDS.filter(
+    field => typeof value[field] !== 'string',
+  ).map(field => `string ${field}`);
+
+  const mistyped = Object.entries(OPTIONAL_WALLET_FIELDS)
+    .filter(
+      ([field, expected]) =>
+        value[field] !== undefined &&
+        value[field] !== null &&
+        typeof value[field] !== expected,
+    )
+    .map(([field, expected]) => `${expected} ${field}`);
+
+  return [...missing, ...mistyped];
+};
 
 /**
  * Validates an LNbits wallet-list payload before anything reads it.
@@ -153,10 +181,10 @@ const toRawLnbitsWallets = (
     throw new Error(`${source}: LNbits did not return a wallet array`);
   }
   value.forEach((wallet, index) => {
-    const missing = missingWalletFields(wallet);
-    if (missing.length > 0) {
+    const invalid = invalidWalletFields(wallet);
+    if (invalid.length > 0) {
       throw new Error(
-        `${source}: LNbits wallet at index ${index} is missing string ${missing.join(', ')}`,
+        `${source}: LNbits wallet at index ${index} is missing ${invalid.join(', ')}`,
       );
     }
   });

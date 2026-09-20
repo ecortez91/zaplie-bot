@@ -413,7 +413,7 @@ describe('getUserWallets', () => {
     );
 
     await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
-      'getUserWallets: LNbits wallet at index 1 is missing string name, user',
+      'getUserWallets: LNbits wallet at index 1 is missing string name, string user',
     );
   });
 
@@ -424,6 +424,49 @@ describe('getUserWallets', () => {
     await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
       'getUserWallets: LNbits did not return a wallet array',
     );
+  });
+
+  // An optional field is optional in its presence, not in its type: a string
+  // "true" passes `deleted !== true` and keeps a deleted wallet visible, and a
+  // string balance becomes NaN as soon as a caller divides it by 1000.
+  test.each([
+    ['deleted', 'true', 'boolean deleted'],
+    ['balance_msat', '5000', 'number balance_msat'],
+    ['inkey', 42, 'string inkey'],
+  ])(
+    'rejects a wallet whose optional %s has the wrong type',
+    async (field, value, expected) => {
+      stubAuth();
+      fetchMock.mockImplementationOnce(async () =>
+        jsonResponse([
+          { id: 'w-1', name: 'Alice - Private', user: 'u-1', [field]: value },
+        ]),
+      );
+
+      await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
+        `getUserWallets: LNbits wallet at index 0 is missing ${expected}`,
+      );
+    },
+  );
+
+  test('names every required field when a row is not an object at all', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () => jsonResponse(['w-1']));
+
+    await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
+      'getUserWallets: LNbits wallet at index 0 is missing string id, string name, string user',
+    );
+  });
+
+  test('accepts a wallet that simply omits the optional fields', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse([{ id: 'w-1', name: 'Alice - Private', user: 'u-1' }]),
+    );
+
+    await expect(
+      service.getUserWallets('admin-key', 'u-1'),
+    ).resolves.toHaveLength(1);
   });
 });
 

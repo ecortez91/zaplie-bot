@@ -65,6 +65,18 @@ const unknownArgumentsError = (
   );
 };
 
+// A truthiness test would read the string "true" as true and, worse, the
+// string "false" as true as well. A flag that silently means its opposite is
+// the wrong kind of quiet: get_recent_activity would return team-wide activity
+// while the model believes it asked for the user's own.
+const booleanArgumentError = (
+  name: string,
+  value: unknown,
+): string | undefined =>
+  value === undefined || value === null || typeof value === 'boolean'
+    ? undefined
+    : `"${name}" must be true or false, got ${JSON.stringify(value)}.`;
+
 // Rejecting beats clamping here. Clamping 400 to 365 would answer a different
 // question than the one asked while the reply still names the asked-for window,
 // which is a wrong number stated confidently — the failure this PR exists to
@@ -212,10 +224,11 @@ const getRecentActivityTool: ToolDefinition = {
   },
   handler: async (args: unknown, turnContext: TurnContext) => {
     const options = toolArgs(args);
-    const error = unknownArgumentsError('get_recent_activity', options, [
-      'limit',
-      'onlyInvolvingMe',
-    ]);
+    const error =
+      unknownArgumentsError('get_recent_activity', options, [
+        'limit',
+        'onlyInvolvingMe',
+      ]) ?? booleanArgumentError('onlyInvolvingMe', options.onlyInvolvingMe);
     if (error) return { error };
 
     const user = turnContext.turnState.get('user') as User;

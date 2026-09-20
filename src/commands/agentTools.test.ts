@@ -438,6 +438,41 @@ describe('agentTools', () => {
       expect(mockGetZapActivity).not.toHaveBeenCalled();
     });
 
+    test('rejects a non-boolean onlyInvolvingMe instead of reading it as false', async () => {
+      mockGetZapActivity.mockResolvedValue(activityResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_recent_activity',
+      )!;
+
+      // "false" is truthy and "true" is a string: either way a truthiness test
+      // answers a different question than the model asked, and the reply would
+      // not say so.
+      for (const onlyInvolvingMe of ['true', 'false', 1, 0]) {
+        const result = requireRecord(
+          await tool.handler({ onlyInvolvingMe }, makeTurnContext(currentUser)),
+        );
+        expect(result.error).toContain('onlyInvolvingMe');
+        expect(result.activity).toBeUndefined();
+      }
+      expect(mockGetZapActivity).not.toHaveBeenCalled();
+    });
+
+    test('accepts onlyInvolvingMe: false as a real filter choice', async () => {
+      mockGetZapActivity.mockResolvedValue(activityResult([]));
+      const tool = createReadOnlyTools().find(
+        t => t.name === 'get_recent_activity',
+      )!;
+
+      await tool.handler(
+        { onlyInvolvingMe: false },
+        makeTurnContext(currentUser),
+      );
+      expect(mockGetZapActivity).toHaveBeenLastCalledWith({
+        limit: 20,
+        userAadObjectId: undefined,
+      });
+    });
+
     test('falls back to the defaults when the arguments are not an object', async () => {
       mockGetZapActivity.mockResolvedValue(activityResult([]));
       const tool = createReadOnlyTools().find(
