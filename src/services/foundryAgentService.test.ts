@@ -28,8 +28,27 @@ jest.mock('../config', () => ({
   },
 }));
 
+interface MockAgentDefinition {
+  kind: string;
+  model: string;
+  instructions: string;
+  tools: unknown[];
+}
+
+interface MockFoundryResponse {
+  output: unknown[];
+  output_text: string;
+}
+
+type MockResponsesCreate = (
+  request: { input: unknown; conversation: string },
+  options: {
+    body: { agent_reference: { name: string; type: 'agent_reference' } };
+  },
+) => Promise<MockFoundryResponse>;
+
 const mockAgentsUpdate = jest
-  .fn<() => Promise<any>>()
+  .fn<(name: string, definition: MockAgentDefinition) => Promise<void>>()
   .mockResolvedValue(undefined);
 const mockGetBotPersona = jest
   .fn<() => Promise<string>>()
@@ -39,8 +58,8 @@ jest.mock('./fetchBotPersona', () => ({
   getBotPersona: mockGetBotPersona,
 }));
 
-const mockConversationsCreate = jest.fn<() => Promise<any>>();
-const mockResponsesCreate = jest.fn<(...args: any[]) => Promise<any>>();
+const mockConversationsCreate = jest.fn<() => Promise<{ id: string }>>();
+const mockResponsesCreate = jest.fn<MockResponsesCreate>();
 
 jest.mock('@azure/ai-projects', () => ({
   AIProjectClient: jest.fn().mockImplementation(() => ({
@@ -56,6 +75,20 @@ jest.mock('@azure/ai-projects', () => ({
 import { runConversationalTurn, ToolDefinition } from './foundryAgentService';
 
 const makeTurnContext = (): TurnContext => ({}) as TurnContext;
+
+// The handler contract is `unknown`, so a test tool narrows its own arguments
+// exactly as a real one does.
+const readTextArgument = (args: unknown): string => {
+  if (
+    typeof args !== 'object' ||
+    args === null ||
+    !('text' in args) ||
+    typeof args.text !== 'string'
+  ) {
+    throw new Error('Expected a string text argument.');
+  }
+  return args.text;
+};
 
 const noopTool: ToolDefinition = {
   name: 'noop_tool',
@@ -122,7 +155,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       name: 'echo',
       description: 'echoes the input',
       parameters: { type: 'object', properties: { text: { type: 'string' } } },
-      handler: async (args: { text: string }) => ({ echoed: args.text }),
+      handler: async args => ({ echoed: readTextArgument(args) }),
     };
 
     mockResponsesCreate
@@ -180,7 +213,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
     );
 
     expect(mockAgentsUpdate).toHaveBeenCalledTimes(1);
-    const { instructions } = (mockAgentsUpdate.mock.calls[0] as any[])[1];
+    const { instructions } = mockAgentsUpdate.mock.calls[0][1];
     // The rails come first and are restated last; the persona is fenced in
     // between and framed as configuration, not as instructions.
     expect(instructions).toMatch(
@@ -214,7 +247,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       makeTurnContext(),
     );
     expect(mockAgentsUpdate).toHaveBeenCalledTimes(1);
-    expect((mockAgentsUpdate.mock.calls[0] as any[])[1].instructions).toContain(
+    expect(mockAgentsUpdate.mock.calls[0][1].instructions).toContain(
       'Be terse and formal.',
     );
   });
@@ -234,7 +267,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       makeTurnContext(),
     );
 
-    const { instructions } = (mockAgentsUpdate.mock.calls[0] as any[])[1];
+    const { instructions } = mockAgentsUpdate.mock.calls[0][1];
     expect(instructions).toContain(
       'Keep replies concise and friendly, suited for a Teams chat.',
     );
@@ -295,8 +328,113 @@ describe('foundryAgentService.runConversationalTurn', () => {
     );
   });
 
-  test('rejects a handler that returns undefined instead of sending a non-string output', async () => {
-    const undefinedTool = { ...noopTool, handler: async () => undefined };
+  // A model sending "null" or "[]" for a no-argument tool is a mistake it can
+  // fix on the next round. Killing the turn over it would also clear the
+  // conversation id, so the fix is to hand the mistake back as tool output.
+  test.each([
+    ['null', 'null'],
+    ['a JSON array', '[]'],
+    ['a JSON string', '"bob"'],
+  ])(
+    'hands %s arguments back as a tool error instead of ending the turn',
+    async (_label, argumentsJson) => {
+      const handler = jest.fn<ToolDefinition['handler']>();
+      mockResponsesCreate
+        .mockResolvedValueOnce({
+          output: [
+            {
+              type: 'function_call',
+              name: noopTool.name,
+              call_id: 'call_not_an_object',
+              arguments: argumentsJson,
+            },
+          ],
+          output_text: '',
+        })
+        .mockResolvedValueOnce({ output: [], output_text: 'Let me retry.' });
+
+      const result = await runConversationalTurn(
+        'do something',
+        'conv_existing',
+        [{ ...noopTool, handler }],
+        makeTurnContext(),
+      );
+
+      expect(result.replyText).toBe('Let me retry.');
+      // The handler never sees a non-object, which is what the guard is for.
+      expect(handler).not.toHaveBeenCalled();
+
+      const fedBack =
+        mockResponsesCreate.mock.calls[
+          mockResponsesCreate.mock.calls.length - 1
+        ][0].input;
+      expect(fedBack).toEqual([
+        {
+          type: 'function_call_output',
+          call_id: 'call_not_an_object',
+          output: expect.stringContaining('must be a JSON object'),
+        },
+      ]);
+    },
+  );
+
+  test('rejects a malformed function_call item from Foundry', async () => {
+    mockResponsesCreate.mockResolvedValueOnce({
+      output: [
+        { type: 'function_call', name: noopTool.name, call_id: 'call_invalid' },
+      ],
+      output_text: '',
+    });
+
+    await expect(
+      runConversationalTurn(
+        'do something',
+        'conv_existing',
+        [noopTool],
+        makeTurnContext(),
+      ),
+    ).rejects.toThrow(/invalid function_call payload/);
+  });
+
+  test('rejects a top-level response payload that is missing output or output_text', async () => {
+    mockResponsesCreate.mockResolvedValueOnce({
+      output: 'not-an-array',
+      output_text: 'hi',
+    } as unknown as MockFoundryResponse);
+
+    await expect(
+      runConversationalTurn(
+        'do something',
+        'conv_existing',
+        [noopTool],
+        makeTurnContext(),
+      ),
+    ).rejects.toThrow(
+      'foundryAgentService: Foundry returned an invalid response payload.',
+    );
+  });
+
+  test('ignores non-function-call items in the output array instead of rejecting them', async () => {
+    mockResponsesCreate.mockResolvedValueOnce({
+      output: [{ type: 'message', content: 'thinking out loud' }],
+      output_text: 'All done, no tools needed.',
+    });
+
+    const result = await runConversationalTurn(
+      'hello',
+      'conv_existing',
+      [noopTool],
+      makeTurnContext(),
+    );
+
+    expect(result.replyText).toBe('All done, no tools needed.');
+  });
+
+  test('rejects a handler that returns undefined, which cannot be sent as function_call_output', async () => {
+    const undefinedTool: ToolDefinition = {
+      ...noopTool,
+      handler: async () => undefined,
+    };
     mockResponsesCreate.mockResolvedValueOnce({
       output: [
         {
@@ -313,7 +451,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       runConversationalTurn(
         'do something',
         'conv_existing',
-        [undefinedTool as any],
+        [undefinedTool],
         makeTurnContext(),
       ),
     ).rejects.toThrow(/returned undefined/);

@@ -462,6 +462,59 @@ describe('TeamsBot pays a zap card at most once per recipient', () => {
     );
   });
 
+  // The balance read and the card rewrite happen after the money has moved.
+  // Failing them used to fall into the handler's catch, so a user whose zap
+  // had settled was told it had not.
+  test('still reports success when the post-payment balance read fails', async () => {
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const bot = new TeamsBot();
+    const submit = submitContext('card-balance-fails');
+    let reads = 0;
+    jest.mocked(getWalletBalance).mockImplementation(async () => {
+      reads += 1;
+      // The budget check passes; the receipt read is the one that fails.
+      if (reads > 1) throw new Error('Error getting wallet balance');
+      return 1000;
+    });
+
+    await bot.run(submit.context);
+
+    expect(payInvoice).toHaveBeenCalledTimes(1);
+    expect(submit.sendActivity).toHaveBeenCalledWith(
+      expect.stringContaining('Awesome! You sent 10'),
+    );
+    expect(submit.sendActivity).not.toHaveBeenCalledWith(GENERIC_ERROR_MESSAGE);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('the payments stand'),
+      expect.any(Error),
+    );
+  });
+
+  test('still reports success when the receipt card cannot be rewritten', async () => {
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const bot = new TeamsBot();
+    const submit = submitContext('card-update-fails');
+    (
+      submit.context.updateActivity as jest.Mock<() => Promise<void>>
+    ).mockRejectedValue(new Error('Activity not found'));
+
+    await bot.run(submit.context);
+
+    expect(payInvoice).toHaveBeenCalledTimes(1);
+    expect(submit.sendActivity).toHaveBeenCalledWith(
+      expect.stringContaining('Awesome! You sent 10'),
+    );
+    expect(submit.sendActivity).not.toHaveBeenCalledWith(GENERIC_ERROR_MESSAGE);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('the payments stand'),
+      expect.any(Error),
+    );
+  });
+
   test('pays a different card to the same recipient normally', async () => {
     const bot = new TeamsBot();
 
