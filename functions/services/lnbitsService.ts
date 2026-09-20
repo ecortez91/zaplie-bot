@@ -790,36 +790,6 @@ const getUser = async(req: HttpRequest, userId: string, adminKey: string): Promi
   );
 }
 
-async function topUpWallet(walletId: string, amount: number,  req: HttpRequest): Promise<void> {
-  const accessToken = await getAccessToken(req,`${username}`, `${password}`);
-
-  const url = `${lnbiturl}/users/api/v1/topup`;
-  const body = {
-    amount: amount.toString(),
-    id: walletId,
-  };
-
-  try {
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const responseData = await response.json();
-    console.log('Wallet topped up successfully:', responseData);
-  } catch (error) {
-    console.error('Error topping up wallet:', error);
-  }
-}
-
 export {
   getUser,
   getWallets,
@@ -838,6 +808,5 @@ export {
   createWallet,
   payInvoice,
   getWalletIdByUserId,
-  topUpWallet,
   createInvoice,
 };
