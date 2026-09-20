@@ -265,14 +265,17 @@
     order: 3;
     flex-basis: 100%;
     align-self: auto;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* Wrap rather than a fixed column count: there are seven links, so any
+       fixed grid leaves a ragged empty cell (or an orphaned last link) on the
+       final row. */
+    flex-wrap: wrap;
+    justify-content: center;
     width: 100%;
   }
 
   .navLink {
+    flex: 1 0 auto;
     justify-content: center;
-    min-width: 0;
     padding-top: var(--space-2);
     padding-bottom: calc(var(--space-2) - 3px);
     text-align: center;
@@ -297,10 +300,6 @@
 }
 
 @media (max-width: 480px) {
-  .navigation {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .userName {
     max-width: 120px;
   }

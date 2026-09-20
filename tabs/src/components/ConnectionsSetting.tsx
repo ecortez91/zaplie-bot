@@ -71,6 +71,8 @@ const ConnectionsSetting: FunctionComponent = () => {
     }
     setLoading(true);
     try {
+      // forceRefresh: acquireTokenSilent can serve a cached, already-expired
+      // idToken; the backend verifies exp and would reject it with a 401.
       const tokenResponse = await instance.acquireTokenSilent({
         ...loginRequest,
         account,

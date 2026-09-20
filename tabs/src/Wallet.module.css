@@ -30,6 +30,11 @@
 }
 
 .stringTabTitle {
+  /* WalletAllowanceComponent.css sets a global button { width: 100% }; without
+     this the tab triggers stretch and stack as full-width rows instead of
+     sitting side by side in the tab bar. */
+  width: auto;
+  flex: none;
   appearance: none;
   background: none;
   border: none;

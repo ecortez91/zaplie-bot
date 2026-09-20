@@ -154,6 +154,7 @@
 }
 
 .connectButton {
+  /* WalletAllowanceComponent.css sets a global button { width: 100% }. */
   width: auto;
   flex: none;
   padding: 9px var(--space-4);
