@@ -67,7 +67,7 @@ const readAuthFlow = (): AuthFlow => {
   };
 };
 
-const notifyTeams = async (signal: AuthSignal): Promise<boolean> => {
+export const notifyTeams = async (signal: AuthSignal): Promise<boolean> => {
   try {
     await microsoftTeams.app.initialize();
     if (signal === 'auth-success') {

@@ -1,8 +1,18 @@
 import { Configuration, PopupRequest } from '@azure/msal-browser';
 
+// Tagged so the startup error UI can tell a missing environment variable
+// (safe to show: the message names the variable, never its value) from any
+// other failure, whose message may carry detail that does not belong onscreen.
+export class ConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConfigurationError';
+  }
+}
+
 const requireConfig = (value: string | undefined, name: string): string => {
   if (!value) {
-    throw new Error(`${name} is required.`);
+    throw new ConfigurationError(`${name} is required.`);
   }
 
   return value;

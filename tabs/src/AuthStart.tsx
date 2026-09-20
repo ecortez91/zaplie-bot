@@ -2,7 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { InteractionStatus } from '@azure/msal-browser';
 import { useMsal } from '@azure/msal-react';
 import { loginRequest } from './services/authConfig';
-import { AUTH_FLOW_STORAGE_KEY, resolveSameOriginRedirect } from './AuthEnd';
+import {
+  AUTH_FLOW_STORAGE_KEY,
+  notifyTeams,
+  resolveSameOriginRedirect,
+} from './AuthEnd';
 
 interface StoredAuthFlow {
   redirectUrl: string;
@@ -24,13 +28,13 @@ const AuthStart: React.FC = () => {
     let active = true;
 
     const startAuthentication = async () => {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const flow: StoredAuthFlow = {
-          redirectUrl: resolveSameOriginRedirect(params.get('redirectUrl')),
-          teamsAuth: params.get('teamsAuth') === '1',
-        };
+      const params = new URLSearchParams(window.location.search);
+      const flow: StoredAuthFlow = {
+        redirectUrl: resolveSameOriginRedirect(params.get('redirectUrl')),
+        teamsAuth: params.get('teamsAuth') === '1',
+      };
 
+      try {
         try {
           sessionStorage.setItem(AUTH_FLOW_STORAGE_KEY, JSON.stringify(flow));
         } catch {
@@ -55,6 +59,12 @@ const AuthStart: React.FC = () => {
           redirectUri: `${window.location.origin}/auth-end`,
         });
       } catch {
+        // TeamsJS leaves the host promise pending until the popup notifies,
+        // so without this the Sign In button stays disabled until the window
+        // is closed by hand.
+        if (flow.teamsAuth && (await notifyTeams('auth-error'))) {
+          return;
+        }
         if (active) {
           setError(
             'We could not start sign-in. Close this window and try again.',

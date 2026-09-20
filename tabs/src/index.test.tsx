@@ -91,8 +91,13 @@ describe('index startup sequence', () => {
   });
 
   test('shows the startup error, naming the missing configuration, when initialize rejects', async () => {
+    // Required from the current registry: jest.resetModules() means ./index
+    // holds its own copy of the class the instanceof check compares against.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { ConfigurationError } =
+      require('./services/authConfig') as typeof import('./services/authConfig');
     getMsalInstance().mockImplementation(() => {
-      throw new Error('REACT_APP_AAD_CLIENT_ID is required.');
+      throw new ConfigurationError('REACT_APP_AAD_CLIENT_ID is required.');
     });
 
     await bootstrap();
@@ -101,6 +106,23 @@ describe('index startup sequence', () => {
       'Zaplie could not start',
     );
     expect(root.textContent).toContain('REACT_APP_AAD_CLIENT_ID is required.');
+    expect(consoleError).toHaveBeenCalledWith(
+      'Zaplie startup failed',
+      expect.any(Error),
+    );
+  });
+
+  test('hides the detail of a startup failure that is not a configuration error', async () => {
+    getMsalInstance().mockImplementation(() => {
+      throw new Error('crypto_nonexistent: internal MSAL detail');
+    });
+
+    await bootstrap();
+
+    expect(root.querySelector('[role="alert"]')?.textContent).toContain(
+      'Zaplie could not start',
+    );
+    expect(root.textContent).not.toContain('internal MSAL detail');
     expect(consoleError).toHaveBeenCalledWith(
       'Zaplie startup failed',
       expect.any(Error),

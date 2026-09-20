@@ -9,6 +9,7 @@ import {
   test,
 } from '@jest/globals';
 import { useMsal } from '@azure/msal-react';
+import * as microsoftTeams from '@microsoft/teams-js';
 import { InteractionStatus } from '@azure/msal-browser';
 import AuthStart from './AuthStart';
 import { AUTH_FLOW_STORAGE_KEY } from './AuthEnd';
@@ -34,6 +35,10 @@ const mockLoginRedirect = jest.fn<Promise<void>, [unknown]>();
 const mockGetAllAccounts = jest.fn<unknown[], []>();
 const mockGetActiveAccount = jest.fn<unknown, []>();
 const mockSetActiveAccount = jest.fn<void, [unknown]>();
+const mockTeamsInitialize = jest.mocked(microsoftTeams.app.initialize);
+const mockNotifyFailure = jest.mocked(
+  microsoftTeams.authentication.notifyFailure,
+);
 
 describe('AuthStart', () => {
   let container: HTMLDivElement;
@@ -106,6 +111,30 @@ describe('AuthStart', () => {
 
   test('shows an error when redirect login cannot start', async () => {
     mockLoginRedirect.mockRejectedValue(new Error('redirect unavailable'));
+
+    await renderAuthStart();
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      'We could not start sign-in. Close this window and try again.',
+    );
+  });
+
+  test('tells Teams the flow failed so the host promise cannot hang', async () => {
+    window.history.replaceState({}, '', '/auth-start?teamsAuth=1');
+    mockLoginRedirect.mockRejectedValue(new Error('redirect unavailable'));
+    mockTeamsInitialize.mockImplementation(async () => undefined);
+
+    await renderAuthStart();
+
+    expect(mockNotifyFailure).toHaveBeenCalledWith('auth-error');
+    // Teams closes the popup on notifyFailure, so no local error is needed.
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  test('falls back to the local error when Teams cannot be notified', async () => {
+    window.history.replaceState({}, '', '/auth-start?teamsAuth=1');
+    mockLoginRedirect.mockRejectedValue(new Error('redirect unavailable'));
+    mockTeamsInitialize.mockRejectedValue(new Error('Teams unavailable'));
 
     await renderAuthStart();
 

@@ -13,6 +13,7 @@ import { ThemeProvider } from '@fluentui/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { theme } from './styles/Theme';
 import App from './App';
+import { ConfigurationError } from './services/authConfig';
 import { getMsalInstance } from './services/msalClient';
 import { CacheProvider } from './utils/CacheContext';
 import { queryClient } from './query/queryClient';
@@ -41,10 +42,12 @@ const renderApp = (msalInstance: PublicClientApplication) => {
   );
 };
 
-// The message only ever names missing configuration (never its value), so it
-// is safe to show: without it a misconfigured deployment is a blank error.
+// Only a ConfigurationError's message is shown. It names the missing
+// environment variable and never its value, so a misconfigured deployment is
+// not a blank error; anything else (MSAL internals, network failures) could
+// leak detail that does not belong onscreen.
 const renderStartupError = (error: unknown) => {
-  const detail = error instanceof Error ? error.message : null;
+  const detail = error instanceof ConfigurationError ? error.message : null;
 
   root.render(
     <main role="alert">
