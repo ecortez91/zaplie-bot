@@ -2,18 +2,24 @@
 //
 // Mocks lnbitsService (the HTTP boundary), not the command and not
 // zapHistoryService, so the wallet-semantics rules (Allowance debit matched to
-// a Private credit, sweeps excluded) are exercised end to end.
+// a Private credit, sweeps excluded) are exercised end to end — and so the
+// assistant's get_leaderboard tool, which shares getZapLeaderboard, can be run
+// against the very same fixtures to prove the two agree.
 
 import {
+  LEADERBOARD_PARTIAL_MESSAGE,
   LEADERBOARD_UNAVAILABLE_MESSAGE,
   ShowLeaderboardCommand,
   buildLeaderboardCard,
 } from './showLeaderboardCommand';
+import { createReadOnlyTools } from './agentTools';
 import {
+  getAllPaymentsPage,
   getPayments,
   getUserWallets,
   getUsers,
   getWallets,
+  PaginatedPaymentsUnsupportedError,
 } from '../services/lnbitsService';
 import {
   afterEach,
@@ -33,6 +39,9 @@ const mockGetUserWallets = getUserWallets as jest.MockedFunction<
 >;
 const mockGetPayments = getPayments as jest.MockedFunction<typeof getPayments>;
 const mockGetWallets = getWallets as jest.MockedFunction<typeof getWallets>;
+const mockGetAllPaymentsPage = getAllPaymentsPage as jest.MockedFunction<
+  typeof getAllPaymentsPage
+>;
 
 const NOW_SECONDS = 1_760_000_000;
 const DAY = 86_400;
@@ -70,6 +79,15 @@ const wallets = new Map(
 );
 
 const paymentsByInkey: Record<string, Transaction[]> = {};
+
+// What the instance-wide paginated endpoint returns: the union of the
+// per-wallet fixtures, each row once. That endpoint is the path production
+// takes, so it is the one these tests drive by default.
+const allFixturePayments = (): Transaction[] =>
+  Object.values(paymentsByInkey).reduce<Transaction[]>(
+    (rows, walletRows) => rows.concat(walletRows),
+    [],
+  );
 
 const tx = (overrides: Partial<Transaction>): Transaction => ({
   checking_id: 'default',
@@ -123,18 +141,36 @@ const makeContext = () => {
   return { context, sendActivity };
 };
 
-const sentCard = (sendActivity: jest.Mock): any => {
-  const [activity] = sendActivity.mock.calls[0] as [any];
+// The card is a plain Adaptive Card JSON object, so the assertions below read
+// it structurally rather than through an `any`.
+type CardElement = {
+  type?: string;
+  text?: string;
+  width?: string;
+  weight?: string;
+  columns?: CardElement[];
+  items?: CardElement[];
+};
+
+type Card = {
+  body: CardElement[];
+  actions?: { type: string; title: string; url: string }[];
+};
+
+const sentCard = (sendActivity: jest.Mock): Card => {
+  const [activity] = sendActivity.mock.calls[0] as [
+    { attachments: { content: Card }[] },
+  ];
   return activity.attachments[0].content;
 };
 
-const rowText = (row: any): string =>
-  row.columns
-    .map((column: any) => column.items.map((item: any) => item.text).join(' '))
+const rowText = (row: CardElement): string =>
+  (row.columns ?? [])
+    .map(column => (column.items ?? []).map(item => item.text).join(' '))
     .join(' | ');
 
 const rows = (sendActivity: jest.Mock): string[] =>
-  (sentCard(sendActivity).body.slice(1) as any[]).map(rowText);
+  sentCard(sendActivity).body.slice(1).map(rowText);
 
 describe('buildLeaderboardCard', () => {
   const options = { title: 'Top zappers:', emptyMessage: 'Nothing yet.' };
@@ -150,15 +186,16 @@ describe('buildLeaderboardCard', () => {
       type: 'TextBlock',
       text: 'Top zappers:',
     });
-    const cardRows = card.body.slice(1) as any[];
+    const cardRows = card.body.slice(1) as CardElement[];
     expect(cardRows.map(rowText)).toEqual([
       '#1 Alice | 300 Sats',
       '#2 Bob | 200 Sats',
     ]);
     // Name stretches on the left, bold amount sits on the right.
-    expect(cardRows[0].columns[0].width).toBe('stretch');
-    expect(cardRows[0].columns[1].width).toBe('auto');
-    expect(cardRows[0].columns[1].items[0].weight).toBe('Bolder');
+    const [nameColumn, amountColumn] = cardRows[0].columns ?? [];
+    expect(nameColumn.width).toBe('stretch');
+    expect(amountColumn.width).toBe('auto');
+    expect((amountColumn.items ?? [])[0].weight).toBe('Bolder');
   });
 
   test('groups large amounts for readability', () => {
@@ -180,6 +217,20 @@ describe('buildLeaderboardCard', () => {
     expect(card.body[1]).toMatchObject({
       type: 'TextBlock',
       text: 'Nothing yet.',
+    });
+  });
+
+  test('adds the incomplete-read note only when the read was partial', () => {
+    const complete = buildLeaderboardCard(entries, 'Sats', options);
+    const partial = buildLeaderboardCard(entries, 'Sats', {
+      ...options,
+      partial: true,
+    });
+
+    expect(JSON.stringify(complete)).not.toContain(LEADERBOARD_PARTIAL_MESSAGE);
+    expect(partial.body[partial.body.length - 1]).toMatchObject({
+      type: 'TextBlock',
+      text: LEADERBOARD_PARTIAL_MESSAGE,
     });
   });
 
@@ -221,6 +272,9 @@ describe('showLeaderboardCommand', () => {
     });
     mockGetPayments.mockImplementation(
       async (inKey: string) => (paymentsByInkey[inKey] || []) as Transaction[],
+    );
+    mockGetAllPaymentsPage.mockImplementation(async (limit, offset) =>
+      allFixturePayments().slice(offset, offset + limit),
     );
   });
 
@@ -447,6 +501,92 @@ describe('showLeaderboardCommand', () => {
     );
     expect(mockGetUsers).not.toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+
+  test('says so on the card when some wallets could not be read', async () => {
+    // A rate-limited wallet makes the totals a floor, not a total. Stating an
+    // incomplete ranking as the ranking is the failure this note exists for.
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const consoleWarn = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+    mockGetAllPaymentsPage.mockRejectedValue(
+      new PaginatedPaymentsUnsupportedError(404),
+    );
+    mockGetPayments.mockImplementation(async (inKey: string) => {
+      if (inKey === wallets.get(carol.id)!.allowance.inkey) {
+        throw new Error('429 Too Many Requests');
+      }
+      return (paymentsByInkey[inKey] || []) as Transaction[];
+    });
+    zap('z1', alice, bob, 10);
+    const { context, sendActivity } = makeContext();
+
+    await new ShowLeaderboardCommand().execute(context);
+
+    const card = sentCard(sendActivity);
+    expect(card.body[card.body.length - 1]).toMatchObject({
+      text: LEADERBOARD_PARTIAL_MESSAGE,
+    });
+    consoleWarn.mockRestore();
+    consoleError.mockRestore();
+  });
+
+  test('ranks the same on instances without the paginated payments endpoint', async () => {
+    const consoleWarn = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+    mockGetAllPaymentsPage.mockRejectedValue(
+      new PaginatedPaymentsUnsupportedError(404),
+    );
+    zap('z1', alice, bob, 100);
+    zap('z2', carol, bob, 40);
+    const { context, sendActivity } = makeContext();
+
+    await new ShowLeaderboardCommand().execute(context);
+
+    expect(rows(sendActivity)).toEqual([
+      '#1 Alice | 100 Sats',
+      '#2 Carol | 40 Sats',
+    ]);
+    consoleWarn.mockRestore();
+  });
+
+  // The whole point of routing the command through getZapLeaderboard rather
+  // than a second aggregator: the card and the assistant cannot disagree about
+  // who is ahead for the same window over the same ledger.
+  test('agrees with the assistant get_leaderboard tool on the same ledger', async () => {
+    process.env.LEADERBOARD_WINDOW_DAYS = '30';
+    zap('z1', alice, bob, 100);
+    zap('z2', alice, carol, 50);
+    zap('z3', carol, bob, 150);
+    zap('z4', bob, alice, 150);
+    zap('self', bob, bob, 900);
+    zap('old', carol, alice, 5000, NOW_SECONDS - 40 * DAY);
+    const { context, sendActivity } = makeContext();
+
+    await new ShowLeaderboardCommand().execute(context);
+
+    const tool = createReadOnlyTools().find(
+      candidate => candidate.name === 'get_leaderboard',
+    )!;
+    const result = (await tool.handler({ days: 30 }, context)) as {
+      leaderboard: { displayName: string; zappedSats: number }[];
+    };
+
+    expect(rows(sendActivity)).toEqual(
+      result.leaderboard.map(
+        (entry, index) =>
+          `#${index + 1} ${entry.displayName} | ${entry.zappedSats.toLocaleString()} Sats`,
+      ),
+    );
+    expect(result.leaderboard).toEqual([
+      { displayName: 'Alice', zappedSats: 150 },
+      { displayName: 'Bob', zappedSats: 150 },
+      { displayName: 'Carol', zappedSats: 150 },
+    ]);
   });
 
   test('tells the user when LNbits is unavailable', async () => {

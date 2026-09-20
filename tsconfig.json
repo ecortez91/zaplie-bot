@@ -5,6 +5,10 @@
   "compilerOptions": {
     "declaration": true,
     "target": "es2017",
+    // Node 24 is the runtime (see package.json "engines"), so the standard
+    // library is far ahead of the downlevel emit target; es2022 types give us
+    // Error `cause` without changing what tsc emits.
+    "lib": ["es2022"],
     "module": "commonjs",
     "outDir": "./lib",
     "rootDir": "./",

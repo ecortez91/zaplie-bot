@@ -1,8 +1,4 @@
-import {
-  errorResponse,
-  installFetchMock,
-  jsonResponse,
-} from '../../testUtils/fetchMock';
+import { apiRequest } from './gateway';
 import {
   createInvoice,
   getAllPayments,
@@ -10,211 +6,221 @@ import {
   getWalletPayments,
   getWalletTransactionsSince,
   payInvoice,
+  sendZap,
+  newIdempotencyKey,
 } from './payments';
 
-jest.mock('./auth', () => ({
-  getAccessToken: jest.fn(async () => 'test-token'),
+jest.mock('./gateway', () => ({
+  apiRequest: jest.fn(),
 }));
 
-const rawPayment = (overrides: Record<string, unknown> = {}) => ({
+const mockApiRequest = apiRequest as jest.MockedFunction<typeof apiRequest>;
+
+const transaction = (overrides: Partial<Transaction> = {}): Transaction => ({
   checking_id: 'check-1',
-  payment_hash: 'hash-1',
-  bolt11: 'lnbc1...',
-  memo: 'Thanks',
+  pending: false,
   amount: 1000,
-  wallet_id: 'w1',
+  fee: 12,
+  memo: 'Thanks',
   time: 1723500000,
   extra: {},
-  pending: false,
-  fee: 12,
+  wallet_id: 'w1',
   ...overrides,
 });
 
 describe('lnbits payments', () => {
-  let mockFetch: jest.MockedFunction<typeof fetch>;
-
   beforeEach(() => {
-    mockFetch = installFetchMock();
-  });
-
-  describe('createInvoice', () => {
-    test('returns the payment request', async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse({ payment_request: 'lnbc1...' }),
-      );
-
-      await expect(createInvoice('in-key', 'w1', 1000, 'memo')).resolves.toBe(
-        'lnbc1...',
-      );
-    });
-
-    test('throws when LNbits rejects the invoice', async () => {
-      mockFetch.mockResolvedValueOnce(errorResponse(400, 'Bad Request'));
-
-      await expect(createInvoice('in-key', 'w1', 1000, 'memo')).rejects.toThrow(
-        'status: 400',
-      );
-    });
-  });
-
-  describe('payInvoice', () => {
-    test('returns the settled payment', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ payment_hash: 'hash-1' }));
-
-      await expect(payInvoice('admin-key', 'lnbc1...')).resolves.toEqual({
-        payment_hash: 'hash-1',
-      });
-    });
-
-    test('throws when LNbits rejects the payment', async () => {
-      mockFetch.mockResolvedValueOnce(errorResponse(402, 'Payment Required'));
-
-      await expect(payInvoice('admin-key', 'lnbc1...')).rejects.toThrow(
-        'status: 402',
-      );
-    });
-  });
-
-  describe('getAllPayments', () => {
-    test('returns a bare array untouched', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse([rawPayment()]));
-
-      await expect(getAllPayments()).resolves.toHaveLength(1);
-    });
-
-    test.each(['data', 'payments', 'items'])(
-      'unwraps a payload wrapped in %p',
-      async key => {
-        mockFetch.mockResolvedValueOnce(
-          jsonResponse({ [key]: [rawPayment()] }),
-        );
-
-        await expect(getAllPayments()).resolves.toHaveLength(1);
-      },
-    );
-
-    test('throws for an unrecognised payload shape', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ total: 0 }));
-
-      await expect(getAllPayments()).rejects.toThrow('Unexpected payload');
-    });
-
-    test('throws when the endpoint fails', async () => {
-      mockFetch.mockResolvedValueOnce(errorResponse(500));
-
-      await expect(getAllPayments()).rejects.toThrow('status: 500');
-    });
-
-    test('sends the pagination and sorting parameters', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse([]));
-
-      await getAllPayments(10, 20, 'amount', 'asc');
-
-      const requestedUrl = String(mockFetch.mock.calls[0][0]);
-      expect(requestedUrl).toContain('limit=10');
-      expect(requestedUrl).toContain('offset=20');
-      expect(requestedUrl).toContain('sortby=amount');
-      expect(requestedUrl).toContain('direction=asc');
-    });
+    mockApiRequest.mockReset();
   });
 
   describe('getWalletPayments', () => {
-    test('returns the payments for the wallet', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse([rawPayment()]));
+    test('reads the wallet payments by wallet id', async () => {
+      mockApiRequest.mockResolvedValueOnce([transaction()]);
 
-      await expect(getWalletPayments('in-key')).resolves.toHaveLength(1);
-    });
-
-    test('throws when the request fails', async () => {
-      mockFetch.mockResolvedValueOnce(errorResponse(500));
-
-      await expect(getWalletPayments('in-key')).rejects.toThrow('status: 500');
+      await expect(getWalletPayments('w1')).resolves.toHaveLength(1);
+      expect(mockApiRequest).toHaveBeenCalledWith(
+        '/wallets/w1/payments?limit=100',
+      );
     });
   });
 
   describe('getInvoicePayment', () => {
-    test('throws when the invoice lookup fails', async () => {
-      mockFetch.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+    test('addresses the invoice under its wallet', async () => {
+      mockApiRequest.mockResolvedValueOnce({ paid: true });
 
-      await expect(getInvoicePayment('ln-key', 'hash-1')).rejects.toThrow(
-        'status: 404',
+      await getInvoicePayment('w1', 'invoice-1');
+
+      expect(mockApiRequest).toHaveBeenCalledWith(
+        '/wallets/w1/payments/invoice-1',
       );
     });
   });
 
   describe('getWalletTransactionsSince', () => {
-    test('maps the payload onto the Transaction shape', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse([rawPayment()]));
-
-      const transactions = await getWalletTransactionsSince('in-key', 0, null);
-
-      expect(transactions).toEqual([
-        {
-          checking_id: 'check-1',
-          bolt11: 'lnbc1...',
-          memo: 'Thanks',
-          amount: 1000,
-          wallet_id: 'w1',
-          time: 1723500000,
-          extra: {},
-          pending: false,
-          fee: 12,
-        },
+    test('returns every payment when the cut-off is zero', async () => {
+      mockApiRequest.mockResolvedValueOnce([
+        transaction(),
+        transaction({ checking_id: 'check-2', time: 1 }),
       ]);
+
+      await expect(
+        getWalletTransactionsSince('w1', 0, null),
+      ).resolves.toHaveLength(2);
     });
 
-    test('drops payments older than the timestamp', async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse([
-          rawPayment({ checking_id: 'old', time: 1723499999 }),
-          rawPayment({ checking_id: 'recent', time: 1723500000 }),
-        ]),
-      );
+    test('applies the timestamp cut-off', async () => {
+      mockApiRequest.mockResolvedValueOnce([
+        transaction({ time: 1723500000 }),
+        transaction({ checking_id: 'check-2', time: 1723400000 }),
+      ]);
 
       const transactions = await getWalletTransactionsSince(
-        'in-key',
-        1723500000,
+        'w1',
+        1723450000,
         null,
       );
 
-      expect(transactions.map(t => t.checking_id)).toEqual(['recent']);
+      expect(transactions).toHaveLength(1);
+      expect(transactions[0].checking_id).toBe('check-1');
     });
 
-    test('falls back to payment_hash when checking_id is absent', async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse([rawPayment({ checking_id: undefined })]),
-      );
-
-      const transactions = await getWalletTransactionsSince('in-key', 0, null);
-
-      expect(transactions[0].checking_id).toBe('hash-1');
-    });
-
-    test('throws when the payment carries no usable identifier', async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse([
-          rawPayment({ checking_id: undefined, payment_hash: undefined }),
-        ]),
-      );
+    test('accepts an ISO timestamp', async () => {
+      mockApiRequest.mockResolvedValueOnce([
+        transaction({ time: '2026-08-13T00:00:00.000Z' }),
+      ]);
 
       await expect(
-        getWalletTransactionsSince('in-key', 0, null),
-      ).rejects.toThrow('no checking_id, payment_hash or id');
+        getWalletTransactionsSince('w1', 1, null),
+      ).resolves.toHaveLength(1);
     });
 
-    test('filters by the extra field when a filter is given', async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse([
-          rawPayment({ checking_id: 'zap', extra: { tag: 'zap' } }),
-          rawPayment({ checking_id: 'other', extra: { tag: 'topup' } }),
-        ]),
-      );
+    test('filters by the extra field', async () => {
+      mockApiRequest.mockResolvedValueOnce([
+        transaction({ extra: { tag: 'zap' } }),
+        transaction({ checking_id: 'check-2', extra: { tag: 'reward' } }),
+      ]);
 
-      const transactions = await getWalletTransactionsSince('in-key', 0, {
+      const transactions = await getWalletTransactionsSince('w1', 0, {
         tag: 'zap',
       });
 
-      expect(transactions.map(t => t.checking_id)).toEqual(['zap']);
+      expect(transactions).toHaveLength(1);
+      expect(transactions[0].checking_id).toBe('check-1');
+    });
+  });
+
+  describe('getAllPayments', () => {
+    test('passes the paging parameters through', async () => {
+      mockApiRequest.mockResolvedValueOnce([transaction()]);
+
+      await getAllPayments(10, 20, 'time', 'asc');
+
+      expect(mockApiRequest).toHaveBeenCalledWith(
+        '/payments?limit=10&offset=20&sortby=time&direction=asc',
+      );
+    });
+  });
+
+  describe('createInvoice and payInvoice', () => {
+    test('address the wallet by id and never send a key', async () => {
+      mockApiRequest
+        .mockResolvedValueOnce({ paymentRequest: 'lnbc1invoice' })
+        .mockResolvedValueOnce({
+          payment_hash: 'hash-1',
+          checking_id: 'check-1',
+        });
+
+      await expect(createInvoice('w1', 1000, 'memo')).resolves.toBe(
+        'lnbc1invoice',
+      );
+      await expect(payInvoice('w1', 'lnbc1invoice')).resolves.toEqual({
+        payment_hash: 'hash-1',
+        checking_id: 'check-1',
+      });
+
+      expect(mockApiRequest.mock.calls[0][0]).toBe('/wallets/w1/invoices');
+      expect(mockApiRequest.mock.calls[1][0]).toBe('/wallets/w1/payments');
+      expect(JSON.stringify(mockApiRequest.mock.calls)).not.toMatch(/key/i);
+    });
+  });
+
+  describe('sendZap', () => {
+    test('posts the recipient user id, never a wallet key', async () => {
+      mockApiRequest.mockResolvedValueOnce({ payment_hash: 'hash-1' });
+
+      await sendZap('user-2', 21, 'Nice work', 'zap-request-00000001');
+
+      expect(mockApiRequest).toHaveBeenCalledWith('/zaps', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'zap-request-00000001' },
+        body: JSON.stringify({
+          recipientUserId: 'user-2',
+          amount: 21,
+          memo: 'Nice work',
+        }),
+      });
+    });
+
+    // The key is required, so a caller that retries must pass the same one.
+    test('replays the same key on a retry and a new key after success', async () => {
+      mockApiRequest.mockRejectedValueOnce(new Error('Request timed out'));
+      await expect(
+        sendZap('user-2', 21, 'Nice work', 'zap-request-00000001'),
+      ).rejects.toThrow('Request timed out');
+
+      mockApiRequest.mockResolvedValueOnce({ payment_hash: 'hash-1' });
+      await sendZap('user-2', 21, 'Nice work', 'zap-request-00000001');
+
+      const keys = mockApiRequest.mock.calls.map(
+        call => (call[1] as { headers: Record<string, string> }).headers,
+      );
+      expect(keys[0]['Idempotency-Key']).toBe('zap-request-00000001');
+      expect(keys[1]['Idempotency-Key']).toBe('zap-request-00000001');
+    });
+  });
+
+  // The generated key has to satisfy the gateway's own key pattern, or every
+  // zap the portal sends would be rejected with 400. jsdom has no Web Crypto,
+  // so each source is stubbed in turn.
+  describe('newIdempotencyKey', () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    const stubCrypto = (value: unknown) =>
+      Object.defineProperty(globalThis, 'crypto', {
+        value,
+        configurable: true,
+        writable: true,
+      });
+
+    afterEach(() => {
+      if (original) Object.defineProperty(globalThis, 'crypto', original);
+      else delete (globalThis as { crypto?: unknown }).crypto;
+    });
+
+    test('prefers randomUUID and the gateway accepts it', () => {
+      stubCrypto({ randomUUID: () => '123e4567-e89b-12d3-a456-426614174000' });
+
+      expect(newIdempotencyKey()).toBe('123e4567-e89b-12d3-a456-426614174000');
+      expect(newIdempotencyKey()).toMatch(/^[A-Za-z0-9._~-]{16,128}$/);
+    });
+
+    test('falls back to random bytes the gateway accepts', () => {
+      stubCrypto({
+        getRandomValues: (bytes: Uint8Array) => {
+          bytes.forEach((_, index) => {
+            bytes[index] = index;
+          });
+          return bytes;
+        },
+      });
+
+      expect(newIdempotencyKey()).toBe('000102030405060708090a0b0c0d0e0f');
+      expect(newIdempotencyKey()).toMatch(/^[A-Za-z0-9._~-]{16,128}$/);
+    });
+
+    test('refuses to mint a key with no Web Crypto', () => {
+      stubCrypto(undefined);
+
+      expect(() => newIdempotencyKey()).toThrow('no Web Crypto');
     });
   });
 });

@@ -1,6 +1,7 @@
 // lnbitsService.ts
 
 import dotenvFlow from 'dotenv-flow';
+import { isRecord } from '../utils/typeGuards';
 
 dotenvFlow.config({ path: './env' });
 
@@ -102,7 +103,7 @@ export async function getAccessToken(
     } catch (error) {
       console.error('Error in getAccessToken:', error);
       // Throw an error to ensure the promise doesn't resolve with undefined
-      throw new Error('Failed to retrieve access token');
+      throw new Error('Failed to retrieve access token', { cause: error });
     } finally {
       // Reset the promise to allow future requests
       accessTokenPromise = null;
@@ -113,11 +114,96 @@ export async function getAccessToken(
   return accessTokenPromise;
 }
 
+interface RawLnbitsWallet {
+  id: string;
+  admin?: string | null;
+  name: string;
+  user: string;
+  adminkey?: string | null;
+  inkey?: string | null;
+  balance_msat?: number;
+  deleted?: boolean | null;
+}
+
+// LNbits declares id, name and user required on every wallet route this file
+// reads, so a missing one is a broken contract, not a wallet worth skipping.
+// Dropping the row instead would hand a caller a short list it cannot tell
+// from a complete one — and these lists drive balances and payments.
+const REQUIRED_WALLET_FIELDS = ['id', 'name', 'user'] as const;
+
+// The optional fields are only optional in their presence, not in their type.
+// A row carrying deleted: "true" passes `deleted !== true` and stays visible,
+// and a non-number balance_msat becomes NaN the moment a caller divides it by
+// 1000 — so a wrong type here is validated, not certified by the cast below.
+//
+// `nullable` says whether LNbits may send an explicit null. It may for the
+// descriptive strings, and a null `deleted` reads exactly as an absent one.
+// It may not for balance_msat: null is not "no balance", and it would reach
+// showMyBalanceCommand as a confident 0 sats for a wallet LNbits never said
+// was empty.
+const OPTIONAL_WALLET_FIELDS = {
+  admin: { type: 'string', nullable: true },
+  adminkey: { type: 'string', nullable: true },
+  inkey: { type: 'string', nullable: true },
+  balance_msat: { type: 'number', nullable: false },
+  deleted: { type: 'boolean', nullable: true },
+} as const;
+
+const invalidWalletFields = (value: unknown): string[] => {
+  // A row that is not an object at all is missing every required field.
+  if (!isRecord(value))
+    return REQUIRED_WALLET_FIELDS.map(field => `string ${field}`);
+
+  const missing = REQUIRED_WALLET_FIELDS.filter(
+    field => typeof value[field] !== 'string',
+  ).map(field => `string ${field}`);
+
+  const mistyped = Object.entries(OPTIONAL_WALLET_FIELDS)
+    .filter(([field, spec]) => {
+      const field_value = value[field];
+      if (field_value === undefined) return false;
+      if (field_value === null) return !spec.nullable;
+      return typeof field_value !== spec.type;
+    })
+    .map(([field, spec]) => `${spec.type} ${field}`);
+
+  return [...missing, ...mistyped];
+};
+
+/**
+ * Validates an LNbits wallet-list payload before anything reads it.
+ *
+ * @param value - The parsed JSON body of a wallet route.
+ * @param source - The calling function, used to name the failure.
+ * @returns The payload, narrowed to validated wallet rows.
+ * @throws When the payload is not an array, or a row is missing a required
+ * string field.
+ */
+const toRawLnbitsWallets = (
+  value: unknown,
+  source: string,
+): RawLnbitsWallet[] => {
+  if (!Array.isArray(value)) {
+    throw new Error(`${source}: LNbits did not return a wallet array`);
+  }
+  value.forEach((wallet, index) => {
+    const invalid = invalidWalletFields(wallet);
+    if (invalid.length > 0) {
+      throw new Error(
+        `${source}: LNbits wallet at index ${index} is missing ${invalid.join(', ')}`,
+      );
+    }
+  });
+  return value;
+};
+
 const getWallets = async (
   adminKey: string,
   filterByName?: string,
   filterById?: string,
-): Promise<Wallet[] | null> => {
+  // Failures reject rather than resolving with null: a null here used to be
+  // indistinguishable from "this admin has no wallets".
+): Promise<Wallet[]> => {
   console.log(
     `getWallets starting ... (filterByName: ${filterByName}, filterById: ${filterById}))`,
   );
@@ -139,7 +225,7 @@ const getWallets = async (
       );
     }
 
-    const data = await response.json();
+    const data = toRawLnbitsWallets(await response.json(), 'getWallets');
 
     // If filter is provided, filter the wallets by name and/or id
     let filteredData = data;
@@ -155,19 +241,22 @@ const getWallets = async (
 
     // Map the wallets to match the Wallet interface
     let walletData: Wallet[] = await Promise.all(
-      filteredData.map(async (filteredData: any) => ({
-        id: filteredData.id,
-        admin: filteredData.admin,
-        name: filteredData.name,
-        adminkey: filteredData.adminkey,
-        user: filteredData.user,
-        inkey: filteredData.inkey,
+      filteredData.map(async rawWallet => {
         // See: https://github.com/lnbits/lnbits/issues/2690
-        deleted: (await getWalletById(filteredData.user, filteredData.id))
-          ?.deleted,
-        balance_msat: (await getWalletById(filteredData.user, filteredData.id))
-          ?.balance_msat,
-      })),
+        // One lookup, not two: the second call fetched the same row again.
+        const walletDetails = await getWalletById(rawWallet.user, rawWallet.id);
+
+        return {
+          id: rawWallet.id,
+          admin: rawWallet.admin,
+          name: rawWallet.name,
+          adminkey: rawWallet.adminkey,
+          user: rawWallet.user,
+          inkey: rawWallet.inkey,
+          deleted: walletDetails?.deleted,
+          balance_msat: walletDetails?.balance_msat,
+        };
+      }),
     );
 
     // Now remove the deleted wallets.
@@ -176,7 +265,7 @@ const getWallets = async (
     return walletData;
   } catch (error) {
     console.error(error);
-    return error;
+    throw error;
   }
 };
 
@@ -207,10 +296,10 @@ const getUserWallets = async (
       );
     }
 
-    const data: Wallet[] = await response.json();
+    const data = toRawLnbitsWallets(await response.json(), 'getUserWallets');
 
     // Map the wallets to match the Wallet interface
-    const walletData: Wallet[] = data.map((wallet: any) => ({
+    const walletData: Wallet[] = data.map(wallet => ({
       id: wallet.id,
       admin: null, // TODO: To be implemented. Ref: https://t.me/lnbits/90188
       name: wallet.name,
@@ -412,7 +501,7 @@ const getWalletDetails = async (inKey: string, walletId: string) => {
     return data;
   } catch (error) {
     console.error(error);
-    return error;
+    throw error;
   }
 };
 
@@ -440,7 +529,7 @@ const getWalletBalance = async (inKey: string) => {
     return data.balance / 1000; // return in Sats (not millisatoshis)
   } catch (error) {
     console.error(error);
-    return error;
+    throw error;
   }
 };
 
@@ -465,32 +554,127 @@ const getWalletName = async (inKey: string) => {
     return data.name;
   } catch (error) {
     console.error(error);
-    return error;
+    throw error;
   }
 };
 
-const getPayments = async (inKey: string) => {
-  console.log('getPayments starting ...');
+// A stalled LNbits response must not hold a turn open forever: the leaderboard
+// awaits every payment read, so one hung request would make the whole answer
+// unavailable rather than slow. Node 24 (the declared runtime) has this API.
+const LNBITS_REQUEST_TIMEOUT_MS = 30000;
 
-  try {
-    const response = await fetch(`${lnbitsUrl()}/api/v1/payments?limit=100`, {
+// Payment listings are paged. These reads are exported, so validate the page
+// before it reaches the query string: a fractional, negative or non-finite
+// value would otherwise be pasted into the URL and answered with whatever
+// LNbits makes of it, which is indistinguishable from a genuinely short page
+// and so reads as "no more payments".
+const MAX_PAGE_SIZE = 10000;
+
+const requirePageBounds = (limit: number, offset: number): void => {
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
+    throw new Error(
+      `Invalid payments page limit: ${limit} (expected an integer 1-${MAX_PAGE_SIZE})`,
+    );
+  }
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error(
+      `Invalid payments page offset: ${offset} (expected an integer >= 0)`,
+    );
+  }
+};
+
+// `limit`/`offset` are the page LNbits applies to this wallet's payment list.
+// `limit` defaults to the historical 100, but a caller that aggregates a
+// wallet's whole history (see zapHistoryService) must page or it undercounts.
+//
+// This throws rather than returning null: a caller that cannot tell "no
+// payments" from "the request failed" reports a zero total as fact, which is
+// exactly the silent undercount #275 was about. Callers decide what a failure
+// means for them.
+const getPayments = async (
+  inKey: string,
+  limit = 100,
+  offset = 0,
+): Promise<Transaction[]> => {
+  requirePageBounds(limit, offset);
+  console.log(`getPayments starting ... (limit: ${limit}, offset: ${offset})`);
+
+  const response = await fetch(
+    `${lnbitsUrl()}/api/v1/payments?limit=${limit}&offset=${offset}`,
+    {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
         'X-Api-Key': inKey,
       },
-    });
+      signal: AbortSignal.timeout(LNBITS_REQUEST_TIMEOUT_MS),
+    },
+  );
 
-    if (!response.ok) {
-      throw new Error(`Error getting payments (status: ${response.status})`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Error:', error);
-    return null;
+  if (!response.ok) {
+    throw new Error(
+      `Error getting payments (status: ${response.status} ${response.statusText})`,
+    );
   }
+
+  return (await response.json()) as Transaction[];
+};
+
+// Raised when the instance has no /payments/all/paginated endpoint, or these
+// credentials may not read it. Callers fall back to per-wallet paging.
+class PaginatedPaymentsUnsupportedError extends Error {
+  constructor(status: number) {
+    super(`Paginated all-payments endpoint unavailable (status: ${status})`);
+    this.name = 'PaginatedPaymentsUnsupportedError';
+  }
+}
+
+// One page of every payment on the instance — the endpoint the portal reads
+// (tabs/src/services/lnbits/payments.ts). One superuser-authenticated request
+// per page replaces a request per wallet, and because the caller can page there
+// is no hidden truncation: a truncated wallet would break the checking_id
+// cross-reference and drop a zap with no error anywhere.
+const getAllPaymentsPage = async (
+  limit: number,
+  offset: number,
+): Promise<Transaction[]> => {
+  requirePageBounds(limit, offset);
+  const query = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+    sortby: 'time',
+    direction: 'desc',
+  });
+  const response = await adminFetch(
+    `/api/v1/payments/all/paginated?${query.toString()}`,
+    { method: 'GET', signal: AbortSignal.timeout(LNBITS_REQUEST_TIMEOUT_MS) },
+  );
+
+  if ([401, 403, 404, 405].includes(response.status)) {
+    throw new PaginatedPaymentsUnsupportedError(response.status);
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Error getting all payments (status: ${response.status} ${response.statusText})`,
+    );
+  }
+
+  const data = await response.json();
+
+  // The paginated endpoint has shipped the array bare and wrapped under several
+  // keys across LNbits versions, so accept each known shape.
+  const payments = Array.isArray(data)
+    ? data
+    : (data?.data ?? data?.payments ?? data?.items);
+
+  if (!Array.isArray(payments)) {
+    throw new Error(
+      `Unexpected payload from /api/v1/payments/all/paginated: ${JSON.stringify(data)}`,
+    );
+  }
+
+  return payments as Transaction[];
 };
 
 const getWalletPayLinks = async (inKey: string, walletId: string) => {
@@ -522,7 +706,7 @@ const getWalletPayLinks = async (inKey: string, walletId: string) => {
     return data;
   } catch (error) {
     console.error(error);
-    return error;
+    throw error;
   }
 };
 
@@ -555,15 +739,11 @@ const getWalletById = async (
       return null;
     }
 
-    const data = await response.json();
+    const data = toRawLnbitsWallets(await response.json(), 'getWalletById');
 
     // Find the wallet with a matching inkey that are not deleted.
-    const filteredWallets = data.filter(
-      (wallet: any) => wallet.deleted !== true,
-    );
-    const matchingWallet = filteredWallets.find(
-      (wallet: any) => wallet.id === id,
-    );
+    const filteredWallets = data.filter(wallet => wallet.deleted !== true);
+    const matchingWallet = filteredWallets.find(wallet => wallet.id === id);
     //console.log('matchingWallet: ', matchingWallet);
 
     if (!matchingWallet) {
@@ -611,10 +791,13 @@ const getWalletIdFromKey = async (inKey: string) => {
       return null;
     }
 
-    const data = await response.json();
+    const data = toRawLnbitsWallets(
+      await response.json(),
+      'getWalletIdFromKey',
+    );
 
     // Find the wallet with a matching inkey
-    const wallet = data.find((wallet: any) => wallet.inkey === inKey);
+    const wallet = data.find(rawWallet => rawWallet.inkey === inKey);
 
     if (!wallet) {
       console.error('No wallet found for this inKey.');
@@ -625,7 +808,7 @@ const getWalletIdFromKey = async (inKey: string) => {
     return wallet.id;
   } catch (error) {
     console.error(error);
-    return error;
+    throw error;
   }
 };
 
@@ -651,7 +834,7 @@ const getInvoicePayment = async (inKey: string, invoice: string) => {
     return data;
   } catch (error) {
     console.error(error);
-    return error;
+    throw error;
   }
 };
 
@@ -662,6 +845,14 @@ const getPaymentsSince = async (lnKey: string, timestamp: number) => {
   try {
     // Get walletId using the provided apiKey
     const walletId = await getWalletIdFromKey(lnKey);
+    // Without this the id interpolates as "null" and LNbits answers a query
+    // about no wallet at all, hiding the real failure (a bad key) behind an
+    // empty payment list.
+    if (typeof walletId !== 'string' || walletId === '') {
+      throw new Error(
+        'getPaymentsSince: no wallet could be resolved for the supplied key',
+      );
+    }
 
     const response = await fetch(
       `${lnbitsUrl()}/api/v1/payments?wallet=${walletId}&limit=1`,
@@ -694,7 +885,7 @@ const getPaymentsSince = async (lnKey: string, timestamp: number) => {
     return paymentsSince;
   } catch (error) {
     console.error(error);
-    return error;
+    throw error;
   }
 };
 
@@ -836,46 +1027,9 @@ async function topUpWallet(walletId: string, amount: number): Promise<void> {
   }
 }
 
-async function scheduledTopup() {
-  const allowancewallets = await getWallets(
-    process.env.LNBITS_ADMINKEY as string,
-    'Allowance',
-  );
-  const allowanceValue = process.env.LNBITS_INITIAL_ALLOWANCE as string;
-  const hostWalletId = process.env.LNBITS_HOST_WALLET_ID as string;
-  const hostUserId = process.env.LNBITS_HOST_USER_ID as string;
-
-  const host = await getWalletById(hostUserId, hostWalletId);
-
-  if (allowancewallets) {
-    allowancewallets.forEach(async wallet => {
-      const User = await getUser(
-        process.env.LNBITS_ADMINKEY as string,
-        wallet.user,
-      );
-
-      const extra = {
-        from: wallet,
-        to: host,
-        tag: 'zap',
-      };
-
-      if (wallet.balance_msat > 0) {
-        const paymentRequest = await createInvoice(
-          process.env.LNBITS_INKEY as string,
-          hostWalletId,
-          wallet.balance_msat / 1000,
-          `${User.displayName} Weekly Allowance cleared`,
-          extra,
-        );
-        await payInvoice(wallet.adminkey, paymentRequest, extra);
-      }
-      topUpWallet(wallet.id, parseInt(allowanceValue));
-    });
-  }
-}
-
 export {
+  getAllPaymentsPage,
+  PaginatedPaymentsUnsupportedError,
   getWallets,
   createUser,
   getUser,
@@ -895,5 +1049,4 @@ export {
   payInvoice,
   getWalletIdByUserId,
   topUpWallet,
-  scheduledTopup,
 };

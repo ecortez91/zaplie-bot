@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import styles from './SendZapsPopup.module.css';
 import { RewardNameContext } from './RewardNameContext';
 import { useCache } from '../utils/CacheContext';
-import { createInvoice, payInvoice } from '../services/lnbits/payments';
+import { sendZap, newIdempotencyKey } from '../services/lnbits/payments';
 import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
 import { useMsal } from '@azure/msal-react';
@@ -10,8 +10,6 @@ import loaderGif from '../images/Loader.gif';
 import ZapIcon from '../images/ZapIcon.svg';
 import checkmarkIcon from '../images/CheckmarkCircleGreen.svg';
 import dismissIcon from '../images/DismissCircleRed.svg';
-
-const adminKey = process.env.REACT_APP_LNBITS_ADMINKEY as string;
 
 interface SendZapsPopupProps {
   onClose: () => void;
@@ -22,10 +20,56 @@ type UserWithWallet = User & { privateWallet: Wallet | null };
 
 const PRESET_AMOUNTS = [5000, 10000, 25000];
 
+const MAX_ZAP_AMOUNT = 1000000;
+
+// Three gateway answers mean this key can never succeed again, and none of
+// them means "definitely not paid" (see lnbitsGatewayService.js):
+//
+//   - outcome_unknown - the zap was paid but the success could not be recorded
+//   - failed - the payment was attempted and threw, so the key is poisoned
+//     deliberately; that is fail-closed, not proof the money stayed put
+//   - the key is already bound to a different zap
+//
+// Retrying any of them with the same key 409s forever, and minting a fresh key
+// would risk a second payment for the first two, so the popup closes instead.
+// "Zap request is already in progress" is deliberately absent: retrying that
+// one replays the in-flight attempt's result once it settles, which is safe.
+const TERMINAL_ZAP_ERRORS = [
+  /contact support/i,
+  /cannot be retried safely/i,
+  /already used for another zap/i,
+];
+
+const isDoNotRetryError = (message: string | null) =>
+  Boolean(
+    message && TERMINAL_ZAP_ERRORS.some(pattern => pattern.test(message)),
+  );
+
+const parseZapAmount = (value: string): number | null => {
+  if (!/^\d+$/.test(value.trim())) {
+    return null;
+  }
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= MAX_ZAP_AMOUNT
+    ? parsed
+    : null;
+};
+
 const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const [selectedUser, setSelectedUser] = useState<string>('');
   const [amount, setAmount] = useState<string>('');
   const [memo, setMemo] = useState<string>('');
+  // One key per zap attempt, deliberately outside React state so a re-render
+  // cannot change it mid-flight. The gateway can time the browser out while it
+  // is still paying, so pressing Send again has to replay the same key or it
+  // pays a second time.
+  //
+  // It is keyed on the request actually sent, not on the raw form fields: an
+  // empty memo goes out as "Zap payment", so typing that into the memo box
+  // between attempts changes the field without changing the request, and
+  // minting a new key there would pay twice. Cleared on success, because the
+  // next Send is a new zap.
+  const zapKeyRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +89,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const { cache, setCache } = useCache();
   const { accounts } = useMsal();
   const rewardNameContext = useContext(RewardNameContext);
-  const rewardsName = rewardNameContext?.rewardName ?? 'Sats';
+  const rewardsName = rewardNameContext.rewardNameLabel;
 
   useEffect(() => {
     const loadUsers = async () => {
@@ -60,7 +104,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
         // Get users from cache or fetch them
         let allUsers = cache['allUsers'] as User[];
         if (!allUsers || allUsers.length === 0) {
-          const fetchedUsers = await getUsers(adminKey, {});
+          const fetchedUsers = await getUsers({});
           if (fetchedUsers && fetchedUsers.length > 0) {
             allUsers = fetchedUsers;
             setCache('allUsers', fetchedUsers);
@@ -77,7 +121,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
 
         if (currentUserData) {
           // Always fetch fresh wallet data to get accurate balance
-          const wallets = await getUserWallets(adminKey, currentUserData.id);
+          const wallets = await getUserWallets(currentUserData.id);
           const allowanceWallet = wallets?.find(w =>
             w.name.toLowerCase().includes('allowance'),
           );
@@ -124,7 +168,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
     if (!user || user.privateWallet) return; // Already has wallet or not found
 
     try {
-      const wallets = await getUserWallets(adminKey, userId);
+      const wallets = await getUserWallets(userId);
       // Prioritize "private" wallet, then any non-allowance wallet
       let targetWallet = wallets?.find(w =>
         w.name.toLowerCase().includes('private'),
@@ -170,12 +214,15 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
       return;
     }
 
-    if (!amount || parseFloat(amount) <= 0) {
-      setError('Please enter a valid amount');
+    // Sats are indivisible, and the gateway caps a single zap, so a decimal or
+    // oversized amount is rejected here rather than becoming a failed payment.
+    const zapAmount = parseZapAmount(amount);
+    if (zapAmount === null) {
+      setError(
+        `Please enter a whole number between 1 and ${MAX_ZAP_AMOUNT.toLocaleString()}`,
+      );
       return;
     }
-
-    const zapAmount = parseFloat(amount);
 
     // Balance validation
     if (zapAmount > currentUserWallets.balance) {
@@ -209,25 +256,26 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
         paymentMemo = `[Anonymous] ${paymentMemo}`;
       }
 
-      // Create invoice in recipient's private wallet
-      const paymentRequest = await createInvoice(
-        recipient.privateWallet.inkey,
-        recipient.privateWallet.id,
+      // A genuinely different zap gets its own key; an identical retry does
+      // not. Reusing a key for changed details would be refused with a 409.
+      const fingerprint = JSON.stringify([
+        recipient.id,
         zapAmount,
         paymentMemo,
-      );
-
-      if (!paymentRequest) {
-        throw new Error('Failed to create invoice');
+      ]);
+      if (zapKeyRef.current?.fingerprint !== fingerprint) {
+        zapKeyRef.current = { fingerprint, key: newIdempotencyKey() };
       }
-
-      // Pay the invoice from sender's allowance wallet
-      const result = await payInvoice(
-        currentUserWallets.allowance.adminkey,
-        paymentRequest,
+      const result = await sendZap(
+        recipient.id,
+        zapAmount,
+        paymentMemo,
+        zapKeyRef.current.key,
       );
 
       if (result && result.payment_hash) {
+        // Settled: the next Send is a different zap and needs its own key.
+        zapKeyRef.current = null;
         setPaymentHash(result.payment_hash);
         setSuccess(true);
         // Optimistic update for immediate UI feedback
@@ -246,13 +294,15 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   };
 
   const handleClose = () => {
+    zapKeyRef.current = null;
     setSuccess(false);
     setError(null);
     onClose();
   };
 
   const selectedUserData = users.find(u => u.id === selectedUser);
-  const isSendDisabled = !selectedUser || !amount || parseFloat(amount) <= 0;
+  const isSendDisabled =
+    !selectedUser || !amount || parseZapAmount(amount) === null;
 
   // Get initials for avatar placeholder
   const getInitials = (name?: string) => {
@@ -500,9 +550,11 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
             <div className={styles.errorMessage}>{error}</div>
             <button
               className={styles.closeButton}
-              onClick={() => setError(null)}
+              onClick={
+                isDoNotRetryError(error) ? handleClose : () => setError(null)
+              }
             >
-              Try Again
+              {isDoNotRetryError(error) ? 'Close' : 'Try Again'}
             </button>
           </div>
         </div>

@@ -232,7 +232,13 @@ export async function SendZap(
 
     console.log('Payment result: settled');
 
-    if (result && result.payment_hash && updateCard) {
+    // Past this point the payment has settled and its hash is in hand, so
+    // nothing that follows may reach the caller as a plain Error: that is the
+    // signal for "never left this process", and it would release the ledger
+    // entry and let a resubmit pay the same recipient again. Everything below
+    // is presentation - a balance read and a card update - so a failure is
+    // logged and the confirmed hash is still returned.
+    const updateReceiptCard = async (): Promise<void> => {
       // Updated adaptive card (read-only)
       //fetch remainingBalance
       const remainingBalance = await getWalletBalance(
@@ -257,6 +263,18 @@ export async function SendZap(
       await context.updateActivity(updatedMessage);
 
       console.log('Adaptive card updated to read-only.');
+    };
+
+    if (updateCard) {
+      try {
+        await updateReceiptCard();
+      } catch (error) {
+        console.error(
+          'The zap settled but its receipt card could not be updated; the ' +
+            'payment stands and the ledger keeps it recorded as paid.',
+          error,
+        );
+      }
     }
 
     return { paymentHash };
@@ -264,7 +282,7 @@ export async function SendZap(
     if (error instanceof Error) {
       throw error;
     }
-    throw new Error(String(error));
+    throw new Error(String(error), { cause: error });
   }
 }
 
@@ -362,7 +380,7 @@ async function populateWalletChoices() {
   }
 
   if (filteresUsers) {
-    return filteresUsers.map((user: any) => ({
+    return filteresUsers.map(user => ({
       title: user.displayName,
       value: user.id,
     }));

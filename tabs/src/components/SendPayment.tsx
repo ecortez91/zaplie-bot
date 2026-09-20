@@ -70,9 +70,8 @@ const SendPayment: React.FC<SendPopupProps> = ({
     if (!myLNbitDetails || !myLNbitDetails.privateWallet) {
       handlePaymentFailure('Something wrong with your wallet');
     } else {
-      payInvoice(myLNbitDetails.privateWallet?.adminkey || '', invoice)
-        .then(invoice => {
-          setInvoice(invoice);
+      payInvoice(myLNbitDetails.privateWallet.id, invoice)
+        .then(() => {
           setIsPaymentSuccess(true);
           setIsSuccessFailurePopupVisible(true); // Show the success popup
           setIsLoading(false);
@@ -183,7 +182,7 @@ const SendPayment: React.FC<SendPopupProps> = ({
   if (!rewardNameContext) {
     return null; // or handle the case where the context is not available
   }
-  const rewardsName = rewardNameContext.rewardName;
+  const rewardsName = rewardNameContext.rewardNameLabel;
 
   return (
     <div className={styles.overlay} onClick={handleOverlayClick}>

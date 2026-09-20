@@ -7,18 +7,45 @@ import {
   useCallback,
 } from 'react';
 import styles from './UserListComponent.module.css';
+import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
 import { useCache } from '../utils/CacheContext';
 import { RewardNameContext } from './RewardNameContext';
 
-const adminKey = process.env.REACT_APP_LNBITS_ADMINKEY as string;
+// The wallet lookup is one request per user. Browsers cap concurrent requests
+// per host, so an unbounded fan-out leaves the surplus queued in the browser
+// while the gateway client's 30s timeout runs down against the queued request
+// rather than the server — late users then render with blank wallet columns.
+export const WALLET_FETCH_CONCURRENCY = 5;
+
+const mapWithConcurrency = async <TIn, TOut>(
+  items: TIn[],
+  limit: number,
+  worker: (item: TIn) => Promise<TOut>,
+): Promise<TOut[]> => {
+  const results = new Array<TOut>(items.length);
+  let next = 0;
+
+  const runner = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await worker(items[index]);
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => runner()),
+  );
+
+  return results;
+};
 
 const UserListComponent: FunctionComponent = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const fetchCalled = useRef(false); // Ref to track if fetchUsers has been called
-  const { cache } = useCache();
+  const { cache, setCache } = useCache();
 
   const fetchUsers = useCallback(async () => {
     //Load users from Cache or parameter
@@ -26,18 +53,25 @@ const UserListComponent: FunctionComponent = () => {
     setError(null);
 
     try {
-      const allUsers = cache['allUsers'] as User[];
+      const cachedUsers = cache['allUsers'] as User[] | undefined;
+      let allUsers: User[];
 
-      if (!allUsers || allUsers.length === 0) {
-        setLoading(false);
-        return;
+      // An empty cached directory is treated as a cold cache, matching
+      // SendZapsPopup: a stale empty entry must not render an empty table.
+      if (Array.isArray(cachedUsers) && cachedUsers.length > 0) {
+        allUsers = cachedUsers;
+      } else {
+        allUsers = await getUsers();
+        setCache('allUsers', allUsers);
       }
 
-      // Fetch wallets for each user
-      const usersWithWallets = await Promise.all(
-        allUsers.map(async user => {
+      // Fetch wallets for each user, a bounded number of requests at a time
+      const usersWithWallets = await mapWithConcurrency(
+        allUsers,
+        WALLET_FETCH_CONCURRENCY,
+        async user => {
           try {
-            const wallets = await getUserWallets(adminKey, user.id);
+            const wallets = await getUserWallets(user.id);
 
             if (wallets && wallets.length > 0) {
               const privateWallet = wallets.find(w =>
@@ -62,7 +96,7 @@ const UserListComponent: FunctionComponent = () => {
             );
             return user;
           }
-        }),
+        },
       );
 
       setUsers(usersWithWallets);
@@ -72,7 +106,7 @@ const UserListComponent: FunctionComponent = () => {
     } finally {
       setLoading(false);
     }
-  }, [cache]);
+  }, [cache, setCache]);
 
   useEffect(() => {
     if (!fetchCalled.current) {
@@ -84,7 +118,7 @@ const UserListComponent: FunctionComponent = () => {
   if (!rewardNameContext) {
     return null; // or handle the case where the context is not available
   }
-  const rewardsName = rewardNameContext.rewardName;
+  const rewardsName = rewardNameContext.rewardNameLabel;
   if (loading) {
     return <div>Loading...</div>;
   }

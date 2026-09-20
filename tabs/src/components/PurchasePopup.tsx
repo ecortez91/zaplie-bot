@@ -40,7 +40,7 @@ const PurchasePopup: React.FC<PurchasePopupProps> = ({
   };
 
   const rewardNameContext = useContext(RewardNameContext);
-  const rewardsName = rewardNameContext?.rewardName || '';
+  const rewardsName = rewardNameContext.rewardNameLabel;
 
   // Log wallet ID and balance to the console
   useEffect(() => {

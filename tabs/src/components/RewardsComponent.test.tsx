@@ -14,9 +14,13 @@ describe('RewardsComponent', () => {
   test('renders the marketplace title without legacy provider branding', () => {
     const view = renderToStaticMarkup(
       <RewardNameContext.Provider
-        value={{ rewardName: 'sats', setRewardName: jest.fn() }}
+        value={{
+          rewardName: 'sats',
+          rewardNameLabel: 'sats',
+          setRewardName: jest.fn(),
+        }}
       >
-        <RewardsComponent adminKey="test-admin-key" userId="test-user" />
+        <RewardsComponent userId="test-user" />
       </RewardNameContext.Provider>,
     );
 

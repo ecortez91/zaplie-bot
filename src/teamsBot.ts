@@ -18,7 +18,7 @@ import {
 import { ZapLedger, zapKey } from './services/zapLedger';
 import {
   getPendingRecipientIds,
-  hasUnknownRecipientOutcome,
+  hasUncertainRecipientOutcome,
   normalizeRecipientIds,
   processZapRecipient,
   validateSelfZap,
@@ -43,6 +43,7 @@ import { getUser, getWalletBalance } from './services/lnbitsService';
 
 const UNRECOGNIZED_COMMAND_MESSAGE =
   "D'oh! I'm sorry, but I didn't recognize that command. But don't worry, I'm always getting better!";
+const ZAP_SUBMIT_ACTION = 'submitZaps';
 
 //Reward Name Constants
 
@@ -59,8 +60,8 @@ export class TeamsBot extends TeamsActivityHandler {
   conversationState: ConversationState;
   userState: UserState;
   foundryConversationIdAccessor: StatePropertyAccessor<string | undefined>;
-  // Best-effort, single-process protection against paying a recipient twice
-  // from the same card. Not durable: see the note in zapLedger.ts.
+  // Durable per-recipient protection against paying from the same card twice.
+  // Construction fails outside development when ZAPLIE_DATA_DIR is absent.
   private zapLedger = new ZapLedger();
 
   constructor() {
@@ -126,12 +127,21 @@ export class TeamsBot extends TeamsActivityHandler {
 
         if (
           context.activity.value &&
-          context.activity.value.action === 'submitZaps'
+          context.activity.value.action === ZAP_SUBMIT_ACTION
         ) {
           const cardId = context.activity.replyToId;
-          // Without a card id there is nothing to key the ledger on, so a
-          // double submit could not be told apart from a legitimate one.
-          if (!cardId) {
+          // Teams usually stamps the tenant on the conversation, but some
+          // activities carry it only in channelData. Read both before giving
+          // up: the id is the same one, not a guess.
+          const channelData = context.activity.channelData as
+            { tenant?: { id?: string } } | undefined;
+          const tenantId =
+            context.activity.conversation.tenantId ?? channelData?.tenant?.id;
+          const conversationId = context.activity.conversation.id;
+          // All scope components are mandatory. Guessing a missing tenant,
+          // conversation, or card id could merge unrelated submissions or
+          // make a duplicate look new.
+          if (!tenantId || !conversationId || !cardId) {
             await context.sendActivity(
               'That zap card cannot be identified, so it was not submitted. Please start a new zap.',
             );
@@ -139,10 +149,11 @@ export class TeamsBot extends TeamsActivityHandler {
           }
           const keyFor = (recipientId: string) =>
             zapKey({
-              tenantId: context.activity.conversation.tenantId,
-              conversationId: context.activity.conversation.id,
+              tenantId,
+              conversationId,
               cardId,
               recipientId,
+              action: ZAP_SUBMIT_ACTION,
             });
 
           const currentUser: User | undefined = context.turnState.get('user');
@@ -188,17 +199,21 @@ export class TeamsBot extends TeamsActivityHandler {
             );
           }
 
-          const pendingReceiverIds = getPendingRecipientIds(
+          const pendingReceiverIds = await getPendingRecipientIds(
             this.zapLedger,
             receiverIds,
             keyFor,
           );
-          const handledSubmitMessage = () =>
-            hasUnknownRecipientOutcome(this.zapLedger, receiverIds, keyFor)
+          const handledSubmitMessage = async () =>
+            (await hasUncertainRecipientOutcome(
+              this.zapLedger,
+              receiverIds,
+              keyFor,
+            ))
               ? 'One or more payments from this zap still need checking, so nothing was retried.'
               : 'That zap card was already submitted, so nothing was sent again.';
           if (pendingReceiverIds.length === 0) {
-            await context.sendActivity(handledSubmitMessage());
+            await context.sendActivity(await handledSubmitMessage());
             return;
           }
 
@@ -247,7 +262,7 @@ export class TeamsBot extends TeamsActivityHandler {
           // Every recipient was skipped, so this is a duplicate submit and
           // there is nothing new to report.
           if (alreadyHandled.length === pendingReceiverIds.length) {
-            await context.sendActivity(handledSubmitMessage());
+            await context.sendActivity(await handledSubmitMessage());
             return;
           }
 
@@ -270,30 +285,51 @@ export class TeamsBot extends TeamsActivityHandler {
             );
             return;
           }
-          //fetch remainingBalance
-          const remainingBalance = await getWalletBalance(
-            currentUser.allowanceWallet.inkey,
-          );
-          console.log('Remaining Balance:', remainingBalance);
+          // Past this point the money has moved. Everything that follows is
+          // presentation — a balance read and a card update — so a failure in
+          // it must not reach the handler's catch and tell the user the zap
+          // did not work. sendZapCommand isolates its post-settlement work the
+          // same way, for the same reason.
+          const updateReceiptCard = async (): Promise<void> => {
+            //fetch remainingBalance
+            const remainingBalance = await getWalletBalance(
+              currentUser.allowanceWallet.inkey,
+            );
+            console.log('Remaining Balance:', remainingBalance);
 
-          // Update the adaptive card to a read-only receipt for the
-          // recipients this submit processed. Recipients already settled by an
-          // earlier submit of the same card were skipped and are not relisted.
-          const updatedCard = buildZapReceiptCard({
-            recipients: successfulRecipients,
-            failedRecipients,
-            uncertainRecipients,
-            message: zapMessage,
-            amount,
-            remainingBalance,
-            rewardName: globalRewardName,
-          });
+            // Update the adaptive card to a read-only receipt for the
+            // recipients this submit processed. Recipients already settled by
+            // an earlier submit of the same card were skipped and are not
+            // relisted.
+            const updatedCard = buildZapReceiptCard({
+              recipients: successfulRecipients,
+              failedRecipients,
+              uncertainRecipients,
+              message: zapMessage,
+              amount,
+              remainingBalance,
+              rewardName: globalRewardName,
+            });
 
-          const updatedMessage = MessageFactory.attachment(
-            CardFactory.adaptiveCard(updatedCard),
-          );
-          updatedMessage.id = context.activity.replyToId;
-          await context.updateActivity(updatedMessage);
+            const updatedMessage = MessageFactory.attachment(
+              CardFactory.adaptiveCard(updatedCard),
+            );
+            updatedMessage.id = context.activity.replyToId;
+            await context.updateActivity(updatedMessage);
+          };
+
+          try {
+            await updateReceiptCard();
+          } catch (error) {
+            console.error(
+              'The zaps settled but the receipt card could not be updated; ' +
+                'the payments stand and the ledger keeps them recorded as paid.',
+              error,
+            );
+          }
+
+          // Sent whether or not the card could be rewritten: the zaps really
+          // were sent, and saying otherwise would be the wrong answer.
           await context.sendActivity(
             `Awesome! You sent ${amount} ${globalRewardName} to your colleague with a zap!`,
           );

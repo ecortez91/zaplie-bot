@@ -8,8 +8,6 @@ import SendPayment from './SendPayment';
 import ReceivePayment from './ReceivePayment';
 import { RewardNameContext } from './RewardNameContext';
 
-const adminKey = process.env.REACT_APP_LNBITS_ADMINKEY as string;
-
 const WalletYourWalletInfoCard: React.FC = () => {
   const [balance, setBalance] = useState<number>();
 
@@ -22,7 +20,7 @@ const WalletYourWalletInfoCard: React.FC = () => {
   const fetchAmountReceived = useCallback(async () => {
     if (!account?.localAccountId) return;
 
-    const currentUserLNbitDetails = await getUsers(adminKey, {
+    const currentUserLNbitDetails = await getUsers({
       aadObjectId: account.localAccountId,
     });
 
@@ -30,7 +28,7 @@ const WalletYourWalletInfoCard: React.FC = () => {
       const user = currentUserLNbitDetails[0];
 
       // Fetch user's wallets
-      const userWallets = await getUserWallets(adminKey, user.id);
+      const userWallets = await getUserWallets(user.id);
 
       if (userWallets && userWallets.length > 0) {
         // Find the Private wallet
@@ -74,7 +72,7 @@ const WalletYourWalletInfoCard: React.FC = () => {
   if (!rewardNameContext) {
     return null; // or handle the case where the context is not available
   }
-  const rewardsName = rewardNameContext.rewardName;
+  const rewardsName = rewardNameContext.rewardNameLabel;
 
   // Buttons should be disabled if balance is undefined (still loading)
   const isLoading = false; // balance === undefined;

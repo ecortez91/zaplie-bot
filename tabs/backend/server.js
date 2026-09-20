@@ -2,10 +2,11 @@
 const express = require('express');
 const { rateLimit } = require('express-rate-limit');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
 const authMiddleware = require('./authMiddleware'); // Import the authentication middleware
+const { dataPath } = require('./dataPaths');
+const { writeJsonSecure } = require('./secureJsonStore');
 const identityRoutes = require('./identityRoutes');
 const pendingRewardsStore = require('./pendingRewardsStore');
 const {
@@ -32,7 +33,17 @@ app.use(cors());
 // Mounted app-wide, not on /api: CodeQL also flags the sendFile catch-all
 // below (js/missing-rate-limiting), and every route does file or network work.
 app.use(apiRateLimiter);
-app.use(bodyParser.json());
+app.use(express.json());
+
+// Deployment smoke tests need a dependency-free liveness signal. Readiness of
+// authenticated LNbits operations is exercised separately by the API tests.
+app.get('/healthz', (_req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+// All browser access to LNbits goes through this authenticated same-origin
+// gateway. Wallet and service-account keys stay in the Node process.
+app.use('/api/lnbits', require('./lnbitsRoutes'));
 
 // Mounted before the generic authMiddleware below: its user-facing routes
 // (authorize-url, mine) authenticate with a real MSAL token, not the
@@ -60,10 +71,7 @@ const defaultRewardAmounts = DEFAULT_REWARD_AMOUNTS;
 // outside the deployment tree: ZAPLIE_DATA_DIR points at a durable directory
 // (for example /home/data/zaplie on Linux App Service). Unset - the local
 // development default - keeps the store next to the code as before.
-const dataDirectory = process.env.ZAPLIE_DATA_DIR
-  ? path.resolve(process.env.ZAPLIE_DATA_DIR)
-  : __dirname;
-const dataFilePath = path.join(dataDirectory, 'data.json');
+const dataFilePath = dataPath('data.json');
 
 // Function to read data from the JSON file
 const readData = () => {
@@ -79,8 +87,7 @@ const readData = () => {
 // Function to write data to the JSON file
 const writeData = (data) => {
   try {
-    fs.mkdirSync(dataDirectory, { recursive: true });
-    fs.writeFileSync(dataFilePath, JSON.stringify(data, null, 2));
+    writeJsonSecure(dataFilePath, data);
     return true;
   } catch (error) {
     console.error('Error writing data file:', error);
@@ -233,7 +240,9 @@ app.post('/api/pending-rewards', (req, res) => {
 // Serve the React app
 app.use(express.static(path.join(__dirname, '../build')));
 
-app.get('*', (req, res) => {
+// A regular expression works with both Express 4 and path-to-regexp v8 in
+// Express 5. Bare wildcard strings such as '*' throw during Express 5 startup.
+app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, '../build', 'index.html'));
 });
 
