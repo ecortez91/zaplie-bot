@@ -8,6 +8,7 @@ import {
 } from '../services/lnbitsService';
 import { UserService } from '../services/userService';
 import { GENERIC_ERROR_MESSAGE } from '../messages';
+import { MAX_ZAP_SATS } from './zapBudget';
 
 const adminKey = process.env.LNBITS_ADMINKEY as string;
 const lnbitsLabel = process.env.LNBITS_POINTS_LABEL as string;
@@ -286,13 +287,82 @@ export async function SendZap(
   }
 }
 
+// A regex matching the whole numbers 1..cap, no leading zeros: the digit
+// classes are built from the cap's digits, prefix by prefix. Used as the
+// card's client-side rule because Teams refuses a regex mismatch with the
+// errorMessage, whereas an Input.Number "max" is silently clamped on submit.
+export const zapAmountRegex = (cap: number): string => {
+  if (!Number.isInteger(cap) || cap < 1) {
+    // Nothing is sendable: the field is required, so any value fails here.
+    return '^$';
+  }
+  const digits = String(cap);
+  const n = digits.length;
+  const alternatives: string[] = [];
+  if (n >= 2) {
+    // Every number with fewer digits than the cap.
+    alternatives.push(n === 2 ? '[1-9]' : `[1-9][0-9]{0,${n - 2}}`);
+  }
+  // Numbers with the cap's digit count that stay below it: same prefix, a
+  // smaller digit at position i, anything after.
+  for (let i = 0; i < n; i++) {
+    const lowest = i === 0 ? 1 : 0;
+    const highest = Number(digits[i]) - 1;
+    if (highest < lowest) {
+      continue;
+    }
+    const digit =
+      lowest === highest ? String(lowest) : `[${lowest}-${highest}]`;
+    const rest = n - i - 1;
+    const tail = rest === 0 ? '' : rest === 1 ? '[0-9]' : `[0-9]{${rest}}`;
+    alternatives.push(`${digits.slice(0, i)}${digit}${tail}`);
+  }
+  alternatives.push(digits);
+  return `^(?:${alternatives.join('|')})$`;
+};
+
+// The amount input, capped at what the sender can actually send: the live
+// Allowance balance, never above the hard ceiling. Teams checks the regex
+// before the card can be submitted, so an amount the sender cannot afford is
+// refused in the card, with the message below, instead of after a round trip.
+// Forgeable like every client-side rule, so validateZapSubmit still enforces
+// the amount and the cumulative budget on the server; a multi-recipient total
+// is only enforced there. An unreadable balance falls back to the ceiling and
+// leaves the refusal to the server, which reports it.
+export const zapAmountInput = (liveBalance: number, rewardName: string) => {
+  const cap = Number.isFinite(liveBalance)
+    ? Math.max(0, Math.min(Math.floor(liveBalance), MAX_ZAP_SATS))
+    : MAX_ZAP_SATS;
+  const errorMessage =
+    cap === 0
+      ? `You have no ${rewardName} to send right now.`
+      : cap < MAX_ZAP_SATS
+        ? `Sorry, you don't have that many ${rewardName} to send! Enter a whole number up to ${cap.toLocaleString()}.`
+        : `Enter a whole number between 1 and ${MAX_ZAP_SATS.toLocaleString()} ${rewardName}.`;
+  return {
+    type: 'Input.Text',
+    id: 'zapAmount',
+    placeholder: '100',
+    label: `Amount (${rewardName})`,
+    regex: zapAmountRegex(cap),
+    isRequired: true,
+    errorMessage,
+  };
+};
+
 // Function to create an adaptive card
 async function createZapCard(sender: User, globalRewardName: string) {
   console.log('Creating Zap Card ...');
   const walletChoices = await populateWalletChoices();
 
-  // TODO: Add the users current balance to here!
   const currentBalance = await getWalletBalance(sender.allowanceWallet.inkey);
+  // A balance that cannot be read is the same failure as a rejected read:
+  // no card, the generic error, nothing to fill in for nothing.
+  if (!Number.isFinite(currentBalance)) {
+    throw new Error(
+      'The Allowance balance could not be read, so no zap card was built.',
+    );
+  }
 
   const cardBody = [
     {
@@ -314,15 +384,7 @@ async function createZapCard(sender: User, globalRewardName: string) {
       placeholder: 'Thanks for helping me with the proposal!',
       errorMessage: 'You should tell them why you are zapping them',
     },
-    {
-      type: 'Input.Text',
-      id: 'zapAmount',
-      placeholder: '100',
-      label: `Amount (${globalRewardName})`,
-      regex: '^(?:10000|[1-9][0-9]{0,3})$',
-      isRequired: true,
-      errorMessage: `You must specify an amount between 1 and 10,000 ${lnbitsLabel}`,
-    },
+    zapAmountInput(currentBalance, globalRewardName),
     {
       type: 'TextBlock',
       text: `**Current Available Balance (${globalRewardName}):** ${currentBalance}`,

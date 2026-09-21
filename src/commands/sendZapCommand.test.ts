@@ -8,7 +8,14 @@
 
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import type { TurnContext } from 'botbuilder';
-import { SendZap, SendZapCommand, buildZapReceiptCard } from './sendZapCommand';
+import {
+  SendZap,
+  SendZapCommand,
+  buildZapReceiptCard,
+  zapAmountInput,
+  zapAmountRegex,
+} from './sendZapCommand';
+import { MAX_ZAP_SATS } from './zapBudget';
 import {
   createInvoice,
   getUsers,
@@ -288,5 +295,155 @@ describe('buildZapReceiptCard', () => {
     expect(text).toContain((2500).toLocaleString());
     expect(text).toContain((5000).toLocaleString());
     expect(text).toContain((12000).toLocaleString());
+  });
+});
+
+describe('zapAmountRegex', () => {
+  // Exhaustive: every value from 0 to a little past the cap, plus the forms a
+  // regex is most likely to get wrong.
+  const accepts = (cap: number, value: string): boolean =>
+    new RegExp(zapAmountRegex(cap)).test(value);
+
+  test.each([1, 9, 10, 11, 99, 100, 250, 999, 1000, 4687, 10000, 14687])(
+    'matches exactly the whole numbers 1..%i',
+    cap => {
+      for (let value = 0; value <= cap + 12; value++) {
+        expect([value, accepts(cap, String(value))]).toEqual([
+          value,
+          value >= 1 && value <= cap,
+        ]);
+      }
+      // One digit more than the cap, a leading zero, and ten times the cap.
+      for (const value of [`1${cap}`, `0${cap}`, `${cap}0`]) {
+        expect([value, accepts(cap, value)]).toEqual([value, false]);
+      }
+    },
+  );
+
+  test('rejects leading zeros, decimals, signs, spaces and empty input', () => {
+    for (const value of [
+      '',
+      '0',
+      '007',
+      '1.5',
+      '-5',
+      '+5',
+      ' 5',
+      '5 ',
+      '1e3',
+    ]) {
+      expect([value, accepts(250, value)]).toEqual([value, false]);
+    }
+  });
+
+  test('a cap below 1 accepts nothing', () => {
+    for (const value of ['', '0', '1', '100']) {
+      expect(accepts(0, value)).toBe(value === '');
+    }
+  });
+
+  test('the ceiling reproduces the original 1..10,000 rule', () => {
+    expect(accepts(10000, '10000')).toBe(true);
+    expect(accepts(10000, '10001')).toBe(false);
+    expect(accepts(10000, '9999')).toBe(true);
+  });
+});
+
+describe('the zap card caps the amount at the live balance', () => {
+  type AmountInput = {
+    type: string;
+    id: string;
+    regex?: string;
+    isRequired?: boolean;
+    errorMessage?: string;
+  };
+
+  // Sends the card through the real command and returns its amount input and
+  // the card text, so the cap is tested where Teams reads it.
+  const cardFor = async (balance: number) => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    jest.mocked(getUsers).mockResolvedValue([]);
+    jest.mocked(getWalletBalance).mockResolvedValue(balance as never);
+    const { context, sendActivity } = makeContext();
+    (context.turnState as Map<unknown, unknown>).set('user', {
+      id: 'user-1',
+      displayName: 'Alice',
+      allowanceWallet: { id: 'w-alice', inkey: 'inkey-alice', adminkey: 'adm' },
+    });
+
+    await new SendZapCommand().execute(context);
+
+    const [activity] = sendActivity.mock.calls[0] as unknown as [
+      { attachments: { content: CardElement }[] },
+    ];
+    const card = activity.attachments[0].content;
+    const amount = (card.body ?? []).find(
+      element => (element as AmountInput).id === 'zapAmount',
+    ) as AmountInput | undefined;
+    if (!amount) {
+      throw new Error('zapAmount input missing from the card');
+    }
+    return { amount, text: allText(card) };
+  };
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('a balance below the ceiling caps the input at the balance', async () => {
+    const { amount, text } = await cardFor(250);
+
+    expect(amount).toMatchObject({
+      type: 'Input.Text',
+      id: 'zapAmount',
+      isRequired: true,
+      regex: zapAmountRegex(250),
+    });
+    expect(new RegExp(amount.regex ?? '').test('250')).toBe(true);
+    expect(new RegExp(amount.regex ?? '').test('251')).toBe(false);
+    expect(amount.errorMessage).toMatch(/don't have that many .* up to 250\./);
+    expect(text).toContain('250');
+  });
+
+  test('a balance above the ceiling caps the input at the ceiling', async () => {
+    const { amount } = await cardFor(25_000);
+
+    expect(amount.regex).toBe(zapAmountRegex(MAX_ZAP_SATS));
+    expect(amount.errorMessage).toContain(MAX_ZAP_SATS.toLocaleString());
+  });
+
+  test('an empty balance leaves nothing sendable and says so', async () => {
+    const { amount } = await cardFor(0);
+
+    expect(new RegExp(amount.regex ?? '').test('1')).toBe(false);
+    expect(amount.errorMessage).toMatch(/^You have no .* to send right now\.$/);
+  });
+
+  test('an unreadable balance builds no card at all: the generic error, as for a rejected read', async () => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.mocked(getUsers).mockResolvedValue([]);
+    jest.mocked(getWalletBalance).mockResolvedValue(Number.NaN as never);
+    const { context, sendActivity } = makeContext();
+    (context.turnState as Map<unknown, unknown>).set('user', {
+      id: 'user-1',
+      displayName: 'Alice',
+      allowanceWallet: { id: 'w-alice', inkey: 'inkey-alice', adminkey: 'adm' },
+    });
+
+    await new SendZapCommand().execute(context);
+
+    expect(sendActivity).toHaveBeenCalledTimes(1);
+    expect(sendActivity).toHaveBeenCalledWith(GENERIC_ERROR_MESSAGE);
+  });
+
+  test('the input helper alone treats an unreadable balance as the ceiling (defence in depth)', () => {
+    expect(zapAmountInput(Number.NaN, 'Sats').regex).toBe(
+      zapAmountRegex(MAX_ZAP_SATS),
+    );
+  });
+
+  test('a fractional balance rounds down', () => {
+    expect(zapAmountInput(99.9, 'Sats').regex).toBe(zapAmountRegex(99));
   });
 });

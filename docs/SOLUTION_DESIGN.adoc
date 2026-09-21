@@ -103,7 +103,7 @@ in a static `SSOCommandMap` keyed by lower-case message text:
 
 | `send zap`
 | `src/commands/sendZapCommand.ts`
-| Presents an Adaptive Card (schema 1.5) with a multi-select recipient picker, message, and amount (1–10,000); on submit, pays each recipient and updates the card in place with results and remaining balance
+| Presents an Adaptive Card (schema 1.5) with a multi-select recipient picker, message, and amount (1 up to the live Allowance balance, at most 10,000, refused by the card above that and checked again on submit); on submit, pays each recipient and updates the card in place with results and remaining balance
 
 | `show my balance`
 | `src/commands/showMyBalanceCommand.ts`
