@@ -68,8 +68,11 @@ export const en = {
   cardMessagePlaceholder: 'Thanks for helping me with the proposal!',
   cardMessageError: 'You should tell them why you are zapping them',
   cardAmountLabel: 'Amount ({{rewardName}})',
-  cardAmountError:
-    'You must specify an amount between 1 and 10,000 {{rewardName}}',
+  cardAmountErrorNone: 'You have no {{rewardName}} to send right now.',
+  cardAmountErrorCap:
+    "Sorry, you don't have that many {{rewardName}} to send! Enter a whole number up to {{cap}}.",
+  cardAmountErrorRange:
+    'Enter a whole number between 1 and {{max}} {{rewardName}}.',
   cardBalance: '**Current Available Balance ({{rewardName}}):** {{balance}}',
   cardSendButton: 'Send Zap',
   receiptTitle: 'Zap sent!',
@@ -142,7 +145,11 @@ export const es: Record<MessageKey, string> = {
   cardMessagePlaceholder: '¡Gracias por ayudarme con la propuesta!',
   cardMessageError: 'Cuéntales por qué les envías el zap',
   cardAmountLabel: 'Cantidad ({{rewardName}})',
-  cardAmountError: 'Debes indicar una cantidad entre 1 y 10,000 {{rewardName}}',
+  cardAmountErrorNone: 'No tienes {{rewardName}} para enviar ahora mismo.',
+  cardAmountErrorCap:
+    '¡Lo siento! No tienes tantos {{rewardName}} para enviar. Indica un número entero hasta {{cap}}.',
+  cardAmountErrorRange:
+    'Indica un número entero entre 1 y {{max}} {{rewardName}}.',
   cardBalance: '**Saldo disponible ({{rewardName}}):** {{balance}}',
   cardSendButton: 'Enviar zap',
   receiptTitle: '¡Zap enviado!',
