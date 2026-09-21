@@ -7,7 +7,7 @@ const adminKey = process.env.LNBITS_ADMINKEY as string;
 
 export class ShowMyBalanceCommand extends SSOCommand {
   async execute(context: TurnContext): Promise<void> {
-    const locale = resolveLocale(context.activity.locale);
+    const locale = resolveLocale(context.activity?.locale);
     try {
       //await context.sendActivity('Showing your balance...');
       console.log('Showing your balance...');
@@ -22,7 +22,8 @@ export class ShowMyBalanceCommand extends SSOCommand {
         return;
       }
 
-      console.log('User:', user);
+      // Wallet objects carry keys, so only the id is logged.
+      console.log('Showing balance for user', user.id);
 
       // Get the user's wallets
       const usersWallets = await getUserWallets(adminKey, user.id);
@@ -31,8 +32,6 @@ export class ShowMyBalanceCommand extends SSOCommand {
         await context.sendActivity(t(locale, 'balanceNoWallets'));
         return;
       }
-
-      console.log('User Wallets:', usersWallets);
 
       // Loop through all wallets and send their balances
       for (const wallet of usersWallets) {
