@@ -14,6 +14,7 @@ const {
   migrateRewardAmounts,
   validateRewardAmountPatch,
 } = require('./rewardAmounts');
+const { validateBotPersona, readStoredBotPersona } = require('./botPersona');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -156,11 +157,51 @@ app.post('/api/reward-amounts', requireAdmin, (req, res) => {
   });
 });
 
+// A body key this route does not read is a key the caller believed it could
+// set, so the request is refused instead of silently half-honoured — the same
+// contract the payment routes state in lnbitsRoutes.js.
+const BOT_PERSONA_BODY_KEYS = new Set(['botPersona']);
+
+const hasOnlyKeys = (body, allowed) =>
+  typeof body === 'object' &&
+  body !== null &&
+  !Array.isArray(body) &&
+  Object.keys(body).every(key => allowed.has(key));
+
+// The persona is a system-prompt fragment for the assistant, so only an admin
+// may set it and the value is validated before it ever reaches the bot. An
+// empty string is a legitimate save: it puts the assistant back on its
+// built-in voice.
+app.post('/api/bot-persona', requireAdmin, (req, res) => {
+  if (!hasOnlyKeys(req.body, BOT_PERSONA_BODY_KEYS)) {
+    res.status(400).send({ message: 'botPersona is the only accepted field' });
+    return;
+  }
+
+  const { botPersona } = req.body;
+  const validation = validateBotPersona(botPersona);
+  if (!validation.valid) {
+    res.status(400).send({ message: validation.message });
+    return;
+  }
+
+  const data = readData();
+  data.botPersona = validation.botPersona;
+  if (!writeData(data)) {
+    res.status(500).send({ message: 'Bot persona could not be persisted' });
+    return;
+  }
+  res.send({
+    message: 'Bot persona updated successfully',
+    botPersona: data.botPersona,
+  });
+});
+
 // Config reads sit before the shared-token middleware because the browser
 // cannot hold that secret. reward-name is deliberately open: the portal reads
-// it before sign-in and blocks rendering on it. The other two disclose
-// connected repositories and payout policy, so they take either a verified
-// MSAL token or the bot's shared token.
+// it before sign-in and blocks rendering on it. The others disclose connected
+// repositories, payout policy and the assistant persona, so they take either a
+// verified MSAL token or the bot's shared token.
 // Endpoint to get the reward name
 app.get('/api/reward-name', (req, res) => {
   const data = readData();
@@ -171,6 +212,14 @@ app.get('/api/reward-name', (req, res) => {
 app.get('/api/automations', requireSignedInOrBot, (req, res) => {
   const data = readData();
   res.send({ repos: data.automations?.repos || [] });
+});
+
+// Endpoint to get the admin-authored assistant persona. The bot reads it to
+// build its instructions and the portal shows it to every signed-in user, so
+// it takes either credential like the other config reads.
+app.get('/api/bot-persona', requireSignedInOrBot, (req, res) => {
+  const data = readData();
+  res.send({ botPersona: readStoredBotPersona(data.botPersona) });
 });
 
 // Endpoint to get automation reward amounts

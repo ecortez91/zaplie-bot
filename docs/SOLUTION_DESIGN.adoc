@@ -247,12 +247,24 @@ to `/login` on failure) — plus `/login`, `/auth-start`, `/auth-end`. Providers
 | Private and Allowance wallet tabs: balance card, transaction history, allowance status
 
 | Settings
-| Administrator setting to rename "Sats" (the reward label)
+| Administrator settings to rename "Sats" (the reward label) and to set the
+  assistant's persona; both are visible read-only to non-admins
 |===
 
 The reward label is persisted by the Express backend
 (`GET/POST /api/reward-name` → `data.json` under `ZAPLIE_DATA_DIR`) and consumed by both
 the tabs (`RewardNameContext`) and the bot (`src/services/fetchRewardsName.ts`).
+
+The assistant persona follows the same route: `GET /api/bot-persona` is readable
+by any signed-in user or the bot's shared token, `POST /api/bot-persona`
+requires the `Zaplie.Admin` app role, and the value lands in the same
+`data.json`. It is a fragment of the assistant's system prompt, so
+`tabs/backend/botPersona.js` caps it at 2000 code points of plain text (no
+control characters, no U+2028/U+2029 line separators, no line that forges the
+`--- BEGIN/END PERSONA ---` fence), the route refuses a body carrying any key
+other than `botPersona`, and the bot keeps its safety rules outside the
+editable part — they are stated before the fenced persona and restated after
+it, so a forged fence cannot remove them.
 
 === Azure Functions
 
@@ -273,7 +285,10 @@ per-request via HTTP Basic auth plus `siteURL`/`adminkey` query parameters.
 
 | Transactions / Zaps
 | LNbits payments ledger
-| Queried per wallet for feed, history, and leaderboard
+| Queried per wallet for feed, history, and leaderboard. Each zap carries an
+  `extra` object `{ tag: 'zap', from, to }` where `from`/`to` are
+  `{ id, name, user, displayName }` projections of the wallets, never the
+  wallet objects themselves
 
 | Reward label ("Sats")
 | `data.json` under `ZAPLIE_DATA_DIR`
@@ -299,6 +314,30 @@ per-request via HTTP Basic auth plus `siteURL`/`adminkey` query parameters.
 |===
 
 == Design Decisions
+
+=== Payment metadata is a projection, not the wallet
+
+*Context:* LNbits stores the payment `extra` object as JSON on the payment
+row. Anyone holding the receiving wallet's invoice key can read it, and the
+portal feed loads it into every browser. Until this decision the bot wrote
+the full sender Allowance and receiver Private `Wallet` objects there,
+including `adminkey`, `inkey` and `balance_msat`.
+
+*Decision:* Writers build `extra.from` and `extra.to` through
+`toPaymentExtraWallet` (`src/services/paymentExtra.ts`), which picks
+`id`, `name`, `user` and `displayName` by name (callers pass the user's
+display name; it is required) and throws when the wallet is missing. No
+writer depends on the `Wallet` type for metadata.
+
+*Consequences:* New payments carry no key material. Readers (portal feed,
+automation summary, transaction log) already use only those fields.
+Payments written before this decision cannot be rewritten through the
+LNbits API; rotating the affected wallet keys is an operator decision.
+The one exception is the automation reward: the bot holds only the treasury
+wallet's admin key (`REWARDS_TREASURY_ADMINKEY`), not its wallet object, so
+its `extra.from` carries `displayName` (`Automation`) alone; a lookup to fill
+the other fields would add an LNbits round trip to the payment path for fields
+no reader uses.
 
 === LNbits as the wallet backend
 

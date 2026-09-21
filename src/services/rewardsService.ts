@@ -7,6 +7,7 @@ import { getRewardAmounts } from './fetchRewardAmounts';
 import { getAutomations } from './fetchAutomations';
 import { resolveRewardRecipientByGithubId } from './identityService';
 import { createPendingReward } from './pendingRewardsService';
+import { toPaymentExtraWallet } from './paymentExtra';
 import { positiveIntFromEnv } from './envNumbers';
 
 const TREASURY_DISPLAY_NAME = 'Automation';
@@ -228,20 +229,23 @@ export async function payReward(
     throw new Error(`LNbits user ${userId} has no Private wallet`);
   }
 
-  // shape the feed/transaction log read; unlike SendZap, no wallet keys persisted
+  // Shape the feed and transaction log read. The recipient wallet goes
+  // through the same projection SendZap uses, so no keys are persisted.
   const extra = {
     tag: 'zap',
     automation: true,
     eventType: reward.eventType,
     repo: reward.repo,
     source: reward.source,
+    // The bot holds only the treasury wallet's admin key, not its wallet
+    // object, and a lookup just to fill id/name/user would put an LNbits round
+    // trip on the payment path for fields no reader uses (see SOLUTION_DESIGN).
     from: { displayName: TREASURY_DISPLAY_NAME },
-    to: {
-      id: privateWallet.id,
-      name: privateWallet.name,
-      user: privateWallet.user,
-      displayName: reward.recipient,
-    },
+    to: toPaymentExtraWallet(
+      privateWallet,
+      'recipient Private',
+      reward.recipient,
+    ),
   };
 
   const paymentRequest = await createInvoice(
