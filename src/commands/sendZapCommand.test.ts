@@ -4,11 +4,20 @@
 // configuration names, so they belong in the logs and never in the chat.
 // Also covers the receipt card builder: shape, key/value fields and the
 // regression where a ColumnSet was nested inside another ColumnSet's columns
-// array (invalid Adaptive Card JSON).
+// array (invalid Adaptive Card JSON). The last block pins the payment
+// metadata SendZap hands to LNbits: a projection of each wallet, never the
+// wallet object with its keys.
 
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import type { TurnContext } from 'botbuilder';
-import { SendZap, SendZapCommand, buildZapReceiptCard } from './sendZapCommand';
+import {
+  SendZap,
+  SendZapCommand,
+  buildZapReceiptCard,
+  zapAmountInput,
+  zapAmountRegex,
+} from './sendZapCommand';
+import { MAX_ZAP_SATS } from './zapBudget';
 import {
   createInvoice,
   getUsers,
@@ -288,5 +297,364 @@ describe('buildZapReceiptCard', () => {
     expect(text).toContain((2500).toLocaleString());
     expect(text).toContain((5000).toLocaleString());
     expect(text).toContain((12000).toLocaleString());
+  });
+});
+
+describe('zapAmountRegex', () => {
+  // Exhaustive: every value from 0 to a little past the cap, plus the forms a
+  // regex is most likely to get wrong.
+  const accepts = (cap: number, value: string): boolean =>
+    new RegExp(zapAmountRegex(cap)).test(value);
+
+  test.each([1, 9, 10, 11, 99, 100, 250, 999, 1000, 4687, 10000, 14687])(
+    'matches exactly the whole numbers 1..%i',
+    cap => {
+      for (let value = 0; value <= cap + 12; value++) {
+        expect([value, accepts(cap, String(value))]).toEqual([
+          value,
+          value >= 1 && value <= cap,
+        ]);
+      }
+      // One digit more than the cap, a leading zero, and ten times the cap.
+      for (const value of [`1${cap}`, `0${cap}`, `${cap}0`]) {
+        expect([value, accepts(cap, value)]).toEqual([value, false]);
+      }
+    },
+  );
+
+  test('rejects leading zeros, decimals, signs, spaces and empty input', () => {
+    for (const value of [
+      '',
+      '0',
+      '007',
+      '1.5',
+      '-5',
+      '+5',
+      ' 5',
+      '5 ',
+      '1e3',
+    ]) {
+      expect([value, accepts(250, value)]).toEqual([value, false]);
+    }
+  });
+
+  test('a cap below 1 accepts nothing', () => {
+    for (const value of ['', '0', '1', '100']) {
+      expect(accepts(0, value)).toBe(value === '');
+    }
+  });
+
+  test('the ceiling reproduces the original 1..10,000 rule', () => {
+    expect(accepts(10000, '10000')).toBe(true);
+    expect(accepts(10000, '10001')).toBe(false);
+    expect(accepts(10000, '9999')).toBe(true);
+  });
+});
+
+describe('the zap card caps the amount at the live balance', () => {
+  type AmountInput = {
+    type: string;
+    id: string;
+    regex?: string;
+    isRequired?: boolean;
+    errorMessage?: string;
+  };
+
+  // Sends the card through the real command and returns its amount input and
+  // the card text, so the cap is tested where Teams reads it.
+  const cardFor = async (balance: number) => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    jest.mocked(getUsers).mockResolvedValue([]);
+    jest.mocked(getWalletBalance).mockResolvedValue(balance as never);
+    const { context, sendActivity } = makeContext();
+    (context.turnState as Map<unknown, unknown>).set('user', {
+      id: 'user-1',
+      displayName: 'Alice',
+      allowanceWallet: { id: 'w-alice', inkey: 'inkey-alice', adminkey: 'adm' },
+    });
+
+    await new SendZapCommand().execute(context);
+
+    const [activity] = sendActivity.mock.calls[0] as unknown as [
+      { attachments: { content: CardElement }[] },
+    ];
+    const card = activity.attachments[0].content;
+    const amount = (card.body ?? []).find(
+      element => (element as AmountInput).id === 'zapAmount',
+    ) as AmountInput | undefined;
+    if (!amount) {
+      throw new Error('zapAmount input missing from the card');
+    }
+    return { amount, text: allText(card) };
+  };
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('a balance below the ceiling caps the input at the balance', async () => {
+    const { amount, text } = await cardFor(250);
+
+    expect(amount).toMatchObject({
+      type: 'Input.Text',
+      id: 'zapAmount',
+      isRequired: true,
+      regex: zapAmountRegex(250),
+    });
+    expect(new RegExp(amount.regex ?? '').test('250')).toBe(true);
+    expect(new RegExp(amount.regex ?? '').test('251')).toBe(false);
+    expect(amount.errorMessage).toMatch(/don't have that many .* up to 250\./);
+    expect(text).toContain('250');
+  });
+
+  test('a balance above the ceiling caps the input at the ceiling', async () => {
+    const { amount } = await cardFor(25_000);
+
+    expect(amount.regex).toBe(zapAmountRegex(MAX_ZAP_SATS));
+    expect(amount.errorMessage).toContain(MAX_ZAP_SATS.toLocaleString());
+  });
+
+  test('an empty balance leaves nothing sendable and says so', async () => {
+    const { amount } = await cardFor(0);
+
+    expect(new RegExp(amount.regex ?? '').test('1')).toBe(false);
+    expect(amount.errorMessage).toMatch(/^You have no .* to send right now\.$/);
+  });
+
+  test('an unreadable balance builds no card at all: the generic error, as for a rejected read', async () => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.mocked(getUsers).mockResolvedValue([]);
+    jest.mocked(getWalletBalance).mockResolvedValue(Number.NaN as never);
+    const { context, sendActivity } = makeContext();
+    (context.turnState as Map<unknown, unknown>).set('user', {
+      id: 'user-1',
+      displayName: 'Alice',
+      allowanceWallet: { id: 'w-alice', inkey: 'inkey-alice', adminkey: 'adm' },
+    });
+
+    await new SendZapCommand().execute(context);
+
+    expect(sendActivity).toHaveBeenCalledTimes(1);
+    expect(sendActivity).toHaveBeenCalledWith(GENERIC_ERROR_MESSAGE);
+  });
+
+  test('the input helper alone treats an unreadable balance as the ceiling (defence in depth)', () => {
+    expect(zapAmountInput(Number.NaN, 'Sats').regex).toBe(
+      zapAmountRegex(MAX_ZAP_SATS),
+    );
+  });
+
+  test('a fractional balance rounds down', () => {
+    expect(zapAmountInput(99.9, 'Sats').regex).toBe(zapAmountRegex(99));
+  });
+});
+
+// Every key found anywhere inside a value, depth first.
+const collectKeys = (
+  value: unknown,
+  found: Set<string> = new Set(),
+): Set<string> => {
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
+      found.add(key);
+      collectKeys(child, found);
+    }
+  }
+  return found;
+};
+
+const makeWallet = (overrides: Partial<Wallet>): Wallet => ({
+  id: 'wallet-id',
+  admin: 'admin-id',
+  name: 'Allowance',
+  user: 'user-id',
+  adminkey: 'adminkey-value',
+  inkey: 'inkey-value',
+  balance_msat: 100000,
+  deleted: false,
+  ...overrides,
+});
+
+const sender: User = {
+  id: 'sender-id',
+  displayName: 'Ada Sender',
+  profileImg: '',
+  aadObjectId: 'aad-sender',
+  email: 'ada@example.test',
+  privateWallet: makeWallet({
+    id: 'sender-private',
+    name: 'Private',
+    user: 'sender-user',
+    adminkey: 'sender-private-adminkey',
+    inkey: 'sender-private-inkey',
+  }),
+  allowanceWallet: makeWallet({
+    id: 'sender-allowance',
+    name: 'Allowance',
+    user: 'sender-user',
+    adminkey: 'sender-allowance-adminkey',
+    inkey: 'sender-allowance-inkey',
+  }),
+};
+
+const receiver: User = {
+  id: 'receiver-id',
+  displayName: 'Bob Receiver',
+  profileImg: '',
+  aadObjectId: 'aad-receiver',
+  email: 'bob@example.test',
+  privateWallet: makeWallet({
+    id: 'receiver-private',
+    name: 'Private',
+    user: 'receiver-user',
+    adminkey: 'receiver-private-adminkey',
+    inkey: 'receiver-private-inkey',
+  }),
+  allowanceWallet: makeWallet({
+    id: 'receiver-allowance',
+    name: 'Allowance',
+    user: 'receiver-user',
+    adminkey: 'receiver-allowance-adminkey',
+    inkey: 'receiver-allowance-inkey',
+  }),
+};
+
+const SECRET_VALUES = [
+  'sender-allowance-adminkey',
+  'sender-allowance-inkey',
+  'sender-private-adminkey',
+  'sender-private-inkey',
+  'receiver-private-adminkey',
+  'receiver-private-inkey',
+  'receiver-allowance-adminkey',
+  'receiver-allowance-inkey',
+];
+
+describe('SendZap payment metadata', () => {
+  const sendOneZap = async (from: User = sender, to: User = receiver) => {
+    jest.mocked(createInvoice).mockResolvedValue('lnbc1-payment-request');
+    jest.mocked(payInvoice).mockResolvedValue({ payment_hash: 'hash-1' });
+    const { context } = makeContext();
+
+    await SendZap(from, to, 'thanks', 21, context, false, 'Sats');
+
+    return {
+      invoiceExtra: jest.mocked(createInvoice).mock.calls[0][4],
+      paymentExtra: jest.mocked(payInvoice).mock.calls[0][2],
+    };
+  };
+
+  afterEach(() => {
+    jest.mocked(createInvoice).mockReset();
+    jest.mocked(payInvoice).mockReset();
+  });
+
+  test('never sends wallet keys or balances in the payment metadata', async () => {
+    const { invoiceExtra, paymentExtra } = await sendOneZap();
+
+    for (const extra of [invoiceExtra, paymentExtra]) {
+      const keys = collectKeys(extra);
+      expect(keys.has('adminkey')).toBe(false);
+      expect(keys.has('inkey')).toBe(false);
+      expect(keys.has('balance_msat')).toBe(false);
+      const serialised = JSON.stringify(extra);
+      for (const secret of SECRET_VALUES) {
+        expect(serialised).not.toContain(secret);
+      }
+    }
+  });
+
+  test('shapes from and to as id, name, user and displayName', async () => {
+    const { invoiceExtra } = await sendOneZap();
+
+    expect(invoiceExtra).toEqual({
+      tag: 'zap',
+      from: {
+        id: 'sender-allowance',
+        name: 'Allowance',
+        user: 'sender-user',
+        displayName: 'Ada Sender',
+      },
+      to: {
+        id: 'receiver-private',
+        name: 'Private',
+        user: 'receiver-user',
+        displayName: 'Bob Receiver',
+      },
+    });
+  });
+
+  test('keeps the fields the portal feed and automation readers use', async () => {
+    // FeedList.tsx reads extra.from.user and extra.to.user,
+    // automationPayments.js reads extra.to.id and extra.to.displayName,
+    // WalletTransactionLog.tsx reads extra.tag.
+    const { invoiceExtra } = await sendOneZap();
+    const extra = invoiceExtra as {
+      tag: string;
+      from: { user: string };
+      to: { id: string; user: string; displayName: string };
+    };
+
+    expect(extra.tag).toBe('zap');
+    expect(extra.from.user).toBe('sender-user');
+    expect(extra.to.user).toBe('receiver-user');
+    expect(extra.to.id).toBe('receiver-private');
+    expect(extra.to.displayName).toBe('Bob Receiver');
+  });
+
+  test('sends the same metadata on the invoice and on the payment', async () => {
+    const { invoiceExtra, paymentExtra } = await sendOneZap();
+
+    expect(paymentExtra).toEqual(invoiceExtra);
+  });
+
+  test('pays from the sender Allowance adminkey into an invoice on the receiver Private inkey', async () => {
+    await sendOneZap();
+
+    expect(createInvoice).toHaveBeenCalledWith(
+      'receiver-private-inkey',
+      'receiver-private',
+      21,
+      'thanks',
+      expect.anything(),
+    );
+    expect(payInvoice).toHaveBeenCalledWith(
+      'sender-allowance-adminkey',
+      'lnbc1-payment-request',
+      expect.anything(),
+    );
+  });
+
+  test('does not create an invoice when the receiver has no Private wallet', async () => {
+    const receiverWithoutPrivate: User = { ...receiver, privateWallet: null };
+
+    await expect(sendOneZap(sender, receiverWithoutPrivate)).rejects.toThrow(
+      /receiver Private wallet is missing/,
+    );
+    expect(createInvoice).not.toHaveBeenCalled();
+  });
+
+  test('does not pay when the invoice cannot be created', async () => {
+    jest.mocked(createInvoice).mockRejectedValue(new Error('LNbits down'));
+    jest.mocked(payInvoice).mockResolvedValue({ payment_hash: 'hash-1' });
+    const { context } = makeContext();
+
+    await expect(
+      SendZap(sender, receiver, 'thanks', 21, context, false, 'Sats'),
+    ).rejects.toThrow('LNbits down');
+    expect(payInvoice).not.toHaveBeenCalled();
+  });
+
+  test('does not create an invoice when the sender has no Allowance wallet', async () => {
+    const senderWithoutAllowance: User = { ...sender, allowanceWallet: null };
+
+    await expect(sendOneZap(senderWithoutAllowance, receiver)).rejects.toThrow(
+      /sender Allowance wallet is missing/,
+    );
+    expect(createInvoice).not.toHaveBeenCalled();
+    expect(payInvoice).not.toHaveBeenCalled();
   });
 });

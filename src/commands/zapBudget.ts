@@ -1,8 +1,9 @@
 import { UserFacingError } from '../messages';
 
-// Card inputs arrive as strings and the amount regex is client-only and
-// forgeable, so the amount and the cumulative budget must be enforced
-// server-side before any payment. liveBalance must be a fresh read: the
+// Card inputs arrive as strings and the amount regex (built from the live
+// balance when the card is created) is client-only and forgeable, so the
+// amount and the cumulative budget must be enforced server-side before any
+// payment. liveBalance must be a fresh read: the
 // turn-state wallet snapshot never decrements across a multi-recipient loop.
 
 export const MAX_ZAP_SATS = 10000;
