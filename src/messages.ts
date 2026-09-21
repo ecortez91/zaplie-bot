@@ -28,6 +28,21 @@ export const welcomeMessage = (commandNames: string[]): string =>
   `${commandBullets(commandNames)}\n` +
   'Type one of those to get started!';
 
+// The recipient sees the sender's words as one line of at most this many
+// characters: the card's own length limit is client-side and forgeable, and
+// a notice is not the place for an essay.
+export const ZAP_MEMO_PREVIEW_MAX = 200;
+
+// Whitespace runs (newlines included) become one space; anything past the
+// limit is cut at a code point boundary and marked with an ellipsis.
+export const zapMemoPreview = (message: string): string => {
+  const oneLine = message.replace(/\s+/g, ' ').trim();
+  const chars = Array.from(oneLine);
+  return chars.length > ZAP_MEMO_PREVIEW_MAX
+    ? `${chars.slice(0, ZAP_MEMO_PREVIEW_MAX - 1).join('')}…`
+    : oneLine;
+};
+
 // Sent to the recipient's personal chat once a zap to them has settled. The
 // reward name comes from LNBITS_POINTS_LABEL, like every other amount line.
 export const zapReceivedMessage = (zap: {
@@ -36,4 +51,4 @@ export const zapReceivedMessage = (zap: {
   rewardName: string;
   message: string;
 }): string =>
-  `⚡ ${zap.senderName || 'A colleague'} zapped you ${zap.amount.toLocaleString()} ${zap.rewardName}: "${zap.message}"`;
+  `⚡ ${zap.senderName || 'A colleague'} zapped you ${zap.amount.toLocaleString()} ${zap.rewardName}: "${zapMemoPreview(zap.message)}"`;

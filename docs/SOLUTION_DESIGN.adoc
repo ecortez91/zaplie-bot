@@ -261,7 +261,22 @@ unaffected in every case, and a resubmit cannot repeat the notice because the
 ledger blocks the payment first. The proactive turn runs the middleware
 pipeline with a synthetic `createConversation` event that has no sender, so
 `FetchUserMiddleware` passes it through instead of throwing on the missing
-sender.
+sender, and the adapter's `onTurnError` stays silent on a turn without a
+sender, so a failure on that pipeline never apologises into the recipient's
+chat.
+
+The fan-out is bounded. Each recipient's open-and-send must finish within
+`NOTIFY_TIMEOUT_MS` (five seconds) or it is reported as `failed` and the turn
+moves on (the connector call itself cannot be cancelled and is left to finish
+or fail); recipients are told `NOTIFY_CONCURRENCY` (three) at a time; a 429 is
+retried once after Teams' `Retry-After`, capped at `RETRY_AFTER_CAP_MS` (five
+seconds), and a second 429 is a failure. `unreachable` is decided by status
+and error code together (400 `MemberNotFoundInConversation` or `BadSyntax`,
+403 `BotNotInConversationRoster`, 404 `ConversationNotFound`); the same
+status with another code is an error, not a friendly warning. The memo in the
+notice is the sender's text collapsed to one line and cut at
+`ZAP_MEMO_PREVIEW_MAX` (200) characters, because the card's own length limit
+is client-side.
 
 === Web Tabs
 

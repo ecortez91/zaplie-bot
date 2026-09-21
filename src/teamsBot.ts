@@ -24,7 +24,7 @@ import {
   validateSelfZap,
   type ZapRecipient,
 } from './commands/zapRecipient';
-import { notifyZapRecipient } from './services/recipientNotifier';
+import { notifyZapRecipients } from './services/recipientNotifier';
 import { validateZapSubmit } from './commands/zapBudget';
 import { ShowMyBalanceCommand } from './commands/showMyBalanceCommand';
 import { ShowLeaderboardCommand } from './commands/showLeaderboardCommand';
@@ -343,17 +343,19 @@ export class TeamsBot extends TeamsActivityHandler {
           );
 
           // Last, so a slow or refused Teams call never delays the receipt
-          // above, and after markPaid by construction. Best effort: each
-          // call returns an outcome and never throws.
-          for (const receiver of paidReceivers) {
-            await notifyZapRecipient(context, {
+          // above, and after markPaid by construction. Best effort: a few
+          // recipients at a time, each bounded by a timeout, each with its
+          // own outcome; nothing here throws.
+          await notifyZapRecipients(
+            context,
+            paidReceivers.map(receiver => ({
               recipient: receiver,
               senderName: currentUser.displayName,
               amount,
               rewardName: globalRewardName,
               message: zapMessage,
-            });
-          }
+            })),
+          );
         }
 
         // Trigger command by IM text. Matching is tolerant: whitespace is

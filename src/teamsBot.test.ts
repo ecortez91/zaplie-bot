@@ -631,3 +631,144 @@ describe('TeamsBot tells the recipient once a zap is paid', () => {
     );
   });
 });
+
+describe('TeamsBot notifies several recipients and survives a notifier failure', () => {
+  const bob: User = {
+    id: 'recipient-1',
+    displayName: 'Bob',
+    profileImg: '',
+    aadObjectId: 'aad-bob',
+    email: 'bob@example.test',
+    privateWallet: {
+      id: 'w-bob-priv',
+      admin: '',
+      name: 'Private',
+      user: 'recipient-1',
+      adminkey: 'adm-bob-priv',
+      inkey: 'ink-bob-priv',
+      balance_msat: 0,
+      deleted: false,
+    },
+    allowanceWallet: null,
+  };
+  const carol: User = {
+    ...bob,
+    id: 'recipient-2',
+    displayName: 'Carol',
+    aadObjectId: 'aad-carol',
+    email: 'carol@example.test',
+    privateWallet: {
+      ...bob.privateWallet!,
+      id: 'w-carol-priv',
+      user: 'recipient-2',
+    },
+  };
+
+  const submit = (
+    zapReceiverId: string,
+    createConversationAsync: jest.Mock,
+  ) => {
+    const mock = makeContext({
+      replyToId: `card-${zapReceiverId}`,
+      serviceUrl: 'https://smba.trafficmanager.net/amer/tenant-1/',
+      value: {
+        action: 'submitZaps',
+        zapReceiverId,
+        zapMessage: 'thanks!',
+        zapAmount: '10',
+      },
+    });
+    (mock.context.turnState as Map<unknown, unknown>).set('user', {
+      id: 'user-1',
+      displayName: 'Alice',
+      aadObjectId: 'aad-user-1',
+      privateWallet: null,
+      allowanceWallet: {
+        id: 'w-alice-allow',
+        inkey: 'ink-alice-allow',
+        adminkey: 'adm-alice-allow',
+      },
+    });
+    Object.assign(mock.context, { adapter: { createConversationAsync } });
+    return mock;
+  };
+
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    jest
+      .mocked(getUser)
+      .mockImplementation(async (_adminKey: string, id: string) =>
+        id === 'recipient-2' ? carol : bob,
+      );
+    jest.mocked(getWalletBalance).mockResolvedValue(1000);
+    jest.mocked(createInvoice).mockResolvedValue('lnbc1-payment-request');
+    jest.mocked(payInvoice).mockResolvedValue({ payment_hash: 'hash-1' });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('a two-recipient zap tells both, after the receipt', async () => {
+    const members: string[] = [];
+    const createConversationAsync = jest.fn(
+      async (
+        _b: string,
+        _c: string,
+        _s: string,
+        _a: string,
+        parameters: unknown,
+        logic: (context: TurnContext) => Promise<void>,
+      ) => {
+        members.push(
+          (parameters as { members: { id: string }[] }).members[0].id,
+        );
+        await logic({
+          sendActivity: jest.fn(async () => undefined),
+        } as unknown as TurnContext);
+      },
+    );
+    const mock = submit('recipient-1,recipient-2', createConversationAsync);
+
+    await new TeamsBot().run(mock.context);
+
+    expect(payInvoice).toHaveBeenCalledTimes(2);
+    expect(members.sort()).toEqual(['aad-bob', 'aad-carol']);
+    const receiptOrder = (mock.context.updateActivity as jest.Mock).mock
+      .invocationCallOrder[0];
+    for (const order of createConversationAsync.mock.invocationCallOrder) {
+      expect(order).toBeGreaterThan(receiptOrder);
+    }
+    expect(mock.sendActivity).toHaveBeenCalledWith(
+      expect.stringContaining('Awesome! You sent 10'),
+    );
+  });
+
+  test('a notifier failure leaves the sender with the receipt and the success line', async () => {
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const createConversationAsync = jest.fn(async () => {
+      throw Object.assign(new Error('Internal server error'), {
+        statusCode: 500,
+        code: 'ServiceError',
+      });
+    });
+    const mock = submit('recipient-1', createConversationAsync);
+
+    await new TeamsBot().run(mock.context);
+
+    expect(payInvoice).toHaveBeenCalledTimes(1);
+    expect(mock.context.updateActivity).toHaveBeenCalledTimes(1);
+    expect(mock.sendActivity).toHaveBeenCalledWith(
+      expect.stringContaining('Awesome! You sent 10'),
+    );
+    expect(mock.sendActivity).not.toHaveBeenCalledWith(GENERIC_ERROR_MESSAGE);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /aad-bob could not be notified \(open, 500 ServiceError\)/,
+      ),
+      expect.any(Error),
+    );
+  });
+});
