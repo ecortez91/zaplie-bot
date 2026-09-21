@@ -18,7 +18,7 @@ const automateZap: AzureFunction = async function (context: Context, req: HttpRe
         const { senderWalletId, receiverWalletId, zapAmount, zapMessage, tag } = req.body as ZapRequestBody;
 
         // Log the request body
-        context.log('Request Body:', req.body);
+        context.log('Request received', { senderWalletId, receiverWalletId, zapAmount, tag });
 
         // Create an invoice for the receiver
         
@@ -73,7 +73,7 @@ const automateZap: AzureFunction = async function (context: Context, req: HttpRe
 };
 
 function filterPrivateWallet(user: any): any {
-    console.log('User Receiver:', user);
+    console.log('User Receiver:', user?.id);
     if (!user || !user.wallets) {
         console.log('No wallets found for user.');
         return null;
@@ -83,14 +83,14 @@ function filterPrivateWallet(user: any): any {
     if (!privateWallet) {
         console.log('No private wallet found for user.');
     } else {
-        console.log('Private Wallet:', privateWallet);
+        console.log('Private Wallet:', privateWallet?.id);
     }
 
     return privateWallet;
 }
 
 function filterAllowanceWallet(user: any): any {
-    console.log('User Sender:', user);
+    console.log('User Sender:', user?.id);
     return user.wallets.find((wallet: any) => wallet.name === 'Allowance');
 }
 

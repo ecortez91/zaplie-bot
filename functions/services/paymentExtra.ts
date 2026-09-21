@@ -24,7 +24,12 @@ export interface ZapPaymentExtra {
   to: PaymentExtraWallet;
 }
 
-export type PaymentExtraRole = 'sender Allowance' | 'receiver Private';
+// Prose for the error message only; the union documents who may call this.
+export type PaymentExtraRole =
+  | 'sender Allowance'
+  | 'receiver Private'
+  | 'recipient Private'
+  | 'host Private';
 
 export function toPaymentExtraWallet(
   wallet: Wallet | null | undefined,

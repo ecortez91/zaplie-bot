@@ -313,13 +313,19 @@ including `adminkey`, `inkey` and `balance_msat`.
 
 *Decision:* Writers build `extra.from` and `extra.to` through
 `toPaymentExtraWallet` (`src/services/paymentExtra.ts`), which picks
-`id`, `name`, `user` and an optional `displayName` by name and throws when
-the wallet is missing. No writer depends on the `Wallet` type for metadata.
+`id`, `name`, `user` and `displayName` by name (callers pass the user's
+display name; it is required) and throws when the wallet is missing. No
+writer depends on the `Wallet` type for metadata.
 
 *Consequences:* New payments carry no key material. Readers (portal feed,
 automation summary, transaction log) already use only those fields.
 Payments written before this decision cannot be rewritten through the
 LNbits API; rotating the affected wallet keys is an operator decision.
+The one exception is the automation reward: the bot holds only the treasury
+wallet's admin key (`REWARDS_TREASURY_ADMINKEY`), not its wallet object, so
+its `extra.from` carries `displayName` (`Automation`) alone; a lookup to fill
+the other fields would add an LNbits round trip to the payment path for fields
+no reader uses.
 
 === LNbits as the wallet backend
 

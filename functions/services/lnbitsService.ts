@@ -90,7 +90,7 @@ const getWallets = async (
   filterById?: string,
 ): Promise<Wallet[] | null> => {
   console.log(
-    `getWallets starting ... (adminKey: ${adminKey}, filterByName: ${filterByName}, filterById: ${filterById}))`,
+    `getWallets starting ... (filterByName: ${filterByName}, filterById: ${filterById}))`,
   );
 
   try {
@@ -160,7 +160,7 @@ const getUserWallets = async (
     setLnbitUrl(req);
   }
   console.log(
-    `getUserWallets starting ... (adminKey: ${adminKey}, userId: ${userId})`,
+    `getUserWallets starting ... (userId: ${userId})`,
   );
 
   try {
@@ -218,7 +218,7 @@ const getUsers = async (
   filterByExtra: { [key: string]: string } | null, // Pass the extra field as an object
 ): Promise<User[] | null> => {
   console.log(
-    `getUsers starting ... (adminKey: ${adminKey}, filterByExtra: ${JSON.stringify(
+    `getUsers starting ... (filterByExtra: ${JSON.stringify(
       filterByExtra,
     )})`,
   );
@@ -243,7 +243,7 @@ const createUser = async (
   extra: { [key: string]: string }, // Ensure extra is an object, not a string
 ): Promise<User | null> => {
   console.log(
-    `createUser starting ... (adminKey: ${adminKey}, userName: ${userName}, email: ${email}, password: ${password}, extra: ${JSON.stringify(
+    `createUser starting ... (userName: ${userName}, email: ${email}, extra: ${JSON.stringify(
       extra,
     )}))`,
   );
@@ -268,7 +268,7 @@ const updateUser = async (
   extra: { [key: string]: string }, // Ensure extra is an object, not a string
 ): Promise<User | null> => {
   console.log(
-    `updateUser starting ... (adminKey: ${adminKey}, userId: ${userId}, extra: ${JSON.stringify(
+    `updateUser starting ... (userId: ${userId}, extra: ${JSON.stringify(
       extra,
     )}))`,
   );
@@ -289,7 +289,7 @@ const createWallet = async (
   walletName: string,
 ): Promise<Wallet | null> => {
   console.log(
-    `createWallet starting ... (adminKey: ${adminKey}, userId: ${userId}, walletName: ${walletName}))`,
+    `createWallet starting ... (userId: ${userId}, walletName: ${walletName}))`,
   );
 
   try {
@@ -331,7 +331,6 @@ const createWallet = async (
       deleted: walletWithBalance?.deleted ?? false,
     };
 
-    console.log('createWallet data:', walletData);
 
     return walletData;
   } catch (error) {
@@ -342,7 +341,7 @@ const createWallet = async (
 
 const getWalletDetails = async (inKey: string, walletId: string) => {
   console.log(
-    `getWalletDetails starting ... (inKey: ${inKey}, walletId: ${walletId}))`,
+    `getWalletDetails starting ... (walletId: ${walletId}))`,
   );
   try {
     const response = await fetch(`${lnbiturl}/api/v1/wallets/${walletId}`, {
@@ -360,7 +359,7 @@ const getWalletDetails = async (inKey: string, walletId: string) => {
     }
 
     const data = await response.json();
-    console.log('Wallet details:', data);
+    console.log('Wallet details fetched');
 
     return data;
   } catch (error) {
@@ -370,7 +369,7 @@ const getWalletDetails = async (inKey: string, walletId: string) => {
 };
 
 const getWalletBalance = async (inKey: string) => {
-  console.log(`getWalletBalance starting ... (inKey: ${inKey})`);
+  console.log(`getWalletBalance starting ...`);
   try {
     const response = await fetch(`${lnbiturl}/api/v1/wallet`, {
       method: 'GET',
@@ -398,7 +397,7 @@ const getWalletBalance = async (inKey: string) => {
 };
 
 const getWalletName = async (inKey: string) => {
-  console.log(`getWalletName starting ... (inKey: ${inKey})`);
+  console.log(`getWalletName starting ...`);
 
   try {
     const response = await fetch(`${lnbiturl}/api/v1/wallet`, {
@@ -423,7 +422,7 @@ const getWalletName = async (inKey: string) => {
 };
 
 const getPayments = async (inKey: string) => {
-  console.log(`getPayments starting ... (inKey: ${inKey})`);
+  console.log(`getPayments starting ...`);
 
   try {
     const response = await fetch(`${lnbiturl}/api/v1/payments?limit=100`, {
@@ -448,7 +447,7 @@ const getPayments = async (inKey: string) => {
 
 const getWalletPayLinks = async (inKey: string, walletId: string) => {
   console.log(
-    `getWalletPayLinks starting ... (inKey: ${inKey}, walletId: ${walletId})`,
+    `getWalletPayLinks starting ... (walletId: ${walletId})`,
   );
 
   try {
@@ -546,7 +545,7 @@ const req= {} as HttpRequest;
 
 // May need fixing!
 const getWalletIdFromKey = async (inKey: string) => {
-  console.log(`getWalletIdFromKey starting ... (inKey: ${inKey})`);
+  console.log(`getWalletIdFromKey starting ...`);
 
   try {
     const response = await fetch(`${lnbiturl}/api/v1/wallets`, {
@@ -611,7 +610,7 @@ const getInvoicePayment = async (inKey: string, invoice: string) => {
 
 const getPaymentsSince = async (lnKey: string, timestamp: number) => {
   console.log(
-    `getPaymentsSince starting ... (lnKey: ${lnKey}, timestamp: ${timestamp})`,
+    `getPaymentsSince starting ... (timestamp: ${timestamp})`,
   );
 
   // Note that the timestamp is in seconds, not milliseconds.
@@ -663,7 +662,7 @@ const createInvoice = async (
   extra: object,
 ) => {
   console.log(
-    `createInvoice starting ... (lnKey: ${lnKey}, recipientWalletId: ${recipientWalletId}, amount: ${amount}, memo: ${memo}, extra: ${extra})`,
+    `createInvoice starting ... (recipientWalletId: ${recipientWalletId}, amount: ${amount}, memo: ${memo}, extra: ${extra})`,
   );
   if (!lnbiturl) {
     console.log('Setting lnbiturl ...');
@@ -708,7 +707,7 @@ const payInvoice = async (
   extra: object,
 ) => {
   console.log(
-    `payInvoice starting ... (adminKey: ${adminKey}, paymentRequest: ${paymentRequest}, extra: ${JSON.stringify(
+    `payInvoice starting ... (paymentRequest: ${paymentRequest}, extra: ${JSON.stringify(
       extra,
     )})`,
   );
@@ -745,7 +744,7 @@ const payInvoice = async (
 // TODO: This method needs checking!
 const getWalletIdByUserId = async (adminKey: string, userId: string) => {
   console.log(
-    `getWalletIdByUserId starting ... (adminKey: ${adminKey}, userId: ${userId})`,
+    `getWalletIdByUserId starting ... (userId: ${userId})`,
   );
 
   try {
@@ -767,7 +766,6 @@ const getWalletIdByUserId = async (adminKey: string, userId: string) => {
     }
 
     const data = await response.json() as any;
-    console.log('getWalletIdByUserId: data:', data);
 
     return data.id;
   } catch (error) {
@@ -781,7 +779,7 @@ const getWalletIdByUserId = async (adminKey: string, userId: string) => {
 // This function is deprecated and should be replaced with application-level user management.
 const getUser = async(req: HttpRequest, userId: string, adminKey: string): Promise<any> =>{
 
-  console.log(`getUser starting ... (adminKey: ${adminKey}, userId: ${userId})`);
+  console.log(`getUser starting ... (userId: ${userId})`);
 
   // LNbits v1+ core API doesn't support user details with custom metadata
   // This functionality must be implemented at the application layer
@@ -814,7 +812,7 @@ async function topUpWallet(walletId: string, amount: number,  req: HttpRequest):
     }
 
     const responseData = await response.json();
-    console.log('Wallet topped up successfully:', responseData);
+    console.log('Wallet topped up successfully');
   } catch (error) {
     console.error('Error topping up wallet:', error);
   }

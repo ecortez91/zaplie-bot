@@ -53,7 +53,9 @@ deployable components in one repository:
   `POST /api/v1/auth`. A Zap = `createInvoice` on the receiver's Private wallet
   then `payInvoice` from the sender's Allowance wallet. The payment `extra`
   carries `{ id, name, user, displayName }` per wallet, built by
-  `src/services/paymentExtra.ts`, never a `Wallet` object (which holds keys).
+  `src/services/paymentExtra.ts`, never a `Wallet` object (which holds keys);
+  the automation reward's `from` is `{ displayName }` only, because the bot
+  holds the treasury wallet's admin key, not its wallet object.
 - **Tabs app**: routes `/feed`, `/users`, `/rewards`, `/wallet`, `/settings`
   (MSAL-guarded via `RequireAuth`), plus `/login`, `/auth-start`, `/auth-end`.
   `tabs/backend/server.js` is a tiny Express API that persists the renamable

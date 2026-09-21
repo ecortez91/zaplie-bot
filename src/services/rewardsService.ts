@@ -237,6 +237,9 @@ export async function payReward(
     eventType: reward.eventType,
     repo: reward.repo,
     source: reward.source,
+    // The bot holds only the treasury wallet's admin key, not its wallet
+    // object, and a lookup just to fill id/name/user would put an LNbits round
+    // trip on the payment path for fields no reader uses (see SOLUTION_DESIGN).
     from: { displayName: TREASURY_DISPLAY_NAME },
     to: toPaymentExtraWallet(
       privateWallet,
