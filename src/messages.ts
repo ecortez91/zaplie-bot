@@ -27,3 +27,13 @@ export const welcomeMessage = (commandNames: string[]): string =>
   'Here are the commands I understand:\n' +
   `${commandBullets(commandNames)}\n` +
   'Type one of those to get started!';
+
+// Sent to the recipient's personal chat once a zap to them has settled. The
+// reward name comes from LNBITS_POINTS_LABEL, like every other amount line.
+export const zapReceivedMessage = (zap: {
+  senderName: string;
+  amount: number;
+  rewardName: string;
+  message: string;
+}): string =>
+  `⚡ ${zap.senderName || 'A colleague'} zapped you ${zap.amount.toLocaleString()} ${zap.rewardName}: "${zap.message}"`;

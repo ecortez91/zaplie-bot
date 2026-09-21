@@ -22,7 +22,9 @@ import {
   normalizeRecipientIds,
   processZapRecipient,
   validateSelfZap,
+  type ZapRecipient,
 } from './commands/zapRecipient';
+import { notifyZapRecipient } from './services/recipientNotifier';
 import { validateZapSubmit } from './commands/zapBudget';
 import { ShowMyBalanceCommand } from './commands/showMyBalanceCommand';
 import { ShowLeaderboardCommand } from './commands/showLeaderboardCommand';
@@ -227,6 +229,9 @@ export class TeamsBot extends TeamsActivityHandler {
 
           const successfulRecipients: string[] = [];
           const alreadyHandled: string[] = [];
+          // Filled once the ledger records each payment; told after the
+          // receipt below.
+          const paidReceivers: ZapRecipient[] = [];
 
           for (const recId of pendingReceiverIds) {
             const outcome = await processZapRecipient({
@@ -246,6 +251,9 @@ export class TeamsBot extends TeamsActivityHandler {
                   false,
                   globalRewardName,
                 ),
+              onPaid: async receiver => {
+                paidReceivers.push(receiver);
+              },
             });
 
             if (outcome.status === 'skipped') {
@@ -333,6 +341,19 @@ export class TeamsBot extends TeamsActivityHandler {
           await context.sendActivity(
             `Awesome! You sent ${amount} ${globalRewardName} to your colleague with a zap!`,
           );
+
+          // Last, so a slow or refused Teams call never delays the receipt
+          // above, and after markPaid by construction. Best effort: each
+          // call returns an outcome and never throws.
+          for (const receiver of paidReceivers) {
+            await notifyZapRecipient(context, {
+              recipient: receiver,
+              senderName: currentUser.displayName,
+              amount,
+              rewardName: globalRewardName,
+              message: zapMessage,
+            });
+          }
         }
 
         // Trigger command by IM text. Matching is tolerant: whitespace is
