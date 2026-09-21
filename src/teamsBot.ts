@@ -285,30 +285,51 @@ export class TeamsBot extends TeamsActivityHandler {
             );
             return;
           }
-          //fetch remainingBalance
-          const remainingBalance = await getWalletBalance(
-            currentUser.allowanceWallet.inkey,
-          );
-          console.log('Remaining Balance:', remainingBalance);
+          // Past this point the money has moved. Everything that follows is
+          // presentation — a balance read and a card update — so a failure in
+          // it must not reach the handler's catch and tell the user the zap
+          // did not work. sendZapCommand isolates its post-settlement work the
+          // same way, for the same reason.
+          const updateReceiptCard = async (): Promise<void> => {
+            //fetch remainingBalance
+            const remainingBalance = await getWalletBalance(
+              currentUser.allowanceWallet.inkey,
+            );
+            console.log('Remaining Balance:', remainingBalance);
 
-          // Update the adaptive card to a read-only receipt for the
-          // recipients this submit processed. Recipients already settled by an
-          // earlier submit of the same card were skipped and are not relisted.
-          const updatedCard = buildZapReceiptCard({
-            recipients: successfulRecipients,
-            failedRecipients,
-            uncertainRecipients,
-            message: zapMessage,
-            amount,
-            remainingBalance,
-            rewardName: globalRewardName,
-          });
+            // Update the adaptive card to a read-only receipt for the
+            // recipients this submit processed. Recipients already settled by
+            // an earlier submit of the same card were skipped and are not
+            // relisted.
+            const updatedCard = buildZapReceiptCard({
+              recipients: successfulRecipients,
+              failedRecipients,
+              uncertainRecipients,
+              message: zapMessage,
+              amount,
+              remainingBalance,
+              rewardName: globalRewardName,
+            });
 
-          const updatedMessage = MessageFactory.attachment(
-            CardFactory.adaptiveCard(updatedCard),
-          );
-          updatedMessage.id = context.activity.replyToId;
-          await context.updateActivity(updatedMessage);
+            const updatedMessage = MessageFactory.attachment(
+              CardFactory.adaptiveCard(updatedCard),
+            );
+            updatedMessage.id = context.activity.replyToId;
+            await context.updateActivity(updatedMessage);
+          };
+
+          try {
+            await updateReceiptCard();
+          } catch (error) {
+            console.error(
+              'The zaps settled but the receipt card could not be updated; ' +
+                'the payments stand and the ledger keeps them recorded as paid.',
+              error,
+            );
+          }
+
+          // Sent whether or not the card could be rewritten: the zaps really
+          // were sent, and saying otherwise would be the wrong answer.
           await context.sendActivity(
             `Awesome! You sent ${amount} ${globalRewardName} to your colleague with a zap!`,
           );

@@ -8,6 +8,10 @@
             "label": "Start Teams App Locally",
             "dependsOn": [
                 "Validate prerequisites",
+                // The tunnel publishes port 3000, so this chain starts the tab
+                // server itself rather than exposing whatever happens to be
+                // listening there.
+                "Start tab",
                 "Start local tunnel",
                 "Provision",
                 "Deploy",
@@ -29,6 +33,7 @@
                 ],
                 "portOccupancy": [
                     3978, // app service port
+                    3000, // tab dev server port, started by "Start tab"
                     9239 // app inspector port for Node.js debugger
                 ]
             }
@@ -49,6 +54,19 @@
                         "writeToEnvironmentFile": {
                             "endpoint": "BOT_ENDPOINT", // output tunnel endpoint as BOT_ENDPOINT
                             "domain": "BOT_DOMAIN" // output tunnel domain as BOT_DOMAIN
+                        }
+                    },
+                    {
+                        // Chrome and Edge block Teams from framing localhost,
+                        // so local tabs use the same public tunnel as the bot.
+                        // The tunnel URL is https; the local dev server that
+                        // "Start tab" launches serves plain http.
+                        "portNumber": 3000,
+                        "protocol": "http",
+                        "access": "public",
+                        "writeToEnvironmentFile": {
+                            "endpoint": "TAB_ENDPOINT",
+                            "domain": "TAB_DOMAIN"
                         }
                     }
                 ],
@@ -75,6 +93,32 @@
             "command": "deploy",
             "args": {
                 "env": "local"
+            }
+        },
+        {
+            // Start the tab dev server (port 3000) before the tunnel, so the
+            // tunnel publishes this project and not an unrelated process.
+            "label": "Start tab",
+            "type": "shell",
+            "command": "npm start",
+            "isBackground": true,
+            "options": {
+                "cwd": "${workspaceFolder}/tabs"
+            },
+            "problemMatcher": {
+                "pattern": [
+                    {
+                        "regexp": "^.*$",
+                        "file": 0,
+                        "location": 1,
+                        "message": 2
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "Starting the development server|Compiling",
+                    "endsPattern": "Compiled successfully|Compiled with warnings|webpack compiled|Failed to compile"
+                }
             }
         },
         {

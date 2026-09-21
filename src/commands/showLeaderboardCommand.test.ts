@@ -57,14 +57,35 @@ const makeContext = () => {
   return { context, sendActivity };
 };
 
-const sentCard = (sendActivity: jest.Mock): any => {
-  const [activity] = sendActivity.mock.calls[0] as [any];
+// The card is a plain Adaptive Card object, so the assertions describe the
+// shape they read rather than casting it away.
+interface CardTextBlock {
+  type: string;
+  text: string;
+  weight?: string;
+  wrap?: boolean;
+}
+
+interface CardRow {
+  type: string;
+  columns: Array<{ type: string; width: string; items: CardTextBlock[] }>;
+}
+
+type LeaderboardCard = ReturnType<typeof buildLeaderboardCard>;
+
+const sentCard = (sendActivity: jest.Mock): LeaderboardCard => {
+  const [activity] = sendActivity.mock.calls[0] as [
+    { attachments: Array<{ content: LeaderboardCard }> },
+  ];
   return activity.attachments[0].content;
 };
 
-const rowText = (row: any): string =>
+const cardRows = (card: LeaderboardCard): CardRow[] =>
+  card.body.slice(1) as CardRow[];
+
+const rowText = (row: CardRow): string =>
   row.columns
-    .map((column: any) => column.items.map((item: any) => item.text).join(' '))
+    .map(column => column.items.map(item => item.text).join(' '))
     .join(' | ');
 
 describe('buildLeaderboardCard', () => {
@@ -82,7 +103,7 @@ describe('buildLeaderboardCard', () => {
       text: LEADERBOARD_TITLE,
     });
 
-    const rows = card.body.slice(1) as any[];
+    const rows = cardRows(card);
     expect(rows).toHaveLength(3);
     expect(rowText(rows[0])).toBe('#1 Alice | 300 Sats');
     expect(rowText(rows[1])).toBe('#2 Bob | 200 Sats');
@@ -104,7 +125,7 @@ describe('buildLeaderboardCard', () => {
 
     const card = buildLeaderboardCard(many, 'Sats');
 
-    const rows = card.body.slice(1) as any[];
+    const rows = cardRows(card);
     expect(rows).toHaveLength(LEADERBOARD_LIMIT);
     expect(rowText(rows[9])).toContain('#10 User 10');
   });
@@ -115,7 +136,7 @@ describe('buildLeaderboardCard', () => {
       'Sats',
     );
 
-    const rows = card.body.slice(1) as any[];
+    const rows = cardRows(card);
     expect(rowText(rows[0])).toBe(
       `#1 Alice | ${(12345).toLocaleString()} Sats`,
     );
@@ -205,7 +226,7 @@ describe('showLeaderboardCommand', () => {
     await new ShowLeaderboardCommand().execute(context);
 
     const card = sentCard(sendActivity);
-    const rows = card.body.slice(1) as any[];
+    const rows = cardRows(card);
     expect(rowText(rows[0])).toBe(`#1 Bob | ${(2000).toLocaleString()} Sats`);
     expect(rowText(rows[1])).toBe(`#2 Alice | ${(1000).toLocaleString()} Sats`);
     expect(mockGetUsers).toHaveBeenCalledTimes(1);
@@ -245,8 +266,8 @@ describe('showLeaderboardCommand', () => {
 
     await new ShowLeaderboardCommand().execute(context);
 
-    const rows = sentCard(sendActivity).body.slice(1) as any[];
-    expect(rows.map((row: any) => rowText(row).split(' | ')[0])).toEqual([
+    const rows = cardRows(sentCard(sendActivity));
+    expect(rows.map(row => rowText(row).split(' | ')[0])).toEqual([
       '#1 Alice',
       '#2 Bob',
       '#3 Carol',
@@ -268,7 +289,7 @@ describe('showLeaderboardCommand', () => {
 
     await new ShowLeaderboardCommand().execute(context);
 
-    const rows = sentCard(sendActivity).body.slice(1) as any[];
+    const rows = cardRows(sentCard(sendActivity));
     expect(rows).toHaveLength(1);
     expect(rowText(rows[0])).toContain('#1 Alice');
     expect(JSON.stringify(sentCard(sendActivity))).not.toContain(

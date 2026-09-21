@@ -261,6 +261,11 @@ describe('getWallets', () => {
       'Content-Type': 'application/json',
       Authorization: 'Bearer tok-1',
     });
+    expect(
+      fetchMock.mock.calls.filter(
+        call => String(call[0]) === `${BASE}/users/api/v1/user/u-1/wallet`,
+      ),
+    ).toHaveLength(1);
   });
 
   test('filters wallets by name', async () => {
@@ -278,6 +283,19 @@ describe('getWallets', () => {
     const wallets = await service.getWallets('admin-key', 'Allowance');
 
     expect(wallets?.map(w => w.id)).toEqual(['w-1']);
+  });
+
+  test('rejects a wallet without a string user before requesting wallet details', async () => {
+    stubWalletRoutes([{ id: 'w-1', name: 'Alice - Allowance' }], {});
+
+    await expect(service.getWallets('admin-key')).rejects.toThrow(
+      'getWallets: LNbits wallet at index 0 is missing string user',
+    );
+    expect(
+      fetchMock.mock.calls.some(call =>
+        String(call[0]).includes('/undefined/'),
+      ),
+    ).toBe(false);
   });
 
   // Bug: getWalletById pre-filters deleted entries and returns null, so the wallet
@@ -299,8 +317,7 @@ describe('getWallets', () => {
     expect(wallets?.map(w => w.id)).toEqual(['w-1']);
   });
 
-  // Bug: the catch returns the Error, so callers receive it as the resolved value.
-  test.failing('rejects on a non-2xx response', async () => {
+  test('rejects on a non-2xx response', async () => {
     stubAuth();
     fetchMock.mockImplementationOnce(async () =>
       jsonResponse({}, { status: 500 }),
@@ -308,6 +325,17 @@ describe('getWallets', () => {
 
     await expect(service.getWallets('admin-key')).rejects.toThrow(
       'Error getting wallets response (status: 500)',
+    );
+  });
+
+  test('rejects when LNbits does not return a wallet array', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse({ not: 'an array' }),
+    );
+
+    await expect(service.getWallets('admin-key')).rejects.toThrow(
+      'getWallets: LNbits did not return a wallet array',
     );
   });
 });
@@ -373,6 +401,210 @@ describe('getUserWallets', () => {
     await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
       'Error getting users wallets response (status: 404)',
     );
+  });
+
+  test('names the offending wallet position and fields', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse([
+        { id: 'w-1', name: 'Alice - Private', user: 'u-1' },
+        { id: 'w-2' },
+      ]),
+    );
+
+    await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
+      'getUserWallets: LNbits wallet at index 1 is missing string name, string user',
+    );
+  });
+
+  test('rejects when LNbits does not return a wallet array', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () => jsonResponse(null));
+
+    await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
+      'getUserWallets: LNbits did not return a wallet array',
+    );
+  });
+
+  // An optional field is optional in its presence, not in its type: a string
+  // "true" passes `deleted !== true` and keeps a deleted wallet visible, and a
+  // string balance becomes NaN as soon as a caller divides it by 1000.
+  test.each([
+    ['deleted', 'true', 'boolean deleted'],
+    ['balance_msat', '5000', 'number balance_msat'],
+    ['inkey', 42, 'string inkey'],
+    // null is not "no balance": it would reach showMyBalanceCommand as a
+    // confident 0 sats for a wallet LNbits never said was empty.
+    ['balance_msat', null, 'number balance_msat'],
+  ])(
+    'rejects a wallet whose optional %s has the wrong type',
+    async (field, value, expected) => {
+      stubAuth();
+      fetchMock.mockImplementationOnce(async () =>
+        jsonResponse([
+          { id: 'w-1', name: 'Alice - Private', user: 'u-1', [field]: value },
+        ]),
+      );
+
+      await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
+        `getUserWallets: LNbits wallet at index 0 is missing ${expected}`,
+      );
+    },
+  );
+
+  test('names every required field when a row is not an object at all', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () => jsonResponse(['w-1']));
+
+    await expect(service.getUserWallets('admin-key', 'u-1')).rejects.toThrow(
+      'getUserWallets: LNbits wallet at index 0 is missing string id, string name, string user',
+    );
+  });
+
+  test('accepts an explicit null for the descriptive optional fields', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse([
+        {
+          id: 'w-1',
+          name: 'Alice - Private',
+          user: 'u-1',
+          admin: null,
+          adminkey: null,
+          inkey: null,
+          deleted: null,
+        },
+      ]),
+    );
+
+    await expect(
+      service.getUserWallets('admin-key', 'u-1'),
+    ).resolves.toHaveLength(1);
+  });
+
+  test('accepts a wallet that simply omits the optional fields', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse([{ id: 'w-1', name: 'Alice - Private', user: 'u-1' }]),
+    );
+
+    await expect(
+      service.getUserWallets('admin-key', 'u-1'),
+    ).resolves.toHaveLength(1);
+  });
+});
+
+describe('getWalletById', () => {
+  test('returns the matching non-deleted wallet from the per-user route', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse([
+        {
+          id: 'w-1',
+          admin: 'admin-1',
+          name: 'Alice - Allowance',
+          user: 'u-1',
+          adminkey: 'ak-1',
+          inkey: 'ik-1',
+          balance_msat: 21000,
+          deleted: false,
+        },
+        { id: 'w-2', name: 'Alice - Old', user: 'u-1', deleted: true },
+      ]),
+    );
+
+    await expect(service.getWalletById('u-1', 'w-1')).resolves.toEqual({
+      id: 'w-1',
+      admin: 'admin-1',
+      name: 'Alice - Allowance',
+      user: 'u-1',
+      adminkey: 'ak-1',
+      inkey: 'ik-1',
+      balance_msat: 21000,
+      deleted: false,
+    });
+  });
+
+  test('returns null when the wallet ID is not found among non-deleted wallets', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse([
+        { id: 'w-2', name: 'Alice - Old', user: 'u-1', deleted: true },
+      ]),
+    );
+
+    await expect(service.getWalletById('u-1', 'w-1')).resolves.toBeNull();
+  });
+
+  test('rejects when a wallet from the per-user route is missing required string fields', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse([{ id: 'w-1', user: 'u-1' }]),
+    );
+
+    await expect(service.getWalletById('u-1', 'w-1')).rejects.toThrow(
+      'getWalletById: LNbits wallet at index 0 is missing string name',
+    );
+  });
+
+  test('rejects when LNbits does not return a wallet array', async () => {
+    stubAuth();
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse({ unexpected: 'shape' }),
+    );
+
+    await expect(service.getWalletById('u-1', 'w-1')).rejects.toThrow(
+      'getWalletById: LNbits did not return a wallet array',
+    );
+  });
+});
+
+describe('getPaymentsSince', () => {
+  // getPaymentsSince resolves the wallet ID via the unexported
+  // getWalletIdFromKey, which shares the same wallet-shape validation — a
+  // malformed /api/v1/wallets response must reject the whole call.
+  test('propagates the wallet validation error from the underlying wallet lookup', async () => {
+    fetchMock.mockImplementationOnce(async () => jsonResponse({}));
+
+    await expect(service.getPaymentsSince('in-key', 0)).rejects.toThrow(
+      'getWalletIdFromKey: LNbits did not return a wallet array',
+    );
+  });
+
+  test('refuses to query payments when no wallet matches the key', async () => {
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse([{ id: 'w-1', name: 'Alice', user: 'u-1', inkey: 'other' }]),
+    );
+
+    await expect(service.getPaymentsSince('in-key', 0)).rejects.toThrow(
+      'getPaymentsSince: no wallet could be resolved for the supplied key',
+    );
+    expect(
+      fetchMock.mock.calls.some(call =>
+        String(call[0]).includes('wallet=null'),
+      ),
+    ).toBe(false);
+  });
+});
+
+// These read helpers used to `return error`, so a failed call resolved with an
+// Error object that callers spent as a balance or pasted into a query string.
+describe('read helpers rethrow instead of resolving with the Error', () => {
+  const cases: Array<[string, () => Promise<unknown>]> = [
+    ['getWalletDetails', () => service.getWalletDetails('in-key', 'w-1')],
+    ['getWalletBalance', () => service.getWalletBalance('in-key')],
+    ['getWalletName', () => service.getWalletName('in-key')],
+    ['getWalletPayLinks', () => service.getWalletPayLinks('in-key', 'w-1')],
+    ['getInvoicePayment', () => service.getInvoicePayment('in-key', 'inv-1')],
+    ['getPaymentsSince', () => service.getPaymentsSince('in-key', 0)],
+  ];
+
+  test.each(cases)('%s rejects on a network error', async (_name, call) => {
+    fetchMock.mockImplementation(async () => {
+      throw new TypeError('fetch failed');
+    });
+
+    await expect(call()).rejects.toThrow('fetch failed');
   });
 });
 

@@ -14,6 +14,7 @@ const {
   resetCachesForTests,
   sanitizePayment,
   sanitizeWallet,
+  sanitizeBalanceMsat,
 } = require('./lnbitsGatewayService');
 const {
   createZapIdempotencyStore,
@@ -173,6 +174,97 @@ test('a failed login is retried rather than cached as in flight', async () => {
     ['user-1', 'user-2'],
   );
   assert.equal(attempts, 2);
+});
+
+test('payment serialization requires a stable identifier and preserves state', () => {
+  const payment = sanitizePayment({
+    checking_id: 'checking-1',
+    payment_hash: 'hash-1',
+    id: 'legacy-1',
+    pending: true,
+    amount: -20,
+    fee: -1,
+    memo: 'thank you',
+    time: 123,
+    wallet_id: 'wallet-1',
+    extra: { adminkey: 'secret', recipientUserId: 'recipient-1' },
+  });
+
+  assert.deepEqual(payment, {
+    checking_id: 'checking-1',
+    payment_hash: 'hash-1',
+    pending: true,
+    amount: -20,
+    fee: -1,
+    memo: 'thank you',
+    time: 123,
+    wallet_id: 'wallet-1',
+    extra: { recipientUserId: 'recipient-1' },
+  });
+});
+
+test('payment serialization falls back to payment hash and legacy id', () => {
+  assert.equal(
+    sanitizePayment({ payment_hash: 'hash-1' }).checking_id,
+    'hash-1',
+  );
+  assert.equal(sanitizePayment({ id: 'legacy-1' }).checking_id, 'legacy-1');
+});
+
+test('an unusable payment hash is omitted rather than exposed', () => {
+  for (const payment_hash of ['', 'x'.repeat(257), 42, null]) {
+    const payment = sanitizePayment({ checking_id: 'checking-1', payment_hash });
+    assert.equal(payment.payment_hash, undefined);
+    assert.equal(payment.checking_id, 'checking-1');
+    assert.ok(!('payment_hash' in JSON.parse(JSON.stringify(payment))));
+  }
+});
+
+test('payment serialization rejects records without a stable identifier', () => {
+  assert.throws(
+    () => sanitizePayment({ amount: 20 }),
+    /missing a stable identifier/,
+  );
+  assert.throws(
+    () => sanitizePayment({ checking_id: 'x'.repeat(257) }),
+    /missing a stable identifier/,
+  );
+});
+
+test('one unidentifiable row is dropped, not the whole payments page', async (t) => {
+  installLnbitsStub();
+  const upstream = global.fetch;
+  global.fetch = async (url, init) => {
+    if (new URL(url).pathname === '/api/v1/payments') {
+      return jsonResponse([
+        { checking_id: 'good-1', amount: -10, time: 1, wallet_id: 'wallet-1' },
+        // No checking_id, payment_hash or id: LNbits cannot identify this row.
+        { amount: -20, time: 2, wallet_id: 'wallet-1', memo: 'private note' },
+        { payment_hash: 'good-2', amount: 30, time: 3, wallet_id: 'wallet-1' },
+      ]);
+    }
+    return upstream(url, init);
+  };
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  t.after(() => {
+    console.warn = originalWarn;
+  });
+
+  const payments = await listWalletPayments('wallet-1');
+
+  assert.deepEqual(
+    payments.map((payment) => payment.checking_id),
+    ['good-1', 'good-2'],
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /missing a stable identifier/);
+  assert.match(warnings[0], /wallet_id=wallet-1/);
+  assert.match(warnings[0], /time=2/);
+  // The dropped record's own content must not reach the log.
+  assert.ok(!warnings[0].includes('private note'));
 });
 
 test('invoice creation returns the exact stable invoice identifier', async (t) => {
@@ -667,4 +759,27 @@ test('a malformed cap fails closed rather than widening the ceiling', () => {
       });
     });
   }
+});
+
+test('an unreadable wallet balance is null, not a fabricated zero', () => {
+  // `Number(wallet.balance_msat || 0)` used to send a confident 0 to the
+  // browser for a missing, null or unparseable balance, which then satisfied
+  // every client-side isFinite guard.
+  for (const balance of [undefined, null, '', '  ', 'not-a-number', NaN]) {
+    const result = sanitizeWallet({
+      id: 'wallet-1',
+      name: 'Private',
+      user: 'user-1',
+      balance_msat: balance,
+      deleted: false,
+    });
+    assert.equal(result.balance_msat, null, `balance ${String(balance)}`);
+  }
+});
+
+test('numeric wallet balances survive sanitisation, strings included', () => {
+  assert.equal(sanitizeBalanceMsat(0), 0);
+  assert.equal(sanitizeBalanceMsat(42000), 42000);
+  assert.equal(sanitizeBalanceMsat(-1000), -1000);
+  assert.equal(sanitizeBalanceMsat('42000'), 42000);
 });

@@ -277,9 +277,14 @@ const createLnbitsRouter = ({
     );
   }));
 
-  router.use((error, _req, res, _next) => {
+  router.use((error, req, res, _next) => {
     const status = Number.isInteger(error.status) ? error.status : 502;
-    console.error('LNbits gateway request failed:', error.message);
+    // Name the route that failed, so a 502 in the log can be tied to a request
+    // without the masked body. The query string is dropped rather than logged.
+    // The path is request-controlled, so it is passed as an argument and never
+    // as the format string, which console would expand %s/%j from.
+    const route = `${req.method} ${String(req.originalUrl || req.url || '').split('?')[0]}`;
+    console.error('LNbits gateway request failed:', route, error.message);
     res.status(status).json({
       error:
         status >= 500 && !error.expose

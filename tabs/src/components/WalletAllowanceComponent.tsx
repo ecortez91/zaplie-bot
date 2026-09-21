@@ -6,6 +6,7 @@ import Calendar from '../images/Calendar.svg';
 import { getWalletTransactionsSince } from '../services/lnbits/payments';
 import { getAllowance, getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
+import { isFunded } from '../services/lnbits/walletSelection';
 import { useMsal } from '@azure/msal-react';
 import { RewardNameContext } from './RewardNameContext';
 import SendZapsPopup from './SendZapsPopup';
@@ -22,7 +23,9 @@ interface AllowanceCardProps {
 
 const WalletAllowanceCard: React.FC<AllowanceCardProps> = () => {
   const [batteryPercentage, setBatteryPercentage] = useState(0);
-  const [balance, setBalance] = useState<number>(0);
+  // null, not 0: a balance the gateway could not read must read as
+  // "Unavailable", not as a spent allowance.
+  const [balance, setBalance] = useState<number | null>(null);
   const [allowance, setAllowance] = useState<Allowance | null>(null);
   const [spentSats, setSpentSats] = useState(0);
   const [showSendZapsPopup, setShowSendZapsPopup] = useState(false);
@@ -53,8 +56,12 @@ const WalletAllowanceCard: React.FC<AllowanceCardProps> = () => {
             w.name.toLowerCase().includes('allowance'),
           );
 
-          if (allowanceWallet) {
-            const balance = (allowanceWallet.balance_msat ?? 0) / 1000;
+          // `?? 0` here used to turn a balance the gateway could not read into
+          // an empty-looking wallet and a 0% battery. A null balance now leaves
+          // both the battery and the figure unset.
+          setBalance(null);
+          if (allowanceWallet && isFunded(allowanceWallet)) {
+            const balance = allowanceWallet.balance_msat / 1000;
             setBalance(balance);
 
             const allowanceData = await getAllowance(currentUser.id);
@@ -111,7 +118,7 @@ const WalletAllowanceCard: React.FC<AllowanceCardProps> = () => {
             <div className="col-md-5">
               <div className="amountDisplayContainer">
                 <div className="amountDisplay">
-                  {balance?.toLocaleString() ?? '0'}
+                  {balance === null ? 'Unavailable' : balance.toLocaleString()}
                 </div>
                 <div>{rewardsName}</div>
                 <div style={{ paddingLeft: '20px', display: 'none' }}>
@@ -181,7 +188,10 @@ const WalletAllowanceCard: React.FC<AllowanceCardProps> = () => {
             </div>
             <div className="col-md-3">
               <div className="spent smallTextFont">
-                <b>{balance?.toLocaleString() ?? '0'}</b> {rewardsName}
+                <b>
+                  {balance === null ? 'Unavailable' : balance.toLocaleString()}
+                </b>{' '}
+                {rewardsName}
               </div>
               <div className="spent smallTextFont">
                 <b>{spentSats?.toLocaleString()}</b> {rewardsName}
