@@ -214,8 +214,10 @@ created. Must be a positive integer; a failed grant is logged, not retried
 
 | `LEADERBOARD_WINDOW_DAYS`, `LEADERBOARD_TOP_N`
 | `show leaderboard` window in days (default `7` like the portal) and rows
-  shown (default `10`); each must be a positive whole number; an invalid
-  value makes the command reply "unavailable" and log the variable name
+  shown (default `10`); each must be a whole number from `1` to
+  `9007199254740991` (`Number.MAX_SAFE_INTEGER`, the parser rejects anything
+  else); an invalid value makes the command reply "unavailable" and log the
+  variable name
 | Bot
 
 | `REACT_APP_AAD_CLIENT_ID`, `REACT_APP_TENANT_ID`
