@@ -159,8 +159,8 @@ table):
 - `getUsers` pages the LNbits Users API (`sortby=id`, 100 per request, until
   `total` is reached or a page comes back empty). LNbits 1.6 returns ten
   accounts per request by default, orders nothing unless `sortby` is set, and
-  reports `total: 0` once `offset` is past the end, so never read the list in
-  one request.
+  reports `total: 0` once `offset` is past the end, so do not assume the
+  default response contains the complete list.
 
 ## Documentation
 

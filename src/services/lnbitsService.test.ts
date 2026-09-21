@@ -632,4 +632,124 @@ describe('getUsers', () => {
       /page 1 has an invalid total/,
     );
   });
+
+  test('without a total, a short page is not the end: paging continues until an empty page', async () => {
+    stubUserPages({
+      [listUrl(0)]: jsonResponse({ data: usersPage(1, 50) }),
+      [listUrl(50)]: jsonResponse({ data: usersPage(51, 30) }),
+      [listUrl(80)]: jsonResponse({ data: [] }),
+    });
+
+    const users = await service.getUsers('admin-key', null);
+
+    expect(users).toHaveLength(80);
+    expect(listCalls()).toEqual([listUrl(0), listUrl(50), listUrl(80)]);
+  });
+
+  test('without a total, the page cap allows the final empty page and refuses one more', async () => {
+    const pages: Record<string, () => Response> = {};
+    for (let n = 0; n < 100; n++) {
+      pages[listUrl(n)] = () => jsonResponse({ data: [rawUser(n + 1)] });
+    }
+
+    stubUserPages({
+      ...pages,
+      [listUrl(100)]: () => jsonResponse({ data: [] }),
+    });
+    await expect(service.getUsers('admin-key', null)).resolves.toHaveLength(
+      100,
+    );
+    // One request beyond the cap: the empty terminator.
+    expect(listCalls()).toHaveLength(101);
+
+    stubUserPages({
+      ...pages,
+      [listUrl(100)]: () => jsonResponse({ data: [rawUser(101)] }),
+    });
+    await expect(service.getUsers('admin-key', null)).rejects.toThrow(
+      /more than 100 accounts, refusing a partial list/,
+    );
+  });
+
+  test('a page request that fails before any response names the page and keeps the cause', async () => {
+    stubUserPages({
+      [listUrl(0)]: jsonResponse({ data: usersPage(1, PAGE), total: 150 }),
+      [listUrl(PAGE)]: () => {
+        throw new Error('ECONNRESET');
+      },
+    });
+
+    const error = await service.getUsers('admin-key', null).catch(e => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/page 2 request failed/);
+    expect((error as Error).cause).toBeInstanceOf(Error);
+  });
+
+  test('a page that is not JSON names the page', async () => {
+    stubUserPages({ [listUrl(0)]: new Response('<html>', { status: 200 }) });
+
+    await expect(service.getUsers('admin-key', null)).rejects.toThrow(
+      /page 1 is not valid JSON/,
+    );
+  });
+
+  test('rejects a record without a string id or with a non-string field', async () => {
+    stubUserPages({ [listUrl(0)]: jsonResponse({ data: [{}], total: 1 }) });
+    await expect(service.getUsers('admin-key', null)).rejects.toThrow(
+      /page 1, record 1 has no string id/,
+    );
+
+    stubUserPages({
+      [listUrl(0)]: jsonResponse({
+        data: [{ id: 'u-1', email: 42 }],
+        total: 1,
+      }),
+    });
+    await expect(service.getUsers('admin-key', null)).rejects.toThrow(
+      /record 1 \(u-1\) has a non-string email/,
+    );
+  });
+
+  test('an empty page before the announced total is a failure, not a shorter list', async () => {
+    stubUserPages({
+      [listUrl(0)]: jsonResponse({ data: usersPage(1, PAGE), total: 150 }),
+      [listUrl(PAGE)]: jsonResponse({ data: [], total: 150 }),
+    });
+
+    await expect(service.getUsers('admin-key', null)).rejects.toThrow(
+      /page 2 came back empty after 100 of the announced 150 accounts/,
+    );
+  });
+
+  test('keeps null optional fields readable instead of rejecting the page', async () => {
+    stubUserPages({
+      [listUrl(0)]: jsonResponse({
+        data: [
+          {
+            id: 'u-1',
+            username: null,
+            email: null,
+            external_id: null,
+            extra: null,
+          },
+        ],
+        total: 1,
+      }),
+    });
+
+    await expect(service.getUsers('admin-key', null)).resolves.toMatchObject([
+      { id: 'u-1', displayName: 'u-1', aadObjectId: '' },
+    ]);
+  });
+
+  test('rejects a present null total instead of paging as if it were absent', async () => {
+    stubUserPages({
+      [listUrl(0)]: jsonResponse({ data: usersPage(1, 5), total: null }),
+    });
+
+    await expect(service.getUsers('admin-key', null)).rejects.toThrow(
+      /page 1 has an invalid total \(null\)/,
+    );
+  });
 });
