@@ -14,6 +14,7 @@ const {
   resetCachesForTests,
   sanitizePayment,
   sanitizeWallet,
+  sanitizeBalanceMsat,
 } = require('./lnbitsGatewayService');
 const {
   createZapIdempotencyStore,
@@ -758,4 +759,27 @@ test('a malformed cap fails closed rather than widening the ceiling', () => {
       });
     });
   }
+});
+
+test('an unreadable wallet balance is null, not a fabricated zero', () => {
+  // `Number(wallet.balance_msat || 0)` used to send a confident 0 to the
+  // browser for a missing, null or unparseable balance, which then satisfied
+  // every client-side isFinite guard.
+  for (const balance of [undefined, null, '', '  ', 'not-a-number', NaN]) {
+    const result = sanitizeWallet({
+      id: 'wallet-1',
+      name: 'Private',
+      user: 'user-1',
+      balance_msat: balance,
+      deleted: false,
+    });
+    assert.equal(result.balance_msat, null, `balance ${String(balance)}`);
+  }
+});
+
+test('numeric wallet balances survive sanitisation, strings included', () => {
+  assert.equal(sanitizeBalanceMsat(0), 0);
+  assert.equal(sanitizeBalanceMsat(42000), 42000);
+  assert.equal(sanitizeBalanceMsat(-1000), -1000);
+  assert.equal(sanitizeBalanceMsat('42000'), 42000);
 });
