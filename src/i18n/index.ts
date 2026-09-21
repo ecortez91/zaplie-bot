@@ -175,12 +175,18 @@ export type MessageParams = Record<string, string | number>;
  * Anything that is not Spanish, including a missing or malformed value,
  * resolves to English; a language mismatch must never fail a turn.
  */
+// A well-formed Spanish tag: `es` alone or with BCP 47 subtags of one to
+// eight letters or digits (`es-MX`, `es-419`, `es_ES`). A malformed value such
+// as `es-@@` or `es--MX` is not a Spanish client, it is bad input, and bad
+// input gets the default.
+const SPANISH_TAG = /^es(?:-[a-z0-9]{1,8})*$/;
+
 export function resolveLocale(activityLocale: unknown): Locale {
   if (typeof activityLocale !== 'string') {
     return DEFAULT_LOCALE;
   }
-  const primary = activityLocale.trim().toLowerCase().split(/[-_]/)[0];
-  return primary === 'es' ? 'es' : DEFAULT_LOCALE;
+  const tag = activityLocale.trim().toLowerCase().replace(/_/g, '-');
+  return SPANISH_TAG.test(tag) ? 'es' : DEFAULT_LOCALE;
 }
 
 /**

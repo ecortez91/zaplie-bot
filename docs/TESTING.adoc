@@ -26,7 +26,7 @@ closing the gaps.
   service logic for wallet, invoice, and payment calls.
 - `src/i18n/i18n.test.ts` pins language resolution and rendering (Spanish
   for `es-*`, English otherwise, placeholder parity, fallback with a warning);
-  `teamsBot.test.ts`, `onTurnError.test.ts` and
+  `src/teamsBot.test.ts`, `src/onTurnError.test.ts` and
   `src/commands/showMyBalanceCommand.i18n.test.ts` assert Spanish replies
   through the handlers.
 - `src/services/paymentExtra.test.ts` and the `SendZap payment metadata` block
