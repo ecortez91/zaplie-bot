@@ -145,10 +145,10 @@ table):
 - **Bot**: `BOT_ID`, `BOT_PASSWORD`, `BOT_DOMAIN`, `AAD_APP_CLIENT_ID`,
   `AAD_APP_TENANT_ID`, `LNBITS_NODE_URL`, `LNBITS_USERNAME`,
   `LNBITS_PASSWORD`, `LNBITS_ADMINKEY`, `LNBITS_INITIAL_ALLOWANCE`
-- **Tabs**: `REACT_APP_LNBITS_NODE_URL`, `REACT_APP_AAD_CLIENT_ID`,
-  `REACT_APP_TENANT_ID`, and related `REACT_APP_LNBITS_*` keys
-  (`tabs/.env.development`)
-- Environments live in `env/` (`.env.local`, `.env.dev`); `dotenv-flow` loads
+- **Tabs**: `REACT_APP_AAD_CLIENT_ID`, `REACT_APP_TENANT_ID`,
+  `REACT_APP_LNBITS_STORE_ID`, `REACT_APP_LNBITS_STORE_OWNER_EMAIL`
+  (`tabs/.env.development`) — public, inlined into the bundle
+- Environments live in `env/` (`.env.local`, `.env.dev`, `.env.prod`); `dotenv-flow` loads
   them. `scripts/writeEnv.js` and `build.js` generate derived files
   (`.localConfigs`, `appPackage/manifest.json` — both gitignored).
 

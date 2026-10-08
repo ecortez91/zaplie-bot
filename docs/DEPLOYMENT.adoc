@@ -13,8 +13,12 @@
 | Developer machine with a dev tunnel; bot registered via `botFramework/create`
 
 | dev
-| `env/.env.dev` (tracked, non-secret values) + `teamsapp.yml`
+| `env/.env.dev` (untracked, from `env/.env.dev.example`) + `teamsapp.yml`
 | Shared development deployment in Azure
+
+| prod (bot)
+| `env/.env.prod` (untracked, from `env/.env.prod.example`) + `teamsapp.yml`
+| Production bot App Service, Azure Bot and Teams app
 
 | test / prod (CI)
 | GitHub environments `Test` and `Prod`
@@ -65,6 +69,30 @@ teamsapp preview --env dev
 The bot runs under iisnode on Windows App Service; `web.config` rewrites
 static content to `public/` and everything else to `lib/src/index.js`.
 
+=== Bot in production
+
+The bot has no CI deploy; it goes out from an operator's machine with the
+`prod` Teams Toolkit environment:
+
+[source,bash]
+----
+cp env/.env.prod.example env/.env.prod   # fill in prod values
+teamsapp auth login azure
+teamsapp provision --env prod
+teamsapp deploy --env prod
+teamsapp publish --env prod   # submits the app to Teams Admin Center
+----
+
+`scripts/writeEnv.js` only borrows missing values from `env/.env.dev` for the
+`local` and `dev` environments, so everything prod needs must be in
+`env/.env.prod`. After provisioning, set the bot settings the Bicep template
+does not (`LNBITS_*`, `TAB_BACKEND_TOKEN`, `WEBSITE_API_URL`, `REWARDS_*`,
+`PORTAL_URL`) on the bot App Service, then complete <<Day One>>. Re-apply
+those settings after every `teamsapp provision`: `infra/azure.bicep` replaces
+the whole app settings collection, so a re-provision removes them. A Teams
+administrator must approve the published app in Teams Admin Center before
+users can install it.
+
 === Local development
 
 [source,bash]
@@ -98,11 +126,21 @@ Test:: Deploys with federated OIDC — `azure/login` using the repository
 secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`
 (`id-token: write`), then ensures a deployment slot exists (`pr-<number>` for
 pull requests, else `testing`) on app `zaplie-dev` before deploying to it.
-Prod:: Still deploys with a publish profile — the `AZURE_WEBAPP_PUBLISH_PROFILE`
-secret against app `zaplie-prod-webapp`, with no `azure/login` step. Migrating
-production onto the same federated OIDC credential is pending; until then the
-publish profile is a long-lived secret and must be re-downloaded whenever it is
-reset in Azure.
+Prod:: Deploys with the same federated OIDC login to app `zaplie-prod-webapp`.
+The deploy job runs in the GitHub environment `Prod`, so a push to `main` waits
+for that environment's required reviewers before anything reaches production.
+Before the first run, on the Entra app behind `AZURE_CLIENT_ID`: add a
+federated credential for the subject
+`repo:knowall-ai/zaplie-bot:environment:Prod` and give it a deployment role
+(Website Contributor) on `zaplie-prod-webapp`. In the repository settings, add
+required reviewers to the `Prod` environment. The old
+`AZURE_WEBAPP_PUBLISH_PROFILE` secret is no longer read: delete it, and turn
+off basic-auth publishing credentials on the App Service.
+
+The prod build passes only the `REACT_APP_*` values the portal sources read
+(`REACT_APP_AAD_CLIENT_ID`, `REACT_APP_TENANT_ID`, `REACT_APP_LNBITS_STORE_ID`,
+`REACT_APP_LNBITS_STORE_OWNER_EMAIL`): every one of them ends up in public
+JavaScript.
 
 Note: neither workflow has a bot job — CI deploys only the portal, and it
 deploys the whole portal: the React build *and* the Express backend under

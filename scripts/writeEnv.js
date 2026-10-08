@@ -19,10 +19,14 @@ const envOutputPath = path.join(__dirname, '..', 'env', `.env.${env}`);
 
 // env/.env.dev is gitignored, so a clean checkout (or CI) may not have it.
 // Read it when it exists and let process variables win, so values supplied by
-// the environment still reach the generated file.
-const fileConfig = fs.existsSync(envFilePath)
-  ? dotenv.parse(fs.readFileSync(envFilePath))
-  : {};
+// the environment still reach the generated file. Only local and dev borrow
+// from it: any other environment (prod) must set its own values in
+// env/.env.<TEAMSFX_ENV>, or dev LNbits credentials and URLs would be appended
+// to it wherever a key is missing.
+const fileConfig =
+  (env === 'local' || env === 'dev') && fs.existsSync(envFilePath)
+    ? dotenv.parse(fs.readFileSync(envFilePath))
+    : {};
 // NOTE: process.env wins, and whatever lands in selectedVars is written to
 // env/.env.<TEAMSFX_ENV>. That file can therefore contain real credentials —
 // .gitignore covers every env/.env.* for exactly this reason.
