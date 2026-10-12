@@ -405,6 +405,16 @@ Complete these once per new environment, right after the first deployment:
 . *Provisioning caveat.* A user's LNbits wallets are provisioned the first
   time the bot sees them: each user must send the bot one message (any
   message) before opening the tab, or the tab cannot resolve their wallet.
+  Only *members* of the bot's own tenant (`userRole` `user`, `tenantId` =
+  `AAD_APP_TENANT_ID`) are provisioned or answered. A guest, an anonymous
+  meeting participant, a user from another tenant, or a sender Teams cannot
+  resolve gets no LNbits account, no reply and no error message
+  (`src/services/memberGate.ts`).
+. *Install the Teams app for named people, not "Everyone".* In the Teams
+  admin centre, "Everyone" includes the tenant's guests and external users.
+  Set both *Installs* and *Availability* to specific users or groups.
+  Changing installs alone does not remove existing installs; availability
+  is what blocks the app for everyone else.
 
 == Manifest and App Package
 
