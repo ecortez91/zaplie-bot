@@ -420,7 +420,10 @@ Complete these once per new environment, right after the first deployment:
   message (`src/services/memberGate.ts`).
 . *Who can use the Teams app (Teams admin centre, Manage apps, Zaplie).*
   *Availability* decides who can use it, *Installs* who gets it without
-  asking. "Everyone" includes the tenant's guests and external users.
+  asking. "Everyone" includes the tenant's guests. External-access users
+  (other organisations) can reach the bot only in supported group chats or
+  meetings where the app is installed, and stay subject to
+  `ZAPLIE_GUEST_ALLOWLIST`.
   Changing installs alone does not remove existing installs; availability
   is what blocks the app.
   ** *Members only (the default):* set both *Availability* and *Installs* to
