@@ -303,6 +303,13 @@ created. Must be a positive integer; a failed grant is logged, not retried
   its `agentId` parameter
 | Bot
 
+| `ZAPLIE_GUEST_ALLOWLIST`
+| Guests (or users from other tenants) the bot may serve, besides members of
+  its own tenant. Comma-separated: `person@example.com`, `@example.com` for a
+  whole domain, or an Entra object id. Empty or unset (the default): members
+  only. Anonymous meeting participants are never served
+| Bot
+
 | `SCM_DO_BUILD_DURING_DEPLOYMENT`
 | Must be `false`: CI ships a prebuilt artifact and Oryx must not rebuild it
 | Portal (App Service setting)
@@ -406,10 +413,15 @@ Complete these once per new environment, right after the first deployment:
   time the bot sees them: each user must send the bot one message (any
   message) before opening the tab, or the tab cannot resolve their wallet.
   Only *members* of the bot's own tenant (`userRole` `user`, `tenantId` =
-  `AAD_APP_TENANT_ID`) are provisioned or answered. A guest, an anonymous
-  meeting participant, a user from another tenant, or a sender Teams cannot
-  resolve gets no LNbits account, no reply and no error message
-  (`src/services/memberGate.ts`).
+  `AAD_APP_TENANT_ID`) and guests listed in `ZAPLIE_GUEST_ALLOWLIST` are
+  provisioned or answered. Anyone else (an unlisted guest, an anonymous
+  meeting participant, an unlisted user from another tenant, or a sender
+  Teams cannot resolve) gets no LNbits account, no reply and no error
+  message (`src/services/memberGate.ts`).
+. *Letting a guest in.* Add them to the Teams app's availability (and installs)
+  in the Teams admin centre, add their email, `@their-domain` or Entra object
+  id to `ZAPLIE_GUEST_ALLOWLIST` on the bot's App Service, and restart it.
+  Their LNbits account is created the first time they message the bot.
 . *Install the Teams app for named people, not "Everyone".* In the Teams
   admin centre, "Everyone" includes the tenant's guests and external users.
   Set both *Installs* and *Availability* to specific users or groups.
