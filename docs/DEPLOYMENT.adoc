@@ -418,9 +418,11 @@ Complete these once per new environment, right after the first deployment:
   Zaplie app → "Users and groups", assign the `Zaplie.Admin` role to at least
   one user. The portal's org-configuration endpoints reject every write until
   a signed-in user carries this role.
-. *Restrict who can sign in to the portal.* The portal (and the Teams tabs,
-  which load it) accepts any account the tenant can sign in, guests
-  included, so restrict it in Entra rather than in code:
+. *Restrict who can sign in to the portal.* Portal authentication accepts any
+  account that can sign in to the tenant, guests included, and the portal is
+  reachable directly in a browser, not only through the Teams tabs. Teams app
+  availability (below) controls who can open the tabs; Entra controls who can
+  sign in at all. Apply both:
   .. Grant tenant-wide admin consent first (App registrations → the Zaplie
      app → API permissions → "Grant admin consent", which covers the
      `User.Read` the portal requests). *Assignment required* turns off user
