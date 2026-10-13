@@ -417,7 +417,11 @@ Complete these once per new environment, right after the first deployment:
      app that defines roles, and the portal UI would otherwise offer only
      `Zaplie.Admin`.
   .. Only then set Properties → *Assignment required* to *Yes*. Anyone not
-     assigned is refused at sign-in.
+     assigned is refused at sign-in, except Global Administrators: Entra
+     does not apply the assignment requirement to them
+     (https://learn.microsoft.com/en-us/troubleshoot/entra/entra-id/app-integration/error-code-aadsts50105-user-not-assigned-role[AADSTS50105]).
+     Keep that role to a few trusted accounts, and test the gate with an
+     ordinary unassigned user, not an administrator.
   .. Keep this list in step with the Teams app's availability (below).
 . *Production's app registration is managed by hand.* Do not run
   `teamsapp provision` (or anything else that applies `aad.manifest.json`)
