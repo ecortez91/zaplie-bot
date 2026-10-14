@@ -80,6 +80,9 @@ import {
 
 const makeTurnContext = (): TurnContext => ({}) as TurnContext;
 
+// Most turns don't exercise the command list; an empty one omits the section.
+const NO_COMMANDS: string[] = [];
+
 // The handler contract is `unknown`, so a test tool narrows its own arguments
 // exactly as a real one does.
 const readTextArgument = (args: unknown): string => {
@@ -117,6 +120,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       undefined,
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     expect(result.replyText).toBe('Hi there!');
@@ -148,6 +152,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     expect(result.foundryConversationId).toBe('conv_existing');
@@ -181,6 +186,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [echoTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     expect(result.replyText).toBe('You said hi');
@@ -214,6 +220,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     expect(mockAgentsUpdate).toHaveBeenCalledTimes(1);
@@ -235,6 +242,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
     expect(mockAgentsUpdate).not.toHaveBeenCalled();
 
@@ -249,6 +257,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
     expect(mockAgentsUpdate).toHaveBeenCalledTimes(1);
     expect(mockAgentsUpdate.mock.calls[0][1].instructions).toContain(
@@ -269,6 +278,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     const { instructions } = mockAgentsUpdate.mock.calls[0][1];
@@ -312,14 +322,6 @@ describe('foundryAgentService.runConversationalTurn', () => {
       instructions.indexOf('--- BEGIN PERSONA ---'),
     );
   });
-});
-
-describe('howZaplieWorks', () => {
-  test('lists exactly the commands it is given', () => {
-    const text = howZaplieWorks(['send zap', 'connect calendar']);
-    expect(text).toContain('- "send zap"\n- "connect calendar"');
-    expect(text).not.toContain('show leaderboard');
-  });
 
   test('names the unregistered tool and the registered ones when the agent drifts', async () => {
     mockResponsesCreate.mockResolvedValueOnce({
@@ -340,6 +342,7 @@ describe('howZaplieWorks', () => {
         'conv_existing',
         [noopTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(
       /unregistered tool "not_a_real_tool"[\s\S]*Registered tools: /,
@@ -365,6 +368,7 @@ describe('howZaplieWorks', () => {
         'conv_existing',
         [noopTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(
       /could not parse the arguments for tool "noop_tool"[\s\S]*\{not json/,
@@ -401,6 +405,7 @@ describe('howZaplieWorks', () => {
         'conv_existing',
         [{ ...noopTool, handler }],
         makeTurnContext(),
+        NO_COMMANDS,
       );
 
       expect(result.replyText).toBe('Let me retry.');
@@ -435,6 +440,7 @@ describe('howZaplieWorks', () => {
         'conv_existing',
         [noopTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(/invalid function_call payload/);
   });
@@ -451,6 +457,7 @@ describe('howZaplieWorks', () => {
         'conv_existing',
         [noopTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(
       'foundryAgentService: Foundry returned an invalid response payload.',
@@ -468,6 +475,7 @@ describe('howZaplieWorks', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     expect(result.replyText).toBe('All done, no tools needed.');
@@ -496,6 +504,7 @@ describe('howZaplieWorks', () => {
         'conv_existing',
         [undefinedTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(/returned undefined/);
   });
@@ -520,7 +529,25 @@ describe('howZaplieWorks', () => {
         'conv_existing',
         [noopTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(/exceeded/i);
+  });
+});
+
+describe('howZaplieWorks', () => {
+  test('lists exactly the commands it is given', () => {
+    const text = howZaplieWorks(['send zap', 'connect calendar']);
+    expect(text).toContain('- "send zap"\n- "connect calendar"');
+    expect(text).not.toContain('show leaderboard');
+  });
+
+  test('says how to zap only when "send zap" is registered', () => {
+    expect(howZaplieWorks(['show leaderboard'])).not.toContain('card opens');
+    expect(howZaplieWorks(['send zap'])).toContain('type "send zap"');
+  });
+
+  test('is empty when there are no commands', () => {
+    expect(howZaplieWorks([])).toBe('');
   });
 });
