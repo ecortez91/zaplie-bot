@@ -498,6 +498,7 @@ export class TeamsBot extends TeamsActivityHandler {
         existingConversationId,
         createReadOnlyTools(),
         context,
+        SSOCommandMap.commandNames(),
       );
       await this.foundryConversationIdAccessor.set(
         context,

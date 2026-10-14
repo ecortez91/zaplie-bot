@@ -72,7 +72,11 @@ jest.mock('@azure/ai-projects', () => ({
   })),
 }));
 
-import { runConversationalTurn, ToolDefinition } from './foundryAgentService';
+import {
+  howZaplieWorks,
+  runConversationalTurn,
+  ToolDefinition,
+} from './foundryAgentService';
 
 const makeTurnContext = (): TurnContext => ({}) as TurnContext;
 
@@ -276,6 +280,45 @@ describe('foundryAgentService.runConversationalTurn', () => {
     // withdrawing reaches the agent — so the rails say so rather than letting
     // it improvise a payout route.
     expect(instructions).toContain('withdrawals are not available yet');
+  });
+
+  test('tells the agent the real commands and that zapping is "send zap"', async () => {
+    mockGetBotPersona.mockResolvedValue('');
+    mockAgentsUpdate.mockClear();
+    mockResponsesCreate.mockResolvedValueOnce({
+      output: [],
+      output_text: 'ok',
+    });
+
+    await runConversationalTurn(
+      'how do I send a zap?',
+      'conv_existing',
+      [noopTool],
+      makeTurnContext(),
+      ['send zap', 'show my balance', 'show leaderboard'],
+    );
+
+    // A new command list changes the composed instructions, so the agent is
+    // updated rather than left with the old ones.
+    expect(mockAgentsUpdate).toHaveBeenCalledTimes(1);
+    const { instructions } = mockAgentsUpdate.mock.calls[0][1];
+    expect(instructions).toContain('- "send zap"');
+    expect(instructions).toContain('- "show my balance"');
+    expect(instructions).toContain('- "show leaderboard"');
+    expect(instructions).toContain('tell them to type "send zap"');
+    expect(instructions).toContain('never invent buttons, menus, tabs, apps');
+    // The persona still comes last, so the fixed rules wrap it.
+    expect(instructions.indexOf('- "send zap"')).toBeLessThan(
+      instructions.indexOf('--- BEGIN PERSONA ---'),
+    );
+  });
+});
+
+describe('howZaplieWorks', () => {
+  test('lists exactly the commands it is given', () => {
+    const text = howZaplieWorks(['send zap', 'connect calendar']);
+    expect(text).toContain('- "send zap"\n- "connect calendar"');
+    expect(text).not.toContain('show leaderboard');
   });
 
   test('names the unregistered tool and the registered ones when the agent drifts', async () => {
