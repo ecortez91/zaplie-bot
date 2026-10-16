@@ -157,6 +157,19 @@ by the Entra `oid` in `external_id` like the bot does, and its empty
 way can receive zaps at once and send them once their Allowance wallet is
 funded.
 
+The route serves exactly the people the bot serves. `tabs/backend/memberGate.js`
+mirrors `src/services/memberGate.ts`: members of the home tenant are
+provisioned; guests and users from other tenants only if listed in
+`ZAPLIE_GUEST_ALLOWLIST` (same format, set it on the portal App Service as
+well as the bot's); anyone else is refused with 403 and nothing is created.
+The portal backend has no Graph access, so membership comes from the verified
+idToken: `tid` is the tenant and the optional claim `acct` is the role
+(0 member, 1 guest). `aad.manifest.json` requests `acct` in idTokens; until
+that is applied to the app registration (`teamsapp provision`, or
+*Token configuration* in the Entra portal) no token carries it and the route
+refuses everyone, by design. People who already have an LNbits user are not
+affected: only creation is gated.
+
 === Persistent application state
 
 The bot keeps its mutable state — currently the durable Zap ledger
@@ -367,8 +380,9 @@ created. Must be a positive integer; a failed grant is logged, not retried
 | Guests (or users from other tenants) the bot may serve, besides members of
   its own tenant. Comma-separated: `person@example.com`, `@example.com` for a
   whole domain, or an Entra object id. Empty or unset (the default): members
-  only. Anonymous meeting participants are never served
-| Bot
+  only. Anonymous meeting participants are never served. The portal backend
+  reads the same setting for `POST /api/lnbits/users/me`
+| Bot, Portal backend
 
 | `FOUNDRY_PROJECT_ENDPOINT`, `FOUNDRY_MODEL`
 | Azure AI Foundry project endpoint and model for the conversational

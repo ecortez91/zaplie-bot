@@ -298,7 +298,11 @@ rendering a guarded route. The bot creates LNbits users on a person's first
 Teams turn, so outside Teams nobody had one and every gateway route refused
 them. The route is the only one mounted before the gateway's `assertCaller`
 check; it acts on the verified token's `oid` alone, creates only the user and
-the `Allowance`/`Private` wallets that are missing, and never moves sats.
+the `Allowance`/`Private` wallets that are missing, and never moves sats. It
+applies the bot's member rule (`tabs/backend/memberGate.js`, a mirror of
+`src/services/memberGate.ts`) to the token's `tid` and `acct` claims: members
+of the home tenant and allowlisted guests are provisioned, everyone else, and
+any token whose membership cannot be read, gets 403 and nothing is created.
 
 [cols="1,3"]
 |===
