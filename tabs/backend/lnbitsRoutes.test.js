@@ -49,6 +49,10 @@ const service = {
     calls.push(['zap', input]);
     return { payment_hash: 'hash-2' };
   },
+  ensureCaller: async (input) => {
+    calls.push(['ensure', input]);
+    return { user: { id: 'user-new' }, created: true, createdWallets: [] };
+  },
 };
 
 const extractBearerToken = (req) => {
@@ -58,7 +62,12 @@ const extractBearerToken = (req) => {
 
 const verifyMsalPayload = async (token) => {
   if (token === 'valid-token') return { oid: 'caller-oid' };
-  if (token === 'unlinked-token') return { oid: 'unlinked-oid' };
+  if (token === 'unlinked-token')
+    return {
+      oid: 'unlinked-oid',
+      name: 'New Person',
+      preferred_username: 'new.person@example.test',
+    };
   throw new Error('bad token');
 };
 
@@ -246,4 +255,46 @@ test('rejects pagination values that are not plain integers', async () => {
     assert.equal(response.status, 400);
     assert.equal(calls.length, callsBefore);
   }
+});
+
+// POST /users/me is the one route a person without an LNbits user may reach:
+// it is how they get one. It still needs a verified token, and it acts on the
+// token's oid, never on anything in the body.
+test('an unlinked person can provision themselves, from the token alone', async () => {
+  assert.equal(
+    (await request('/api/lnbits/users/me', { method: 'POST' })).status,
+    401,
+  );
+
+  const response = await request('/api/lnbits/users/me', {
+    method: 'POST',
+    token: 'unlinked-token',
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    user: { id: 'user-new' },
+    created: true,
+    createdWallets: [],
+  });
+  assert.deepEqual(calls.at(-1), [
+    'ensure',
+    {
+      aadObjectId: 'unlinked-oid',
+      displayName: 'New Person',
+      email: 'new.person@example.test',
+    },
+  ]);
+});
+
+test('provisioning refuses a body that tries to name the identity', async () => {
+  const before = calls.length;
+  const response = await request('/api/lnbits/users/me', {
+    method: 'POST',
+    token: 'valid-token',
+    body: { aadObjectId: 'forged-oid' },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(calls.length, before);
 });

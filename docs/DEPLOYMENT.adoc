@@ -111,6 +111,52 @@ deploys the whole portal: the React build *and* the Express backend under
 the artifact arrives prebuilt). The bot deploys separately via
 `teamsapp deploy`.
 
+=== The portal on getzapl.ie (/portal/)
+
+The tabs app has a second home: the **Login** button on
+https://getzapl.ie opens the same React app at `https://getzapl.ie/portal/`,
+served as static files by the website's Azure Static Web App
+(`knowall-ai/zaplie-website`, `website/build.mjs` copies the build into
+`dist/portal`). Nothing else is deployed there: the Express backend stays on
+the portal App Service, and the browser calls it across origins.
+
+The build for that path is the ordinary CRA build with two more settings, both
+public values:
+
+[source,bash]
+----
+cd tabs
+PUBLIC_URL=/portal \
+REACT_APP_API_BASE_URL=https://<portal App Service host> \
+REACT_APP_AAD_CLIENT_ID=... REACT_APP_TENANT_ID=... \
+npm run build
+----
+
+`PUBLIC_URL` is read once, at build time, by `tabs/src/services/appLocation.ts`:
+it becomes the router `basename`, the prefix of the auth routes
+(`/portal/auth-start`, `/portal/auth-end`, `/portal/login`) and the MSAL
+redirect URI (`https://getzapl.ie/portal`, no trailing slash, like
+`TAB_ENDPOINT`). `REACT_APP_API_BASE_URL` prefixes every `/api/...` call;
+unset, calls stay same-origin, so the Teams deployment is unchanged.
+
+Before the portal can sign anyone in there, the app registration
+(`aad.manifest.json`, single tenant) needs four more single-page application
+redirect URIs: `https://getzapl.ie/portal`, `https://getzapl.ie/portal/auth-end`,
+`https://www.getzapl.ie/portal` and `https://www.getzapl.ie/portal/auth-end`.
+The backend already answers cross-origin requests (`cors()` in
+`tabs/backend/server.js`); `PORTAL_URL` on the App Service should point at
+`https://getzapl.ie/portal` once the GitHub identity and connection redirects
+are meant to land there.
+
+People who have never used the bot in Teams have no LNbits user. The portal
+provisions one on first sign-in: `POST /api/lnbits/users/me` (the one gateway
+route that does not require an existing LNbits user) creates the user, keyed
+by the Entra `oid` in `external_id` like the bot does, and its empty
+`Allowance` and `Private` wallets. It moves no sats: the opening allowance
+(`LNBITS_INITIAL_ALLOWANCE`) remains the bot's doing, so a person set up this
+way can receive zaps at once and send them once their Allowance wallet is
+funded.
+
 === Persistent application state
 
 The bot keeps its mutable state — currently the durable Zap ledger
@@ -218,6 +264,17 @@ created. Must be a positive integer; a failed grant is logged, not retried
 | `REACT_APP_AAD_CLIENT_ID`, `REACT_APP_TENANT_ID`
 | MSAL configuration for the tabs SPA
 | Tabs
+
+| `PUBLIC_URL`
+| Base path of the tabs build (`/portal` for getzapl.ie/portal/; unset at the
+  root). Sets asset paths, the router basename and the MSAL redirect URI
+| Tabs (build time)
+
+| `REACT_APP_API_BASE_URL`
+| Origin of the Express backend when the tabs are served from another host
+  (`https://<portal App Service host>` for getzapl.ie); unset, `/api` calls stay
+  same-origin
+| Tabs (build time)
 
 | `WEBSITE_URL`, `CONTENT_URL`
 | Public URLs substituted into the Teams manifest by `build.js`

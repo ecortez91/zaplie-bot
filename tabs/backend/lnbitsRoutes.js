@@ -76,11 +76,45 @@ const createLnbitsRouter = ({
       if (!claims || typeof claims.oid !== 'string' || claims.oid.length === 0) {
         throw new Error('token is missing the oid claim');
       }
-      req.auth = { oid: claims.oid, roles: claims.roles || [] };
+      req.auth = {
+        oid: claims.oid,
+        roles: claims.roles || [],
+        // Profile claims from the same verified token, used only to label a
+        // newly provisioned LNbits user; authorization never reads them.
+        name: typeof claims.name === 'string' ? claims.name : undefined,
+        email:
+          typeof claims.preferred_username === 'string'
+            ? claims.preferred_username
+            : typeof claims.email === 'string'
+              ? claims.email
+              : undefined,
+      };
       next();
     } catch (error) {
       console.error('LNbits gateway token validation failed:', error.message);
       res.status(401).json({ error: 'invalid token' });
+    }
+  });
+
+  // Registered before assertCaller on purpose: this is how a signed-in
+  // person who has no LNbits user yet (nobody outside Teams had one) gets
+  // one. It only ever acts on the verified token's own oid, creates nothing
+  // that already exists and moves no sats.
+  router.post('/users/me', async (req, res, next) => {
+    if (req.body !== undefined && !hasOnlyKeys(req.body, new Set())) {
+      res.status(400).json({ error: 'invalid setup request' });
+      return;
+    }
+    try {
+      res.json(
+        await service.ensureCaller({
+          aadObjectId: req.auth.oid,
+          displayName: req.auth.name,
+          email: req.auth.email,
+        }),
+      );
+    } catch (error) {
+      next(error);
     }
   });
 
