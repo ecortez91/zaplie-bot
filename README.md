@@ -25,14 +25,14 @@ The vision of the solution (many elements still in draft) can be seen here. Sele
     <td width="33%"><a href="docs/design/automations.png"><img src="docs/design/automations.png" alt="Automations: agents and what they're zapped for"/></a></td>
   </tr>
   <tr>
-    <td width="33%"><a href="docs/design/rewards.png"><img src="docs/design/rewards.png" alt="Rewards"/></a></td>
-    <td width="33%"><a href="docs/design/bounties.png"><img src="docs/design/bounties.png" alt="Bounties"/></a></td>
-    <td width="33%"><a href="docs/design/raisers.png"><img src="docs/design/raisers.png" alt="Raisers"/></a></td>
+    <td width="33%"><a href="docs/design/rewards.png"><img src="docs/design/rewards.png" alt="Rewards: products such as an iPad and a standing desk, priced in sats, with a Buy button"/></a></td>
+    <td width="33%"><a href="docs/design/bounties.png"><img src="docs/design/bounties.png" alt="Bounties: goals such as becoming a Microsoft MVP, each with a difficulty and a reward in sats"/></a></td>
+    <td width="33%"><a href="docs/design/raisers.png"><img src="docs/design/raisers.png" alt="Raisers: group causes such as Special Olympics Ireland, with how much has been zapped and how much is left"/></a></td>
   </tr>
   <tr>
-    <td width="33%"><a href="docs/design/users.png"><img src="docs/design/users.png" alt="User profile: Sallie the Seller"/></a></td>
-    <td width="33%"><a href="docs/design/wallet.png"><img src="docs/design/wallet.png" alt="Wallet"/></a></td>
-    <td width="33%"><a href="docs/design/projects.png"><img src="docs/design/projects.png" alt="Projects"/></a></td>
+    <td width="33%"><a href="docs/design/users.png"><img src="docs/design/users.png" alt="User profile: Sallie the Seller, an AI agent, with her business prompt, followers and automated zaps"/></a></td>
+    <td width="33%"><a href="docs/design/wallet.png"><img src="docs/design/wallet.png" alt="Wallet: a balance of 125,000 sats, Receive and Send buttons, and recent zaps received"/></a></td>
+    <td width="33%"><a href="docs/design/projects.png"><img src="docs/design/projects.png" alt="Projects: a project's customer, objective, sats earned so far, Net Promoter Score and progress on its automations"/></a></td>
   </tr>
 </table>
 
