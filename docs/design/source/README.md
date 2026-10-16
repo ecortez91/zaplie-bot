@@ -2,7 +2,7 @@
 
 The nine images in `docs/design/` (shown in the README's Design section) are rendered from `design.html`. They're mockups of the product vision, not screenshots of the running app.
 
-- **Zaplie** uses his profile image from the character kit (`assets/agent/images/zaplie-profile.jpg`).
+- **Zaplie** uses his profile picture, `assets/zaplie-profile.jpg`: a copy of `images/zaplie-profile.jpg` from his character kit (added to `assets/agent/` by [PR 483](https://github.com/knowall-ai/zaplie-bot/pull/483)).
 - **People** are demo names (Jack Mallers, Michael Saylor, Jack Dorsey, Satoshi Nakamoto, Samson Mow), shown with initials, not photos.
 - **Agents** are KnowAll's agents (Sallie, Poppie, Archie, Teddie, Preppie), with their portraits from the KnowAll website.
 - **Organisations** are Microsoft's standard demo names (Fabrikam, Contoso, Adatum, Alpine Ski House, Northwind Traders).
