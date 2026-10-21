@@ -252,15 +252,19 @@ states are:
   repeat gets the same `200` or `202` body with `Idempotency-Replayed: true`
   and nothing is paid or queued again.
 * `uncertain` — the call to LNbits `payInvoice` threw or returned no payment
-  hash (`RewardPaymentUncertainError`), so the reward may have been paid. A
-  repeat gets a `409` until an operator reconciles it (see
+  hash, or the portal's pending-reward `POST` failed in flight or answered
+  with a 5xx (`RewardPaymentUncertainError`). The reward may have been paid,
+  or queued to be paid when the recipient links GitHub, and that `POST` is not
+  idempotent. A repeat gets a `409` until an operator reconciles it (see
   `docs/DEPLOYMENT.adoc`).
 
 A repeat whose fingerprint differs from the record's is a different reward
 under a reused key and gets a `409` without replaying anyone's result. A
-failure known to happen before `payInvoice` (repository not connected, no
+failure known to have taken no effect (repository not connected, no
 configured amount, an LNbits error while resolving wallets or creating the
-invoice) removes the `processing` record so the caller's retry can pay. Once a
+invoice, a pending-reward request that was never sent or that the portal
+refused with a 4xx) removes the `processing` record so the caller's retry can
+pay. Once a
 payment has settled, a failure to record it leaves the key `processing`, which
 blocks redelivery: the response still reports the payment, and the operator
 reconciles the record.
@@ -278,7 +282,7 @@ never pruned. The bot constructs the ledger at startup, so a missing
 
 With the ledger in place the Logic App's HTTP action retries (three times, 30
 seconds apart): a retry after a settled payment replays it, and a retry after
-a pre-payment failure tries again.
+a failure known to have taken no effect tries again.
 
 === Recipient Notifications
 
@@ -524,5 +528,6 @@ and manifest packaging across local/dev environments.
   App Service; it is not a cross-App-Service or cross-region database.
 - Recovery of a bot Zap left `processing` or `unknown`, or an automation
   reward left `processing` or `uncertain`, requires manual reconciliation with
-  the LNbits payment ledger. The application deliberately does not guess the
-  payment outcome.
+  the LNbits payment ledger (and, for a reward to an unlinked recipient, the
+  portal's pending rewards). The application deliberately does not guess the
+  outcome.

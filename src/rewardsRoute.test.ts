@@ -27,7 +27,10 @@ import {
   payInvoice,
 } from './services/lnbitsService';
 import { resolveRewardRecipientByGithubId } from './services/identityService';
-import { createPendingReward } from './services/pendingRewardsService';
+import {
+  createPendingReward,
+  PendingRewardWriteUncertainError,
+} from './services/pendingRewardsService';
 
 // The real payReward runs; only its LNbits and portal calls are stubbed, so
 // "payInvoice was called once" means the treasury paid once.
@@ -40,6 +43,7 @@ jest.mock('./services/identityService', () => ({
   resolveRewardRecipientByGithubId: jest.fn(),
 }));
 jest.mock('./services/pendingRewardsService', () => ({
+  ...jest.requireActual<object>('./services/pendingRewardsService'),
   createPendingReward: jest.fn(),
 }));
 jest.mock('./services/fetchWebhookKeys', () => ({
@@ -389,6 +393,45 @@ describe('POST /api/v1/rewards idempotency', () => {
     expect(second.replayed).toBe('true');
     expect(mockedCreatePendingReward).toHaveBeenCalledTimes(1);
     expect(mockedPayInvoice).not.toHaveBeenCalled();
+  });
+
+  test('a pending write with an unknown outcome is held and never queued again', async () => {
+    // The portal may have stored it before the connection dropped.
+    mockedResolveRecipient.mockResolvedValue(null);
+    mockedCreatePendingReward.mockRejectedValueOnce(
+      new PendingRewardWriteUncertainError('socket hang up'),
+    );
+    const url = await startServer();
+
+    const failed = await post(url);
+    const retried = await post(url);
+
+    expect(failed.status).toBe(500);
+    expect(JSON.parse(failed.text)).toEqual({
+      error: 'payment outcome unknown',
+    });
+    expect(retried.status).toBe(409);
+    expect(JSON.parse(retried.text)).toMatchObject({ status: 'uncertain' });
+    expect(mockedCreatePendingReward).toHaveBeenCalledTimes(1);
+    await expect(ledger.get(rewardKey('delivery-1'))).resolves.toMatchObject({
+      state: 'uncertain',
+    });
+  });
+
+  test('a pending write the portal rejected releases the key so a retry queues it', async () => {
+    mockedResolveRecipient.mockResolvedValue(null);
+    mockedCreatePendingReward.mockRejectedValueOnce(
+      new Error('pending reward write failed: 401'),
+    );
+    const url = await startServer();
+
+    const failed = await post(url);
+    const retried = await post(url);
+
+    expect(failed.status).toBe(500);
+    expect(JSON.parse(failed.text)).toEqual({ error: 'internal error' });
+    expect(retried.status).toBe(202);
+    expect(mockedCreatePendingReward).toHaveBeenCalledTimes(2);
   });
 
   test('a paid reward is still replayed after a restart', async () => {

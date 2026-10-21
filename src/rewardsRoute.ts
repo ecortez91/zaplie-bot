@@ -23,8 +23,12 @@ import {
 // this range is a malformed header rather than a key worth hashing.
 const IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,256}$/;
 
-// A presented key is valid if it matches the env key or the hash of any
-// active portal-managed key (created and revoked by admins in Automations).
+/**
+ * True if the presented key matches `REWARDS_API_KEY` or the hash of any
+ * active portal-managed key (created and revoked by admins in Automations).
+ *
+ * @throws RewardError 503 when no key is configured anywhere
+ */
 export const isAuthorizedRewardKey = async (
   providedKey: string,
 ): Promise<boolean> => {
@@ -93,7 +97,15 @@ const replay = (res: Response, entry: RewardEntry): void => {
   }
 };
 
-// Deterministic automation path — no LLM can trigger a payment here.
+/**
+ * Router for `POST /api/v1/rewards`, the deterministic automation path: no
+ * LLM can trigger a payment here. Every request needs an `Idempotency-Key`,
+ * claimed in the reward ledger before anything is paid, so a repeat replays
+ * the first result instead of paying again.
+ *
+ * @param deps the ledger, plus optional stand-ins for the reward services
+ *   (tests only; each defaults to the real module)
+ */
 export const createRewardsRouter = (deps: RewardsRouteDeps): Router => {
   const {
     ledger,
@@ -219,8 +231,9 @@ export const createRewardsRouter = (deps: RewardsRouteDeps): Router => {
       result = await pay({ ...request, amountSats });
     } catch (error) {
       if (error instanceof RewardPaymentUncertainError) {
-        // It may have paid, so the key is never released: every redelivery
-        // gets a 409 until an operator reconciles it against LNbits.
+        // It may have paid, or queued a pending reward that pays later, so
+        // the key is never released: every redelivery gets a 409 until an
+        // operator reconciles it.
         console.error('rewards payment outcome unknown:', error);
         await settle(() => ledger.markUncertain(ledgerKey));
         record({
@@ -231,7 +244,8 @@ export const createRewardsRouter = (deps: RewardsRouteDeps): Router => {
         res.status(500).json({ error: 'payment outcome unknown' });
         return;
       }
-      // Anything else failed before the payment call, so a retry may pay.
+      // Anything else failed before the payment or pending-reward request
+      // took effect, so a retry may pay.
       await release(ledgerKey);
       fail(res, error, ledgerKey);
       return;

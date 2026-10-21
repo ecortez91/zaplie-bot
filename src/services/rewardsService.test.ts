@@ -13,6 +13,10 @@ import {
 } from './lnbitsService';
 import { resolveRewardRecipientByGithubId } from './identityService';
 import {
+  createPendingReward,
+  PendingRewardWriteUncertainError,
+} from './pendingRewardsService';
+import {
   afterEach,
   beforeEach,
   describe,
@@ -31,9 +35,11 @@ jest.mock('./identityService', () => ({
   resolveRewardRecipientByGithubId: jest.fn(),
 }));
 jest.mock('./pendingRewardsService', () => ({
+  ...jest.requireActual<object>('./pendingRewardsService'),
   createPendingReward: jest.fn(),
 }));
 
+const mockedCreatePendingReward = createPendingReward as unknown as AsyncMock;
 const mockedGetRewardAmounts = getRewardAmounts as jest.MockedFunction<
   typeof getRewardAmounts
 >;
@@ -218,6 +224,29 @@ describe('payReward', () => {
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(RewardPaymentUncertainError);
     expect(mockedPayInvoice).not.toHaveBeenCalled();
+  });
+
+  test('a pending write with an unknown outcome is an uncertain outcome', async () => {
+    mockedResolveRecipient.mockResolvedValue(null);
+    mockedCreatePendingReward.mockRejectedValue(
+      new PendingRewardWriteUncertainError('socket hang up'),
+    );
+
+    await expect(payReward(reward)).rejects.toBeInstanceOf(
+      RewardPaymentUncertainError,
+    );
+  });
+
+  test('a pending write the portal rejected stays a plain error', async () => {
+    mockedResolveRecipient.mockResolvedValue(null);
+    mockedCreatePendingReward.mockRejectedValue(
+      new Error('pending reward write failed: 400'),
+    );
+
+    const error = await payReward(reward).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(RewardPaymentUncertainError);
   });
 
   test('a recipient without a Private wallet fails before payInvoice', async () => {

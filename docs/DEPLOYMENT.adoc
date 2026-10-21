@@ -163,10 +163,10 @@ process, inspect the canonical store, reconcile any `processing`, `unknown` or
 corruption, an unreadable data directory, or lock acquisition failure prevents
 payment.
 
-Writes sweep each store's own `.tmp` files once they are older than an hour, so
-a crash between writing a temporary and renaming it cannot accumulate ledger
-snapshots on the share; nothing younger is touched, because it may belong to a
-write in flight.
+Each ledger sweeps its own `.tmp` files older than an hour once, when the bot
+starts, so a crash between writing a temporary and renaming it cannot
+accumulate ledger snapshots on the share; nothing younger is touched, because
+it may belong to a write in flight.
 
 ==== Reconciling the reward ledger
 
@@ -181,7 +181,11 @@ and `pending` entries hold the response a repeat replays and are pruned after
   (milliseconds since the epoch) for the recipient and amount. If it settled,
   the entry can stay as it is, since the reward is paid. If it did not, stop
   the bot, delete that one entry from `records`, start the bot, and resubmit
-  the Logic App run.
+  the Logic App run. When the recipient had not linked GitHub, the uncertain
+  call was the portal's pending-reward write instead (the bot logs
+  `pending reward write`): look in the portal's `pending-rewards.json` for an
+  entry for that GitHub id and amount. If it is there, leave the ledger entry
+  as it is; if not, delete the ledger entry and resubmit.
 * `processing` that is older than a few minutes: the bot stopped mid-request,
   or the payment settled but the ledger could not record it (the bot logs
   `rewards ledger could not record a settled reward`). Reconcile it the same

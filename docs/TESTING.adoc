@@ -40,12 +40,17 @@ closing the gaps.
   real ledger in a temporary directory and the real `payReward`, with LNbits
   and the portal stubbed. It pins that a redelivery, a concurrent duplicate, a
   restart, or an unknown payment outcome never calls `payInvoice` twice; that
-  a failure before payment releases the key so a retry pays; that a reused key
-  for a different reward is a `409`; and that a missing or malformed
-  `Idempotency-Key` or a bad API key never reaches the ledger.
+  a pending-reward write with an unknown outcome is held and never queued
+  again; that a failure known to have taken no effect releases the key so a
+  retry pays; that a reused key for a different reward is a `409`; and that a
+  missing or malformed `Idempotency-Key` or a bad API key never reaches the
+  ledger.
 - The `payReward` blocks in `src/services/rewardsService.test.ts` and
-  `src/services/identityService.test.ts` pin that only a `payInvoice` failure
-  or a missing payment hash is a `RewardPaymentUncertainError`.
+  `src/services/identityService.test.ts`, with
+  `src/services/pendingRewardsService.test.ts`, pin which failures are a
+  `RewardPaymentUncertainError`: a `payInvoice` failure or missing payment
+  hash, or a pending-reward request that failed in flight or got a 5xx. A 4xx
+  from the portal, or anything before the request, stays a plain error.
 - The `TeamsBot free text in a 1:1 chat` block in `src/teamsBot.test.ts` pins
   that unmatched 1:1 text gets the command guide, never the assistant or an
   error, unless both `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL` are set.

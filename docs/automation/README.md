@@ -82,18 +82,21 @@ before it pays (see `docs/DEPLOYMENT.adoc`). A repeat of a key gets:
 | Paid | `200` with the original body and `Idempotency-Replayed: true`. Nothing is paid. |
 | Pending (recipient not linked yet) | `202` with the original body and `Idempotency-Replayed: true`. Nothing is queued again. |
 | Still being processed | `409 {"status":"processing","error":"reward is already being processed"}` |
-| Payment outcome unknown | `409 {"status":"uncertain","error":"payment outcome unknown; needs reconciliation"}` |
+| Payment or pending-reward outcome unknown | `409 {"status":"uncertain","error":"payment outcome unknown; needs reconciliation"}` |
 | Same key, different reward (source, repo, event or recipient id) | `409 {"error":"Idempotency-Key was already used for a different reward"}` |
-| Rejected before payment (bad payload, repo not connected, LNbits error before the payment call) | Nothing was recorded, so the repeat is processed normally. |
+| Rejected before taking effect (bad payload, repo not connected, LNbits error before the payment call, or a pending reward the portal refused with a 4xx) | Nothing was recorded, so the repeat is processed normally. |
 
 When the payment call itself fails or returns no payment hash, the reward may
-have been paid. The endpoint answers `500 {"error":"payment outcome unknown"}`
-and holds the key as `uncertain`: no retry or redelivery pays it again until an
-operator has checked LNbits and cleared it.
+have been paid. The same applies to queuing a pending reward: if the portal
+call fails in flight or answers with a 5xx, the portal may have stored it, and
+a queued reward is paid once the recipient links GitHub. In both cases the
+endpoint answers `500 {"error":"payment outcome unknown"}` and holds the key as
+`uncertain`: no retry or redelivery pays or queues it again until an operator
+has checked LNbits or the portal's pending rewards and cleared it.
 
 Because of this, the HTTP action's retry policy is enabled (three retries, 30
 seconds apart). A retry of a reward that already paid replays the result; a
-retry after a failure before the payment call tries again.
+retry after a failure known to have taken no effect tries again.
 
 A pending reward is recorded in the portal before the ledger marks it pending.
 If the bot stops between the two, the key stays `processing` (no money moved)
