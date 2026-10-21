@@ -34,15 +34,22 @@ Reference: [Registering a GitHub App from a manifest](https://docs.github.com/en
    atomically, gitignored) and never logged or sent to the browser. The admin
    lands back on `/automations?setup=github_created` (or
    `?setup=github_error`), which the page shows as a toast.
-4. **Install** - the "Connect repositories" button sends the admin to
+4. **Install** - the "Connect repositories" button (admins only: the
+   install link is issued only to the `Zaplie.Admin` role) sends the admin to
    `github.com/apps/{slug}/installations/new?state=...` to pick repositories,
    exactly like Vercel or Linear. The button stays disabled until the App
-   exists. GitHub then redirects to the App's setup URL,
+   exists. Issuing the link also sets a short-lived `HttpOnly`, `Secure`,
+   `SameSite=Lax` cookie scoped to `/api/connections/github`, and the state
+   carries only its hash, which binds the install to the admin's browser.
+   GitHub then redirects to the App's setup URL,
    `/api/connections/github/setup?installation_id=...&setup_action=install&state=...`.
 5. **Check and record** - GitHub documents that a setup URL's
    `installation_id` can be spoofed, so the setup route checks it before
    saving anything. It needs the signed `install` state from the install link
-   (which names the person) and a numeric id. It then calls
+   (which names the person) and the binding cookie from step 4, which it
+   clears. A missing or different cookie (an install link handed to someone
+   else) is refused before GitHub is asked anything. The id must be canonical:
+   a positive integer with no leading zeros and at most 15 digits. It then calls
    `GET /app/installations/{installation_id}` with the App JWT. A 404 means
    the id is not an installation of this App. Otherwise the installation's
    `account.login` must equal the App owner's login, compared
@@ -51,8 +58,9 @@ Reference: [Registering a GitHub App from a manifest](https://docs.github.com/en
    is private, its only possible installation is on its owner, so this match
    is sufficient. No user sign-in or user token is involved. On a match the
    installation is saved and the portal shows `?github=repos_connected`. A
-   404, another account, a GitHub error or a bad state shows
-   `?github=install_error`, and the log says which.
+   404, another account, a GitHub error, a bad state or a browser that did
+   not start the install shows `?github=install_error`, and the log says
+   which.
 
 With `setup_on_update`, GitHub also redirects to the setup URL after a
 repository change made on its own settings page. That redirect carries no
@@ -62,7 +70,8 @@ install that an organisation owner still has to approve
 
 GitHub won't load inside a frame, and the portal runs in a frame inside the
 Teams tab. Run the setup and "Connect repositories" from the portal open in a
-browser tab.
+browser tab. There the portal is first-party, so the binding cookie returns on
+GitHub's top-level redirect to the setup URL.
 
 The conversion code is one-shot and the whole flow must finish within one
 hour; a stale or replayed code fails loudly and the admin just clicks the
@@ -112,7 +121,10 @@ today), nothing needs doing.
 - The browser round trips use purpose-tagged signed states (`identity` for
   "Connect GitHub", `install` for "Connect repositories"). Neither passes as
   the other, and neither passes as the plain `admin` state the manifest
-  callback accepts.
+  callback accepts. Each also carries the hash of a browser binding cookie
+  (`zaplie_gh_identity` or `zaplie_gh_install`, 10 minutes, scoped to its
+  routes), so a link forwarded to someone else records nothing for the sender
+  (login CSRF).
 - A group set entirely in env never reads the credentials file, so a corrupt
   file cannot block it.
 - Until the app is created, GitHub-backed endpoints respond

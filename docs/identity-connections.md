@@ -19,11 +19,17 @@ change reward routing.
   in the tab backend. The signed, expiring OAuth state binds the callback to the
   verified Entra `oid` that started the flow.
 - The state is tagged `identity`, so a repository-install state cannot be
-  replayed here, nor the reverse. It is not bound to the browser that started
-  the flow. A cookie binding would be dropped as a third-party cookie inside
-  the Teams frame, so binding the flow without cookies is tracked separately.
-  GitHub won't load inside the Teams frame either: start "Connect GitHub"
-  from the portal open in a browser tab.
+  replayed here, nor the reverse. The flow is also bound to the browser that
+  started it: issuing the authorize link sets a short-lived `HttpOnly`,
+  `Secure`, `SameSite=Lax` cookie scoped to `/api/identities/github`, and the
+  state carries only its hash. The callback requires the cookie to match and
+  clears it, so an authorize link handed to a colleague links nothing.
+- "Connect GitHub" navigates the current window to GitHub, and GitHub refuses
+  to load inside a frame, so it cannot run inside the Teams tab: start it from
+  the portal open in a browser tab. There the portal is first-party, and the
+  binding cookie returns on GitHub's top-level redirect to the callback.
+  Starting the flow from inside the Teams tab (a popup or a new tab) is
+  tracked in https://github.com/knowall-ai/zaplie-bot/issues/495.
 - The bot calls `GET /api/identities/resolve` with `TAB_BACKEND_TOKEN`. This is a
   server-to-server secret and must never be exposed through a `REACT_APP_*`
   variable or otherwise sent to browser code.

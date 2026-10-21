@@ -101,8 +101,9 @@ npm test                               # watch mode
    redirect URI, readiness, corrupt-store and malformed-`PORTAL_URL`
    handling, and the documented 409 wording.
 ** `githubAppAuth.test.js`: App JWT signing with the stored or env key.
-** `githubOAuthState.test.js`: the purpose-tagged states (identity, install)
-   never pass as one another or as the plain state.
+** `githubOAuthState.test.js`: the purpose-tagged states (identity, install,
+   each with the oid and a browser binding hash) never pass as one another or
+   as the plain state, and a wrong field count is refused.
 ** `githubRoutes.test.js`: the GitHub routes before and after the manifest
    flow stores credentials, the manifest's organisation target and its
    validation, status `source` and `installationReady`, and bad config.
@@ -113,10 +114,15 @@ npm test                               # watch mode
    account matched to the App owner, and no user sign-in. It then covers
    listing repositories with the stored key, identity linking with the
    stored OAuth client, and the identity resolution the reward flow uses.
+   Each simulated browser keeps its own cookie jar: the install and identity
+   links set the binding cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, its
+   path, `Max-Age=600`) and the callbacks clear it. A link opened in another
+   browser, with no cookie or another flow's cookie, records nothing and
+   makes no GitHub call.
    Rejections cover an installation on another account, a 404, a GitHub
-   error, forged and crossed states, and a non-numeric id. An env-configured
-   App takes its owner from `GET /app`, cached, and the identity user token
-   never reaches disk or logs.
+   error, forged and crossed states, and non-numeric or non-canonical ids.
+   An env-configured App takes its owner from `GET /app`, cached, and the
+   identity user token never reaches disk or logs.
 - `server.js` only calls `listen()` when run directly, so each test file can
   `require('./server')` and bind an ephemeral port
 - Needs no credentials: each file that loads the server sets placeholder

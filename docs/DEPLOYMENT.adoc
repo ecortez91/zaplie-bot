@@ -299,7 +299,10 @@ created. Must be a positive integer; a failed grant is logged, not retried
 | `PORTAL_URL`
 | Public base URL of the portal, used in identity/OAuth redirect flows. The
   GitHub callbacks (App manifest and identity OAuth) are registered on its
-  origin, so it may also point at a route such as `/settings`
+  origin, so it may also point at a route such as `/settings`. Required in
+  production: with `NODE_ENV=production` and no `PORTAL_URL`, the GitHub App
+  manifest route refuses, because its URLs would fall back to localhost and
+  be baked into the App
 | Portal backend
 
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`
