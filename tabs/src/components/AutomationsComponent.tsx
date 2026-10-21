@@ -743,8 +743,8 @@ const AutomationsComponent: FunctionComponent = () => {
           </p>
           {appInstalled && repos.length === 0 && (
             <span className={styles.connHint}>
-              Installed on GitHub. Syncing the repository list needs the App
-              private key on the server; add repositories manually meanwhile.
+              Installed on GitHub. The reward list is not synced from the
+              installation yet; add repositories manually meanwhile.
             </span>
           )}
           {repos.length > 0 && (
@@ -829,8 +829,8 @@ const AutomationsComponent: FunctionComponent = () => {
           </div>
           <p className={styles.connDescription}>
             Create a key for the GitHub pull-request sample flow. Production use
-            remains blocked until durable idempotency and aggregate budget
-            controls land.
+            remains blocked until aggregate budget controls land and the flow
+            verifies GitHub&apos;s webhook signature.
           </p>
           {isAdmin && (
             <>
