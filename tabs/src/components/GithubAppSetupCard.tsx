@@ -156,11 +156,19 @@ const GithubAppSetupCard: FunctionComponent<{
         )}
       </span>
     );
+  } else if (status.envKeyUnreadable) {
+    // Env wins over the store, so creating an App would not be used: the only
+    // fix is the override itself.
+    body = (
+      <span className={styles.appSetupStatus} role="alert">
+        GitHub App: the private key file set by GITHUB_APP_PRIVATE_KEY_PATH
+        cannot be read. Correct or remove the environment override.
+      </span>
+    );
   } else {
     // Also reached when env vars set only part of the App (a slug without its
-    // key, say) or override a stored App with an unreadable key. The status
-    // says so; the fix is the env vars or creating the App, and the server
-    // still reports readiness either way.
+    // key, say). The status says so; the fix is the env vars or creating the
+    // App, and the server still reports readiness either way.
     body = (
       <>
         <span className={styles.appSetupStatus}>

@@ -15,6 +15,9 @@ export interface GithubSetupStatus {
   // The install link and the App key that lists an installation's
   // repositories both resolve on the server, from whichever source.
   installationReady: boolean;
+  // A complete env App configuration whose key file cannot be read. Env wins
+  // over the store, so creating an App cannot make this one ready.
+  envKeyUnreadable?: boolean;
 }
 
 // idToken (not the Graph access token): its audience is this app's own AAD

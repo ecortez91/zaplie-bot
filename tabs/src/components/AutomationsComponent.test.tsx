@@ -441,6 +441,25 @@ describe('AutomationsComponent GitHub App setup', () => {
     expect(findButton('Create the Zaplie GitHub App')).toBeDefined();
   });
 
+  test('an unreadable env key file offers no creation, only the override', async () => {
+    // Env wins over the store, so an App created now would not be used.
+    mockGetGithubSetupStatus.mockResolvedValue({
+      created: false,
+      source: 'env',
+      installationReady: false,
+      envKeyUnreadable: true,
+    });
+
+    await renderAutomations();
+
+    expect(container.textContent).toContain(
+      'GITHUB_APP_PRIVATE_KEY_PATH cannot be read',
+    );
+    expect(container.textContent).not.toContain('configuration is incomplete');
+    expect(findButton('Connect repositories')?.disabled).toBe(true);
+    expect(findButton('Create the Zaplie GitHub App')).toBeUndefined();
+  });
+
   test('a non-admin sees no setup block', async () => {
     mockIsAdmin.mockReturnValue(false);
 

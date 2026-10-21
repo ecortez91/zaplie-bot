@@ -187,11 +187,13 @@ test('installation readiness needs both the slug and the App key', () => {
     installationReady: true,
   });
 
-  // An unreadable key file is configured but not usable.
+  // An unreadable key file is configured but not usable, and creating an App
+  // cannot fix it because env wins: the state says so.
   process.env.GITHUB_APP_PRIVATE_KEY_PATH = path.join(tempDir, 'missing.pem');
   assert.deepEqual(getGithubSetupState(), {
     source: 'env',
     installationReady: false,
+    envKeyUnreadable: true,
   });
 });
 

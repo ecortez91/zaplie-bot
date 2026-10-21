@@ -141,6 +141,10 @@ today), nothing needs doing.
   `GITHUB_APP_SLUG` on its own reports `env` but not ready. Automations
   enables "Connect repositories" only when ready, and shows "configured by
   environment" (no creation click) for a complete env configuration.
+  `envKeyUnreadable: true` is added when a complete env App configuration
+  has a key file that cannot be read; since env wins over the store, creating
+  an App cannot fix that, so Automations hides the creation controls and
+  points at the override instead.
 - A corrupt credentials file or a `PORTAL_URL` that does not parse fails the
   affected route with a generic error. Neither the file's contents nor the
   parser's message reaches a response.

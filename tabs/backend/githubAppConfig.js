@@ -140,18 +140,28 @@ const getGithubAppConfig = () => {
 // Non-secret state for the setup status route. Repositories can be connected
 // only when both the install link (slug) and the App key that lists the
 // installation's repositories resolve; source alone does not mean that.
+// envKeyUnreadable is set only when a complete env App configuration has a
+// key file that cannot be read. Env wins over the store, so creating an App
+// cannot repair that: the portal hides its creation controls and points at
+// the override instead.
 const getGithubSetupState = () => {
   const stored = getCredentials();
   let installationReady = false;
+  let envKeyUnreadable = false;
   if (slugSource(stored)) {
     try {
       installationReady = resolveApp(stored).value !== null;
     } catch (error) {
       // An unreadable env key file: configured, but not usable.
       console.error(error.message);
+      envKeyUnreadable = true;
     }
   }
-  return { source: configSource(stored) || 'none', installationReady };
+  return {
+    source: configSource(stored) || 'none',
+    installationReady,
+    ...(envKeyUnreadable ? { envKeyUnreadable } : {}),
+  };
 };
 
 // Each require resolves only its own group, so an unreadable key file breaks
