@@ -207,6 +207,47 @@ test('a corrupt store raises an error that does not quote its contents', () => {
   });
 });
 
+test('GITHUB_OAUTH_REDIRECT_URI never applies to the stored manifest client', () => {
+  // The manifest client has only its own callback registered on GitHub.
+  saveCredentials(stored);
+  process.env.PORTAL_URL = 'https://portal.example.com/settings';
+  process.env.GITHUB_OAUTH_REDIRECT_URI = 'https://other.example.com/cb';
+
+  assert.equal(
+    requireGithubOAuth().redirectUri,
+    'https://portal.example.com/api/identities/github/callback',
+  );
+});
+
+test('a complete env group works even when the store is corrupt', () => {
+  fs.writeFileSync(
+    path.join(tempDir, 'github-app-credentials.json'),
+    '{"pem": "BROKEN',
+  );
+  process.env.GITHUB_APP_ID = '42';
+  process.env.GITHUB_APP_PRIVATE_KEY_PATH = ENV_PEM_PATH;
+  process.env.GITHUB_OAUTH_CLIENT_ID = 'env-client';
+  process.env.GITHUB_OAUTH_CLIENT_SECRET = 'env-secret';
+  process.env.GITHUB_APP_SLUG = 'env-slug';
+
+  assert.deepEqual(requireGithubApp(), {
+    appId: '42',
+    privateKeyPem: 'env-pem',
+  });
+  assert.equal(requireGithubOAuth().clientId, 'env-client');
+  assert.equal(requireGithubSlug(), 'env-slug');
+
+  // A group that needs the store still fails, without quoting it.
+  delete process.env.GITHUB_APP_SLUG;
+  assert.throws(requireGithubSlug, (error) => {
+    assert.match(error.message, /credentials store is unreadable/);
+    assert.doesNotMatch(error.message, /BROKEN/);
+    return true;
+  });
+  // The status reader stays strict: it reports stored fields.
+  assert.throws(getGithubSetupState, /credentials store is unreadable/);
+});
+
 test('an unreadable env key file keeps the existing error text', () => {
   process.env.GITHUB_APP_ID = '42';
   process.env.GITHUB_APP_PRIVATE_KEY_PATH = path.join(tempDir, 'missing.pem');

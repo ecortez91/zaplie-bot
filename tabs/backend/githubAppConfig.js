@@ -77,13 +77,15 @@ const resolveApp = (stored) => {
   return { value: null, source };
 };
 
-// The manifest registers this exact callback, so the derived value matches
-// the stored client; an explicit env value still wins for OAuth Apps. Only
-// derived once a client exists, so a malformed PORTAL_URL breaks the OAuth
-// flow that needs it and nothing else.
-const redirectUri = () =>
-  process.env.GITHUB_OAUTH_REDIRECT_URI ||
+// The manifest registers this exact callback for the stored client. An env
+// client (a separate OAuth App) may override it with GITHUB_OAUTH_REDIRECT_URI.
+// Only derived once a client exists, so a malformed PORTAL_URL breaks the
+// OAuth flow that needs it and nothing else.
+const manifestCallbackUri = () =>
   `${portalOrigin()}/api/identities/github/callback`;
+
+const redirectUri = () =>
+  process.env.GITHUB_OAUTH_REDIRECT_URI || manifestCallbackUri();
 
 const resolveOAuth = (stored) => {
   const source = oauthSource(stored);
@@ -102,7 +104,9 @@ const resolveOAuth = (stored) => {
       value: {
         clientId: stored.clientId,
         clientSecret: stored.clientSecret,
-        redirectUri: redirectUri(),
+        // The stored client only has the manifest's callback registered, so
+        // the env override (meant for a separate OAuth App) does not apply.
+        redirectUri: manifestCallbackUri(),
       },
       source,
     };
@@ -150,16 +154,19 @@ const getGithubSetupState = () => {
 };
 
 // Each require resolves only its own group, so an unreadable key file breaks
-// the routes that sign with it and not the install or identity links.
-const requireGroup = (resolve) => {
-  const { value } = resolve(getCredentials());
+// the routes that sign with it and not the install or identity links. A group
+// fully set in env never reads the store, so a corrupt store cannot block it;
+// one that does need the store still gets the store's (generic) error.
+const requireGroup = (sourceOf, resolve) => {
+  const stored = sourceOf(null) === 'env' ? null : getCredentials();
+  const { value } = resolve(stored);
   if (!value) throw new GithubAppNotConfiguredError();
   return value;
 };
 
-const requireGithubApp = () => requireGroup(resolveApp);
-const requireGithubOAuth = () => requireGroup(resolveOAuth);
-const requireGithubSlug = () => requireGroup(resolveSlug);
+const requireGithubApp = () => requireGroup(appSource, resolveApp);
+const requireGithubOAuth = () => requireGroup(oauthSource, resolveOAuth);
+const requireGithubSlug = () => requireGroup(slugSource, resolveSlug);
 
 module.exports = {
   GithubAppNotConfiguredError,

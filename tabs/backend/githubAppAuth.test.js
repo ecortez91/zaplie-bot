@@ -50,6 +50,24 @@ test('createAppJwt signs with the stored manifest key when no env is set', () =>
   assert.ok(claims.exp > claims.iat);
 });
 
+test('createAppJwt signs with an env key even when the store is corrupt', () => {
+  const keyPath = path.join(tempDir, 'env-key.pem');
+  fs.writeFileSync(keyPath, privateKey);
+  fs.writeFileSync(path.join(tempDir, 'github-app-credentials.json'), '{"pem');
+  process.env.GITHUB_APP_ID = '42';
+  process.env.GITHUB_APP_PRIVATE_KEY_PATH = keyPath;
+  try {
+    const [, payload] = createAppJwt().split('.');
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    assert.equal(claims.iss, '42');
+  } finally {
+    delete process.env.GITHUB_APP_ID;
+    delete process.env.GITHUB_APP_PRIVATE_KEY_PATH;
+  }
+  // Without the env group the store is needed, and its error is generic.
+  assert.throws(createAppJwt, /credentials store is unreadable \(SyntaxError\)$/);
+});
+
 test('createAppJwt throws the 409 setup pointer before the app exists', () => {
   assert.throws(createAppJwt, (error) => {
     assert.equal(error.status, 409);
