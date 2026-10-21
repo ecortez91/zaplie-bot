@@ -315,8 +315,11 @@ created. Must be a positive integer; a failed grant is logged, not retried
 | Portal backend
 
 | `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
-| Optional. A separate GitHub OAuth client for "Connect GitHub"; when unset,
-  the created App's client is used. Both or neither
+| Optional. Both or neither. When set, they must be the Zaplie GitHub App's
+  own client ID and secret, not a separate OAuth App's, and that App must
+  register `/api/identities/github/callback` on the `PORTAL_URL` origin.
+  "Connect GitHub" uses them. When unset, the client of the App created from
+  Automations is used
 | Portal backend
 
 | `GITHUB_OAUTH_REDIRECT_URI`

@@ -73,8 +73,14 @@ npm run coverage:ratchet
 - Framework: Jest via react-scripts, with React Testing Library and jest-dom
 - Test files: `tabs/src/services/lnbits/*.test.ts` (mock global `fetch` and
   localStorage; cover `getAccessToken`, `getWallets`, `getWalletBalance`,
-  `getUserWallets`, `createInvoice`, `payInvoice`) and
-  `tabs/src/setupTests.test.tsx` (environment smoke test)
+  `getUserWallets`, `createInvoice`, `payInvoice`),
+  `tabs/src/setupTests.test.tsx` (environment smoke test) and the component
+  suites under `tabs/src/components/`. Among them,
+  `AutomationsComponent.test.tsx` covers the GitHub App setup block (create
+  with or without an organisation, the created and env states, gating
+  "Connect repositories", the `?setup=` toasts), and
+  `ConnectionsSetting.test.tsx` covers the `?github=` returns from the
+  identity and install flows
 - Run:
 
 [source,bash]
@@ -90,16 +96,27 @@ npm test                               # watch mode
   extra dependencies
 - Test files: `tabs/backend/*.test.js` (auth middleware, config routes, rate
   limiting, reward amounts, automation payments, LNbits user directory, SPA
-  fallback route, GitHub App configuration precedence, and the GitHub routes
-  before and after the manifest flow stores credentials).
-  `githubSetupFlow.test.js` walks the whole zero-config path with no
-  `GITHUB_*` env vars, with GitHub and LNbits stubbed at `fetch`. It covers
-  manifest conversion, the install link, the setup URL, the installation
-  ownership check against the user's `/user/installations`, listing the
-  repositories with the stored key, identity linking with the stored OAuth
-  client, and the identity resolution the reward flow uses. It also covers
-  spoofed installation ids, failed token exchanges, tampered states, and
-  checks that no GitHub user token reaches disk or logs
+  fallback route). The GitHub App suites:
+** `githubAppConfig.test.js`: env-over-stored precedence per group, the
+   redirect URI, readiness, corrupt-store and malformed-`PORTAL_URL`
+   handling, and the documented 409 wording.
+** `githubAppAuth.test.js`: App JWT signing with the stored or env key.
+** `githubOAuthState.test.js`: the purpose-tagged states (identity, install)
+   never pass as one another or as the plain state.
+** `githubRoutes.test.js`: the GitHub routes before and after the manifest
+   flow stores credentials, the manifest's organisation target and its
+   validation, status `source` and `installationReady`, and bad config.
+** `githubSetupFlow.test.js`: the whole zero-config path with no `GITHUB_*`
+   env vars, with GitHub and LNbits stubbed at `fetch`. It covers manifest
+   conversion (including the stored owner login), the install link, and the
+   setup URL's App-JWT check: `GET /app/installations/{id}` with the
+   account matched to the App owner, and no user sign-in. It then covers
+   listing repositories with the stored key, identity linking with the
+   stored OAuth client, and the identity resolution the reward flow uses.
+   Rejections cover an installation on another account, a 404, a GitHub
+   error, forged and crossed states, and a non-numeric id. An env-configured
+   App takes its owner from `GET /app`, cached, and the identity user token
+   never reaches disk or logs.
 - `server.js` only calls `listen()` when run directly, so each test file can
   `require('./server')` and bind an ephemeral port
 - Needs no credentials: each file that loads the server sets placeholder
