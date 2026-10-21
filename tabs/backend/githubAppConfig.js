@@ -84,6 +84,11 @@ const resolveApp = (stored) => {
 const manifestCallbackUri = () =>
   `${portalOrigin()}/api/identities/github/callback`;
 
+// User-authorization callback for the install ownership check
+// (connectionsRoutes /github/verify); the manifest registers it too.
+const installVerifyCallbackUri = () =>
+  `${portalOrigin()}/api/connections/github/verify`;
+
 const redirectUri = () =>
   process.env.GITHUB_OAUTH_REDIRECT_URI || manifestCallbackUri();
 
@@ -175,6 +180,8 @@ module.exports = {
   portalOrigin,
   getGithubAppConfig,
   getGithubSetupState,
+  installVerifyCallbackUri,
+  manifestCallbackUri,
   requireGithubApp,
   requireGithubOAuth,
   requireGithubSlug,

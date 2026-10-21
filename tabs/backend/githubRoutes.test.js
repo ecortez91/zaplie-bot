@@ -200,6 +200,7 @@ test('setup manifest registers callbacks on the portal origin', async () => {
   );
   assert.deepEqual(manifest.callback_urls, [
     'https://portal.example.com/api/identities/github/callback',
+    'https://portal.example.com/api/connections/github/verify',
   ]);
   assert.equal(manifest.hook_attributes, undefined);
 });

@@ -91,7 +91,12 @@ router.get('/github/manifest', requireAdmin, async (req, res) => {
     url: portalUrl(),
     // This backend serves the portal, so its routes hang off the origin.
     redirect_url: `${origin}/api/setup/github/callback`,
-    callback_urls: [`${origin}/api/identities/github/callback`],
+    // Identity linking first (GitHub's default when no redirect_uri is sent),
+    // then the install ownership check; every authorize request names one.
+    callback_urls: [
+      `${origin}/api/identities/github/callback`,
+      `${origin}/api/connections/github/verify`,
+    ],
     // Installs return to the connections route, which records the installation
     // against the signed state's oid; setup_on_update does the same when repos
     // are added or removed later. request_oauth_on_install stays off: with it

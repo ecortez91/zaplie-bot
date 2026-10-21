@@ -80,4 +80,66 @@ const listInstallationRepos = async (installationId) => {
   return repos;
 };
 
-module.exports = { createAppJwt, getInstallationToken, listInstallationRepos };
+// Exchanges a GitHub App user-authorization code for a user access token.
+// The token is returned to the caller for one lookup and never stored.
+const exchangeUserCode = async ({ clientId, clientSecret, code, redirectUri }) => {
+  const response = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    }),
+    signal: requestTimeoutSignal(),
+  });
+  if (!response.ok) {
+    throw new Error(`user token exchange failed: ${response.status}`);
+  }
+  const body = await response.json();
+  if (!body.access_token) {
+    // body.error is GitHub's code (e.g. bad_verification_code), never a secret.
+    throw new Error(`user token exchange returned no token: ${body.error}`);
+  }
+  return body.access_token;
+};
+
+// GitHub documents that the setup URL's installation_id can be spoofed, so
+// ownership is checked against the installations this user can access.
+const userCanAccessInstallation = async (userToken, installationId) => {
+  let url = 'https://api.github.com/user/installations?per_page=100';
+  while (url) {
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'zaplie-connections',
+      },
+      signal: requestTimeoutSignal(),
+    });
+    if (!response.ok) {
+      throw new Error(`user installations request failed: ${response.status}`);
+    }
+    const body = await response.json();
+    if (
+      body.installations.some(
+        (installation) => String(installation.id) === installationId,
+      )
+    ) {
+      return true;
+    }
+    const next = nextPageUrl(response.headers.get('link'));
+    // The user token only ever goes to GitHub's API.
+    url = next && next.startsWith('https://api.github.com/') ? next : null;
+  }
+  return false;
+};
+
+module.exports = {
+  createAppJwt,
+  getInstallationToken,
+  listInstallationRepos,
+  exchangeUserCode,
+  userCanAccessInstallation,
+};
