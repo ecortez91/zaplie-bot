@@ -10,22 +10,24 @@ Reference: [Registering a GitHub App from a manifest](https://docs.github.com/en
 
 ## How it works
 
-1. **Create** - portal, Automations page, GitHub card: an admin clicks
-   "Create the Zaplie GitHub App". The browser form-POSTs a manifest (name,
-   permissions, redirect URL) to `github.com/settings/apps/new` with an
-   HMAC-signed `state`.
+1. **Create** - portal, Automations page, GitHub card: an admin (the
+   `Zaplie.Admin` app role) clicks "Create the Zaplie GitHub App". The browser
+   form-POSTs a manifest (name, permissions, redirect URL) to
+   `github.com/settings/apps/new` with an HMAC-signed `state`.
 2. **Confirm** - GitHub shows one pre-filled "Create GitHub App" screen. The
    admin confirms and GitHub redirects to
    `/api/setup/github/callback?code=...&state=...`.
 3. **Convert** - the tab backend calls
    `POST https://api.github.com/app-manifests/{code}/conversions` and receives
    the App ID, slug, private key, webhook secret and OAuth client credentials
-   in one response. They are persisted server-side
-   (`tabs/backend/github-app-credentials.json`, gitignored; Key Vault in a
-   cloud deployment) and never logged or sent to the browser.
+   in one response. They are persisted server-side in
+   `github-app-credentials.json` under `ZAPLIE_DATA_DIR` (owner-only, written
+   atomically, gitignored) and never logged or sent to the browser. The admin
+   lands back on `/automations?setup=github_created` (or
+   `?setup=github_error`), which the page shows as a toast.
 4. **Install** - the "Connect repositories" button sends the admin to
    `github.com/apps/{slug}/installations/new` to pick repositories, exactly
-   like Vercel or Linear.
+   like Vercel or Linear. The button stays disabled until the App exists.
 
 The conversion code is one-shot and the whole flow must finish within one
 hour; a stale or replayed code fails loudly and the admin just clicks the
@@ -33,10 +35,30 @@ button again.
 
 ## Design notes
 
-- Credentials are provisioned exclusively by the manifest flow and live
-  server-side. Until the app is created, GitHub-backed endpoints respond
+- No `GITHUB_*` environment variables are needed. Every GitHub-backed route
+  (App JWT, install URL, identity OAuth) reads its configuration through
+  `tabs/backend/githubAppConfig.js`.
+- Precedence: env first, then the stored manifest credentials, the same rule
+  as the internal secrets below. Each group resolves from one source as a
+  whole and never mixes the two: the App key (`GITHUB_APP_ID` +
+  `GITHUB_APP_PRIVATE_KEY_PATH`), the OAuth client
+  (`GITHUB_OAUTH_CLIENT_ID` + `GITHUB_OAUTH_CLIENT_SECRET`) and the slug
+  (`GITHUB_APP_SLUG`). A partly set group is ignored in favour of the stored
+  one.
+- Callback URLs are built from the origin of `PORTAL_URL`, because that
+  variable may point at a route such as Settings: the manifest registers
+  `<origin>/api/setup/github/callback` and
+  `<origin>/api/identities/github/callback`, and the identity flow sends the
+  same callback as its `redirect_uri` unless `GITHUB_OAUTH_REDIRECT_URI` is
+  set.
+- Until the app is created, GitHub-backed endpoints respond
   `409 GitHub app not created yet: an admin can create it from Automations` -
   a clear pointer to the setup button, never a crash or a silent failure.
+- `GET /api/setup/github/status` (any signed-in user, non-secret fields only)
+  returns `created`, `slug`, `htmlUrl` and `source`: `env` when the App comes
+  from env vars, `manifest` when it comes from the stored credentials, `none`
+  before either exists. Automations shows "configured by environment" for
+  `env` and needs no creation click.
 - The same app authorizes users for identity linking ("Connect GitHub" in
   Settings), so one creation click covers both the org connection and personal
   identity.

@@ -70,7 +70,8 @@ npm test                               # watch mode
   extra dependencies
 - Test files: `tabs/backend/*.test.js` (auth middleware, config routes, rate
   limiting, reward amounts, automation payments, LNbits user directory, SPA
-  fallback route)
+  fallback route, GitHub App configuration precedence, and the GitHub routes
+  before and after the manifest flow stores credentials)
 - `server.js` only calls `listen()` when run directly, so each test file can
   `require('./server')` and bind an ephemeral port
 - Needs no credentials: each file that loads the server sets placeholder

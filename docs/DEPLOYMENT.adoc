@@ -263,7 +263,31 @@ created. Must be a positive integer; a failed grant is logged, not retried
 | Portal backend
 
 | `PORTAL_URL`
-| Public base URL of the portal, used in identity/OAuth redirect flows
+| Public base URL of the portal, used in identity/OAuth redirect flows. The
+  GitHub callbacks (App manifest and identity OAuth) are registered on its
+  origin, so it may also point at a route such as `/settings`
+| Portal backend
+
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`
+| Optional. Not needed when an admin creates the GitHub App from Automations
+  (the manifest flow stores its credentials under `ZAPLIE_DATA_DIR`). When
+  both are set they win over the stored App key; set only one and it is
+  ignored. See `docs/setup/zero-config-github.md`
+| Portal backend
+
+| `GITHUB_APP_SLUG`
+| Optional. Overrides the stored App slug used for the "Connect repositories"
+  install link
+| Portal backend
+
+| `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`
+| Optional. A separate GitHub OAuth client for "Connect GitHub"; when unset,
+  the created App's client is used. Both or neither
+| Portal backend
+
+| `GITHUB_OAUTH_REDIRECT_URI`
+| Optional. Defaults to `<PORTAL_URL origin>/api/identities/github/callback`,
+  the callback the App manifest registers
 | Portal backend
 
 | `TREASURY_USERNAME`

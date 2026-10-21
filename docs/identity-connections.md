@@ -33,11 +33,11 @@ Configure these values in the tab backend's approved server-side secret store.
 | --- | --- |
 | `AAD_TENANT_ID` | Entra tenant accepted by the backend JWT verifier. |
 | `AAD_CLIENT_ID` | Audience expected on the portal's MSAL ID token. |
-| `GITHUB_OAUTH_CLIENT_ID` | GitHub OAuth App client id. |
-| `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth App client secret; server only. |
-| `GITHUB_OAUTH_REDIRECT_URI` | Exact callback URL registered in GitHub: `https://<backend>/api/identities/github/callback`. |
+| `GITHUB_OAUTH_CLIENT_ID` | Optional. GitHub OAuth client id; when unset, the client of the App created from Automations is used. |
+| `GITHUB_OAUTH_CLIENT_SECRET` | Optional, set together with the client id. Server only. |
+| `GITHUB_OAUTH_REDIRECT_URI` | Optional. Defaults to `<PORTAL_URL origin>/api/identities/github/callback`, the callback the App manifest registers. Set it only when a separate OAuth App registered a different URL. |
 | `IDENTITY_STATE_SECRET` | Random secret used to sign the expiring OAuth state. |
-| `PORTAL_URL` | Portal URL that receives the `?github=connected`, `conflict`, or `error` result. |
+| `PORTAL_URL` | Portal URL that receives the `?github=connected`, `conflict`, or `error` result. Its origin is also where the GitHub callbacks are registered. |
 | `TAB_BACKEND_TOKEN` | Shared server-to-server token expected from the bot. Generate independently with `openssl rand -hex 32`. |
 
 Configure these values on the bot process:
@@ -57,12 +57,18 @@ configuration errors, not development fallbacks.
 
 ## GitHub OAuth setup
 
-1. Create a GitHub OAuth App for the deployed environment.
-2. Set its callback URL to the exact `GITHUB_OAUTH_REDIRECT_URI` above.
-3. Set `PORTAL_URL` to the portal Settings route for that environment.
-4. Provision the Entra and GitHub values in the backend secret store.
-5. Provision the same newly generated `TAB_BACKEND_TOKEN` on the bot and tab
+1. Set `PORTAL_URL` to the portal Settings route for that environment.
+2. An admin creates the Zaplie GitHub App from Automations
+   ([zero-config setup](setup/zero-config-github.md)). Its OAuth client
+   serves "Connect GitHub" with no further configuration.
+3. Provision the Entra values in the backend secret store.
+4. Provision the same newly generated `TAB_BACKEND_TOKEN` on the bot and tab
    backend, then restart both processes.
+
+To use a separate GitHub OAuth App instead, set `GITHUB_OAUTH_CLIENT_ID` and
+`GITHUB_OAUTH_CLIENT_SECRET` (env wins over the stored App credentials) and
+register `<PORTAL_URL origin>/api/identities/github/callback` as its callback,
+or set `GITHUB_OAUTH_REDIRECT_URI` to the URL it registers.
 
 Identity and pending-reward JSON stores are runtime data and are gitignored.
 Do not copy production identity data into the repository or screenshots.
