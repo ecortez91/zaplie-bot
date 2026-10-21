@@ -105,9 +105,15 @@ const hasControlCharacter = (value: string): boolean =>
     return codePoint <= 31 || codePoint === 127;
   });
 
-// The caller's Idempotency-Key is hashed rather than stored: it is an opaque
-// value from outside (a GitHub delivery id today) and the ledger only needs
-// equality.
+/**
+ * Ledger key for a caller's Idempotency-Key: a SHA-256 hex digest.
+ *
+ * The key is hashed rather than stored: it is an opaque value from outside (a
+ * GitHub delivery id today) and the ledger only needs equality.
+ *
+ * @throws RewardLedgerError for an empty key, one over 256 characters, or one
+ *   with control characters
+ */
 export const rewardKey = (idempotencyKey: string): string => {
   if (
     typeof idempotencyKey !== 'string' ||
@@ -122,10 +128,13 @@ export const rewardKey = (idempotencyKey: string): string => {
     .digest('hex');
 };
 
-// What the key was first used for. A reused key with a different fingerprint
-// is a caller bug, not a redelivery, and must not replay someone else's
-// result. The free-text reason is deliberately left out: it is a label, not
-// part of what is being paid.
+/**
+ * SHA-256 hex digest of what a key was first used for.
+ *
+ * A reused key with a different fingerprint is a caller bug, not a
+ * redelivery, and must not replay someone else's result. The free-text reason
+ * is deliberately left out: it is a label, not part of what is being paid.
+ */
 export const rewardFingerprint = (parts: RewardFingerprintParts): string =>
   createHash('sha256')
     .update(
@@ -138,6 +147,12 @@ export const rewardFingerprint = (parts: RewardFingerprintParts): string =>
     )
     .digest('hex');
 
+/**
+ * Path of `bot-reward-ledger.json` under ZAPLIE_DATA_DIR.
+ *
+ * @throws RewardLedgerError when ZAPLIE_DATA_DIR is missing or not absolute
+ *   outside explicit development mode
+ */
 export const resolveRewardLedgerStorePath = (
   environment: NodeJS.ProcessEnv = process.env,
   workingDirectory = process.cwd(),
@@ -297,11 +312,13 @@ const cloneEntry = (entry: RewardEntry): RewardEntry =>
     ? ({ ...entry, response: { ...entry.response } } as RewardEntry)
     : { ...entry };
 
-// Idempotency for POST /api/v1/rewards, keyed by the caller's
-// Idempotency-Key. Same storage contract as the zap ledger (one JSON file
-// under ZAPLIE_DATA_DIR, an exclusive lock file, atomic replacement), with
-// its own schema: a reward replay has to return the original response, and a
-// pending reward is a settled outcome that pays nothing.
+/**
+ * Idempotency for POST /api/v1/rewards, keyed by the caller's
+ * Idempotency-Key. Same storage contract as the zap ledger (one JSON file
+ * under ZAPLIE_DATA_DIR, an exclusive lock file, atomic replacement), with
+ * its own schema: a reward replay has to return the original response, and a
+ * pending reward is a settled outcome that pays nothing.
+ */
 export class RewardLedger {
   readonly storePath: string;
   readonly lockPath: string;
@@ -311,6 +328,12 @@ export class RewardLedger {
   private readonly now: () => number;
   private readonly file: LedgerFile;
 
+  /**
+   * Opens the store, creating its directory if needed.
+   *
+   * @throws RewardLedgerError when the data directory, options or existing
+   *   store are invalid, so the bot fails at startup rather than mid-payment
+   */
   constructor(options: RewardLedgerOptions = {}) {
     this.storePath = options.storePath ?? resolveRewardLedgerStorePath();
     this.lockPath = `${this.storePath}.lock`;
@@ -349,8 +372,13 @@ export class RewardLedger {
     readStore(this.storePath);
   }
 
-  // The single check-and-claim. Whoever writes `processing` is the only
-  // request allowed to pay; everyone else gets the existing record back.
+  /**
+   * The single check-and-claim. Whoever writes `processing` is the only
+   * request allowed to pay; everyone else gets the existing record back.
+   *
+   * @returns `acquired` for a new key, `replay` with the stored entry for a
+   *   repeat, or `conflict` when the key was used for a different fingerprint
+   */
   async reserve(key: string, fingerprint: string): Promise<RewardReservation> {
     this.validateKey(key);
     this.validateFingerprint(fingerprint);
@@ -376,6 +404,11 @@ export class RewardLedger {
     );
   }
 
+  /**
+   * Records a settled payment and the response a repeat replays.
+   *
+   * @throws RewardLedgerError unless the entry is `processing`
+   */
   async markPaid(key: string, response: PaidRewardResponse): Promise<void> {
     const validated = validatePaidResponse(response);
     await this.settle(key, 'paid', fingerprint => ({
@@ -386,6 +419,11 @@ export class RewardLedger {
     }));
   }
 
+  /**
+   * Records a reward queued for an unlinked recipient and its response.
+   *
+   * @throws RewardLedgerError unless the entry is `processing`
+   */
   async markPending(
     key: string,
     response: PendingRewardResponse,
@@ -399,9 +437,13 @@ export class RewardLedger {
     }));
   }
 
-  // The payment call failed in a way that may still have paid. Nothing
-  // retries it: the record stays until an operator reconciles it against
-  // LNbits and edits or removes it deliberately.
+  /**
+   * The payment or pending-reward call failed in a way that may still have
+   * taken effect. Nothing retries it: the record stays until an operator
+   * reconciles it and edits or removes it deliberately.
+   *
+   * @throws RewardLedgerError unless the entry is `processing`
+   */
   async markUncertain(key: string): Promise<void> {
     await this.settle(key, 'uncertain', fingerprint => ({
       state: 'uncertain',
@@ -410,8 +452,11 @@ export class RewardLedger {
     }));
   }
 
-  // Only a request that definitively never reached the payment call may be
-  // released, so the caller's retry can try again.
+  /**
+   * Deletes a `processing` entry so the caller's retry can try again. Only a
+   * request that definitively never reached the payment call may be released;
+   * any other state is left alone.
+   */
   async releaseIfProcessing(key: string): Promise<void> {
     this.validateKey(key);
     await withStoreLock(
@@ -428,8 +473,10 @@ export class RewardLedger {
     );
   }
 
-  // Lock-free for the same reason as the zap ledger: every write is an atomic
-  // rename, so a reader sees the previous file or the next one.
+  /**
+   * Reads one entry without the lock: every write is an atomic rename, so a
+   * reader sees the previous file or the next one.
+   */
   async get(key: string): Promise<RewardEntry | undefined> {
     this.validateKey(key);
     const entry = readStore(this.storePath).records[key];

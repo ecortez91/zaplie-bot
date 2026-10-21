@@ -35,14 +35,21 @@ export interface LedgerFile {
   errorType: LedgerErrorType;
 }
 
+/** True for a Node system error that carries an errno `code` (e.g. ENOENT). */
 export const isErrnoException = (
   error: unknown,
 ): error is NodeJS.ErrnoException =>
   typeof error === 'object' && error !== null && 'code' in error;
 
+/** Resolves after the given number of milliseconds. */
 export const wait = (milliseconds: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, milliseconds));
 
+/**
+ * Returns `value` if it is a non-negative safe integer.
+ *
+ * @throws errorType `<name> is invalid` otherwise
+ */
 export const validateDuration = (
   errorType: LedgerErrorType,
   name: string,
@@ -54,6 +61,10 @@ export const validateDuration = (
   return value;
 };
 
+/**
+ * Creates the store's directory (mode 0700) if needed and checks it is
+ * readable and writable, so a bad data directory fails at startup.
+ */
 export const ensureDataDirectory = (file: LedgerFile): void => {
   const directory = path.dirname(file.storePath);
   try {
@@ -67,15 +78,15 @@ export const ensureDataDirectory = (file: LedgerFile): void => {
   }
 };
 
-// The rename itself stays atomic: a retry only re-attempts the same single
-// replacement, so a reader still sees either the previous canonical file or
-// the next one. Writers already hold the exclusive store lock, so no other
-// writer can slip in between attempts.
-// Best effort by design: a crash temporary is a leftover, never a reason to
-// fail. Only this store's own temporaries match, and only ones old enough that
-// no live write could own them. Runs once when a ledger is constructed, not
-// per write: the condition it cleans up only arises after a crash, and a
-// readdir+stat on every transition would sit inside the exclusive lock.
+/**
+ * Deletes this store's own `.tmp` files older than an hour.
+ *
+ * Best effort by design: a crash temporary is a leftover, never a reason to
+ * fail. Only this store's own temporaries match, and only ones old enough that
+ * no live write could own them. Runs once when a ledger is constructed, not
+ * per write: the condition it cleans up only arises after a crash, and a
+ * readdir+stat on every transition would sit inside the exclusive lock.
+ */
 export const sweepStaleTemporaries = (
   storePath: string,
   nowMs: number,
@@ -121,6 +132,10 @@ const syncDirectory = async (directory: string): Promise<void> => {
   }
 };
 
+// The rename itself stays atomic: a retry only re-attempts the same single
+// replacement, so a reader still sees either the previous canonical file or
+// the next one. Writers already hold the exclusive store lock, so no other
+// writer can slip in between attempts.
 const replaceStoreFile = async (
   tempPath: string,
   storePath: string,
@@ -143,6 +158,14 @@ const replaceStoreFile = async (
   }
 };
 
+/**
+ * Takes the store's exclusive lock file, retrying until `timeoutMs`.
+ *
+ * @returns a release function that deletes the lock only if it still holds
+ *   this owner's token
+ * @throws errorType when the lock times out; a crash-left lock is never
+ *   evicted automatically
+ */
 export const acquireLock = async (
   file: LedgerFile,
   timeoutMs: number,
@@ -226,6 +249,7 @@ export const acquireLock = async (
   }
 };
 
+/** Runs `operation` while holding the store's exclusive lock. */
 export const withStoreLock = async <T>(
   file: LedgerFile,
   operation: () => Promise<T>,
@@ -239,9 +263,13 @@ export const withStoreLock = async <T>(
   }
 };
 
-// The caller validates what it hands over: a bad transition must never replace
-// the last known-good file. A unique same-directory temporary keeps rename
-// atomic.
+/**
+ * Replaces the store with `contents`: a unique same-directory temporary,
+ * fsync, atomic rename, then a directory sync on POSIX.
+ *
+ * The caller validates what it hands over: a bad transition must never replace
+ * the last known-good file.
+ */
 export const writeAtomically = async (
   file: LedgerFile,
   contents: string,

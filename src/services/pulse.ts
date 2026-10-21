@@ -142,7 +142,10 @@ export type RewardOutcome =
   | { status: 'needs-checking'; requestKey: string; sats: number }
   | { status: 'failed'; requestKey: string };
 
-// An automation reward from POST /api/v1/rewards.
+/**
+ * Records an automation reward from POST /api/v1/rewards: sent, queued for an
+ * unlinked recipient, needing an admin check (outcome unknown), or failed.
+ */
 export const recordRewardOutcome = (outcome: RewardOutcome): void => {
   if (outcome.status === 'paid') {
     recordActivity({
