@@ -37,6 +37,18 @@ export class RewardError extends Error {
   }
 }
 
+// The treasury payment was sent but its outcome is unknown: it may have
+// settled. Never retried automatically; an operator reconciles it.
+export class RewardPaymentUncertainError extends Error {
+  constructor(
+    message: string,
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'RewardPaymentUncertainError';
+  }
+}
+
 export interface RewardRequest {
   recipient: string; // external identity, e.g. GitHub login (label only)
   recipientId: string; // stable GitHub numeric user id — never the login
@@ -260,9 +272,21 @@ export async function payReward(
     throw new Error(`creating reward invoice failed: ${paymentRequest}`);
   }
 
-  const result = await payInvoice(treasuryAdminKey, paymentRequest, extra);
-  if (!result || !result.payment_hash) {
-    throw new Error(`paying reward invoice failed: ${JSON.stringify(result)}`);
+  // From here the request has left this process, so a failure no longer
+  // means "nothing was paid". Only the errors above may be retried.
+  let result;
+  try {
+    result = await payInvoice(treasuryAdminKey, paymentRequest, extra);
+  } catch (error) {
+    throw new RewardPaymentUncertainError(
+      'The reward payment request failed after being sent to LNbits.',
+      error,
+    );
+  }
+  if (!result?.payment_hash) {
+    throw new RewardPaymentUncertainError(
+      'The reward payment returned no payment hash, so it cannot be confirmed.',
+    );
   }
   return { paymentHash: result.payment_hash };
 }
