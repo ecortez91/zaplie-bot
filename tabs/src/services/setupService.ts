@@ -9,6 +9,9 @@ export interface GithubSetupStatus {
   slug?: string;
   htmlUrl?: string;
   source: GithubConfigSource;
+  // The install link and the App key that lists an installation's
+  // repositories both resolve on the server, from whichever source.
+  installationReady: boolean;
 }
 
 // idToken (not the Graph access token): its audience is this app's own AAD

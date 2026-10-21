@@ -101,6 +101,7 @@ const createdStatus: GithubSetupStatus = {
   slug: 'zaplie-rewards-abcd',
   htmlUrl: 'https://github.com/apps/zaplie-rewards-abcd',
   source: 'manifest',
+  installationReady: true,
 };
 
 let container: HTMLDivElement;
@@ -275,6 +276,7 @@ describe('AutomationsComponent GitHub App setup', () => {
     mockGetGithubSetupStatus.mockResolvedValue({
       created: false,
       source: 'none',
+      installationReady: false,
     });
 
     await renderAutomations();
@@ -300,6 +302,7 @@ describe('AutomationsComponent GitHub App setup', () => {
     mockGetGithubSetupStatus.mockResolvedValue({
       created: false,
       source: 'none',
+      installationReady: false,
     });
     mockStartGithubAppCreation.mockRejectedValue(new Error('403'));
 
@@ -329,6 +332,7 @@ describe('AutomationsComponent GitHub App setup', () => {
     mockGetGithubSetupStatus.mockResolvedValue({
       created: false,
       source: 'env',
+      installationReady: true,
     });
 
     await renderAutomations();
@@ -338,6 +342,25 @@ describe('AutomationsComponent GitHub App setup', () => {
     );
     expect(findButton('Create the Zaplie GitHub App')).toBeUndefined();
     expect(findButton('Connect repositories')?.disabled).toBe(false);
+  });
+
+  test('a partial env configuration keeps repositories blocked', async () => {
+    // Say GITHUB_APP_SLUG alone: the server reports source env, but listing
+    // the installation's repositories would need the App key.
+    mockGetGithubSetupStatus.mockResolvedValue({
+      created: false,
+      source: 'env',
+      installationReady: false,
+    });
+
+    await renderAutomations();
+
+    expect(container.textContent).toContain(
+      'GitHub App: environment configuration is incomplete',
+    );
+    expect(container.textContent).not.toContain('configured by environment');
+    expect(findButton('Connect repositories')?.disabled).toBe(true);
+    expect(findButton('Create the Zaplie GitHub App')).toBeDefined();
   });
 
   test('a non-admin sees no setup block', async () => {

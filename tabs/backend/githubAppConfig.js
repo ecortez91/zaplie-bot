@@ -27,10 +27,34 @@ const portalUrl = () =>
 // anything served by this backend is addressed from the origin.
 const portalOrigin = () => new URL(portalUrl()).origin;
 
+// Which source supplies each group. Presence checks only: no key file read and
+// no URL parsing, so reporting the configuration cannot fail on either.
+const appSource = (stored) => {
+  if (process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY_PATH) {
+    return 'env';
+  }
+  return stored?.appId && stored?.pem ? 'manifest' : null;
+};
+
+const oauthSource = (stored) => {
+  if (
+    process.env.GITHUB_OAUTH_CLIENT_ID &&
+    process.env.GITHUB_OAUTH_CLIENT_SECRET
+  ) {
+    return 'env';
+  }
+  return stored?.clientId && stored?.clientSecret ? 'manifest' : null;
+};
+
+const slugSource = (stored) => {
+  if (process.env.GITHUB_APP_SLUG) return 'env';
+  return stored?.slug ? 'manifest' : null;
+};
+
 const resolveApp = (stored) => {
-  const appId = process.env.GITHUB_APP_ID;
-  const keyPath = process.env.GITHUB_APP_PRIVATE_KEY_PATH;
-  if (appId && keyPath) {
+  const source = appSource(stored);
+  if (source === 'env') {
+    const keyPath = process.env.GITHUB_APP_PRIVATE_KEY_PATH;
     let privateKeyPem;
     try {
       privateKeyPem = fs.readFileSync(keyPath, 'utf8');
@@ -39,64 +63,90 @@ const resolveApp = (stored) => {
         `failed to read GitHub App private key at ${keyPath}: ${error.message}`,
       );
     }
-    return { value: { appId, privateKeyPem }, source: 'env' };
-  }
-  if (stored?.appId && stored?.pem) {
     return {
-      value: { appId: String(stored.appId), privateKeyPem: stored.pem },
-      source: 'manifest',
+      value: { appId: process.env.GITHUB_APP_ID, privateKeyPem },
+      source,
     };
   }
-  return { value: null, source: null };
+  if (source === 'manifest') {
+    return {
+      value: { appId: String(stored.appId), privateKeyPem: stored.pem },
+      source,
+    };
+  }
+  return { value: null, source };
 };
 
+// The manifest registers this exact callback, so the derived value matches
+// the stored client; an explicit env value still wins for OAuth Apps. Only
+// derived once a client exists, so a malformed PORTAL_URL breaks the OAuth
+// flow that needs it and nothing else.
+const redirectUri = () =>
+  process.env.GITHUB_OAUTH_REDIRECT_URI ||
+  `${portalOrigin()}/api/identities/github/callback`;
+
 const resolveOAuth = (stored) => {
-  const clientId = process.env.GITHUB_OAUTH_CLIENT_ID;
-  const clientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
-  // The manifest registers this exact callback, so the derived value matches
-  // the stored client; an explicit env value still wins for OAuth Apps.
-  const redirectUri =
-    process.env.GITHUB_OAUTH_REDIRECT_URI ||
-    `${portalOrigin()}/api/identities/github/callback`;
-  if (clientId && clientSecret) {
-    return { value: { clientId, clientSecret, redirectUri }, source: 'env' };
+  const source = oauthSource(stored);
+  if (source === 'env') {
+    return {
+      value: {
+        clientId: process.env.GITHUB_OAUTH_CLIENT_ID,
+        clientSecret: process.env.GITHUB_OAUTH_CLIENT_SECRET,
+        redirectUri: redirectUri(),
+      },
+      source,
+    };
   }
-  if (stored?.clientId && stored?.clientSecret) {
+  if (source === 'manifest') {
     return {
       value: {
         clientId: stored.clientId,
         clientSecret: stored.clientSecret,
-        redirectUri,
+        redirectUri: redirectUri(),
       },
-      source: 'manifest',
+      source,
     };
   }
-  return { value: null, source: null };
+  return { value: null, source };
 };
 
 const resolveSlug = (stored) => {
-  if (process.env.GITHUB_APP_SLUG) {
-    return { value: process.env.GITHUB_APP_SLUG, source: 'env' };
-  }
-  if (stored?.slug) {
-    return { value: stored.slug, source: 'manifest' };
-  }
-  return { value: null, source: null };
+  const source = slugSource(stored);
+  if (source === 'env') return { value: process.env.GITHUB_APP_SLUG, source };
+  if (source === 'manifest') return { value: stored.slug, source };
+  return { value: null, source };
 };
 
 // source names where the App itself comes from: the signing key when one is
 // configured, otherwise whichever group is.
+const configSource = (stored) =>
+  appSource(stored) || oauthSource(stored) || slugSource(stored);
+
 const getGithubAppConfig = () => {
   const stored = getCredentials();
-  const app = resolveApp(stored);
-  const oauth = resolveOAuth(stored);
-  const slug = resolveSlug(stored);
   return {
-    app: app.value,
-    slug: slug.value,
-    oauth: oauth.value,
-    source: app.source || oauth.source || slug.source,
+    app: resolveApp(stored).value,
+    slug: resolveSlug(stored).value,
+    oauth: resolveOAuth(stored).value,
+    source: configSource(stored),
   };
+};
+
+// Non-secret state for the setup status route. Repositories can be connected
+// only when both the install link (slug) and the App key that lists the
+// installation's repositories resolve; source alone does not mean that.
+const getGithubSetupState = () => {
+  const stored = getCredentials();
+  let installationReady = false;
+  if (slugSource(stored)) {
+    try {
+      installationReady = resolveApp(stored).value !== null;
+    } catch (error) {
+      // An unreadable env key file: configured, but not usable.
+      console.error(error.message);
+    }
+  }
+  return { source: configSource(stored) || 'none', installationReady };
 };
 
 // Each require resolves only its own group, so an unreadable key file breaks
@@ -113,9 +163,11 @@ const requireGithubSlug = () => requireGroup(resolveSlug);
 
 module.exports = {
   GithubAppNotConfiguredError,
+  NOT_CONFIGURED_MESSAGE,
   portalUrl,
   portalOrigin,
   getGithubAppConfig,
+  getGithubSetupState,
   requireGithubApp,
   requireGithubOAuth,
   requireGithubSlug,

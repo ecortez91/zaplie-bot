@@ -42,7 +42,11 @@ router.post('/github/install-url', async (req, res) => {
     slug = requireGithubSlug();
   } catch (error) {
     console.error(error.message);
-    res.status(error.status).json({ error: error.message });
+    if (error instanceof GithubAppNotConfiguredError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: 'GitHub App configuration is unavailable' });
     return;
   }
   const installUrl = `https://github.com/apps/${slug}/installations/new?state=${signState(

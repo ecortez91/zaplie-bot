@@ -13,7 +13,9 @@ const {
 } = require('./githubAppCredentials');
 const {
   GithubAppNotConfiguredError,
+  NOT_CONFIGURED_MESSAGE,
   getGithubAppConfig,
+  getGithubSetupState,
   portalOrigin,
   portalUrl,
   requireGithubApp,
@@ -141,13 +143,68 @@ test('nothing configured: every require throws the 409 setup pointer', () => {
     assert.throws(requireGroup, (error) => {
       assert.ok(error instanceof GithubAppNotConfiguredError);
       assert.equal(error.status, 409);
-      assert.equal(
-        error.message,
-        'GitHub app not created yet: an admin can create it from Automations',
-      );
+      assert.equal(error.message, NOT_CONFIGURED_MESSAGE);
       return true;
     });
   }
+});
+
+test('the setup pointer keeps the wording the zero-config docs promise', () => {
+  // A deliberate contract pin, the one literal copy: docs/setup/
+  // zero-config-github.md quotes this text, so a change must update both.
+  assert.equal(
+    NOT_CONFIGURED_MESSAGE,
+    'GitHub app not created yet: an admin can create it from Automations',
+  );
+});
+
+test('a malformed PORTAL_URL only breaks the OAuth group that needs it', () => {
+  process.env.PORTAL_URL = 'portal.example.com/settings';
+
+  assert.equal(getGithubAppConfig().oauth, null);
+  assert.deepEqual(getGithubSetupState(), {
+    source: 'none',
+    installationReady: false,
+  });
+
+  saveCredentials(stored);
+  assert.throws(requireGithubOAuth, TypeError);
+  assert.equal(requireGithubSlug(), 'zaplie-rewards-abcd');
+  assert.equal(getGithubSetupState().installationReady, true);
+});
+
+test('installation readiness needs both the slug and the App key', () => {
+  process.env.GITHUB_APP_SLUG = 'env-slug';
+  assert.deepEqual(getGithubSetupState(), {
+    source: 'env',
+    installationReady: false,
+  });
+
+  process.env.GITHUB_APP_ID = '42';
+  process.env.GITHUB_APP_PRIVATE_KEY_PATH = ENV_PEM_PATH;
+  assert.deepEqual(getGithubSetupState(), {
+    source: 'env',
+    installationReady: true,
+  });
+
+  // An unreadable key file is configured but not usable.
+  process.env.GITHUB_APP_PRIVATE_KEY_PATH = path.join(tempDir, 'missing.pem');
+  assert.deepEqual(getGithubSetupState(), {
+    source: 'env',
+    installationReady: false,
+  });
+});
+
+test('a corrupt store raises an error that does not quote its contents', () => {
+  fs.writeFileSync(
+    path.join(tempDir, 'github-app-credentials.json'),
+    '{"clientSecret": "SECRETVALUE',
+  );
+  assert.throws(requireGithubSlug, (error) => {
+    assert.doesNotMatch(error.message, /SECRETVALUE/);
+    assert.match(error.message, /credentials store is unreadable/);
+    return true;
+  });
 });
 
 test('an unreadable env key file keeps the existing error text', () => {

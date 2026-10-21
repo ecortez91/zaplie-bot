@@ -12,7 +12,13 @@ const getCredentials = () => {
   if (!fs.existsSync(STORE_PATH)) {
     return null;
   }
-  return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+  } catch (error) {
+    // JSON.parse quotes the text around the fault, which here can be the
+    // private key or client secret: never pass that on to a log or response.
+    throw new Error(`GitHub App credentials store is unreadable (${error.name})`);
+  }
 };
 
 const saveCredentials = (credentials) => {

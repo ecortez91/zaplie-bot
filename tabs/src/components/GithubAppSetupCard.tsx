@@ -33,9 +33,10 @@ export const useGithubSetupReturnStatus = () => {
   }, []);
 };
 
-// Repositories can be connected once the app exists, from either source.
+// The server decides: an env slug alone, say, reports source 'env' but cannot
+// list the installation's repositories without the App key.
 export const isGithubAppReady = (status: GithubSetupStatus) =>
-  status.created || status.source === 'env';
+  status.installationReady;
 
 // Admin-only block inside the GitHub connection card: creates the org's own
 // GitHub App through the manifest flow. Mount it keyed by account so a switch
@@ -108,7 +109,7 @@ const GithubAppSetupCard: FunctionComponent<{
     body = (
       <span className={styles.appSetupStatus}>Checking the GitHub App…</span>
     );
-  } else if (status.source === 'env') {
+  } else if (status.source === 'env' && status.installationReady) {
     body = (
       <span className={styles.appSetupStatus}>
         GitHub App: configured by environment
@@ -128,9 +129,16 @@ const GithubAppSetupCard: FunctionComponent<{
       </span>
     );
   } else {
+    // Also reached when env vars set only part of the App (a slug without its
+    // key, say). The status says so; the fix is the env vars or creating the
+    // App, and the server still reports readiness either way.
     body = (
       <>
-        <span className={styles.appSetupStatus}>GitHub App: not created</span>
+        <span className={styles.appSetupStatus}>
+          {status.source === 'env'
+            ? 'GitHub App: environment configuration is incomplete'
+            : 'GitHub App: not created'}
+        </span>
         <button
           type="button"
           className={styles.installButton}

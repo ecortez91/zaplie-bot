@@ -60,6 +60,7 @@ const {
   saveCredentials,
   clearCredentialsForTests,
 } = require('./githubAppCredentials');
+const { NOT_CONFIGURED_MESSAGE } = require('./githubAppConfig');
 const app = require('./server');
 
 const STORED = {
@@ -123,8 +124,6 @@ const call = (method, route, auth) =>
     req.end();
   });
 
-const SETUP_POINTER =
-  'GitHub app not created yet: an admin can create it from Automations';
 
 test('install-url is a 409 setup pointer before the app is created', async () => {
   const res = await call(
@@ -133,7 +132,7 @@ test('install-url is a 409 setup pointer before the app is created', async () =>
     `Bearer ${USER_TOKEN}`,
   );
   assert.equal(res.status, 409);
-  assert.equal(res.body.error, SETUP_POINTER);
+  assert.equal(res.body.error, NOT_CONFIGURED_MESSAGE);
 });
 
 test('install-url uses the stored slug once the manifest flow has run', async () => {
@@ -157,7 +156,7 @@ test('identity authorize-url is a 409 setup pointer before the app is created', 
     `Bearer ${USER_TOKEN}`,
   );
   assert.equal(res.status, 409);
-  assert.equal(res.body.error, SETUP_POINTER);
+  assert.equal(res.body.error, NOT_CONFIGURED_MESSAGE);
 });
 
 test('identity authorize-url uses the stored client and the manifest callback', async () => {
@@ -212,7 +211,11 @@ test('setup status reports where the configuration comes from', async () => {
     `Bearer ${USER_TOKEN}`,
   );
   assert.equal(before.status, 200);
-  assert.deepEqual(before.body, { created: false, source: 'none' });
+  assert.deepEqual(before.body, {
+    created: false,
+    source: 'none',
+    installationReady: false,
+  });
 
   saveCredentials(STORED);
   const afterSave = await call(
@@ -225,6 +228,7 @@ test('setup status reports where the configuration comes from', async () => {
     slug: STORED.slug,
     htmlUrl: STORED.htmlUrl,
     source: 'manifest',
+    installationReady: true,
   });
 
   process.env.GITHUB_APP_SLUG = 'env-slug';
@@ -253,6 +257,83 @@ test('setup status reports where the configuration comes from', async () => {
     delete process.env.GITHUB_APP_SLUG;
     delete process.env.GITHUB_APP_ID;
     delete process.env.GITHUB_APP_PRIVATE_KEY_PATH;
+  }
+});
+
+test('an env slug without an App key is not ready to connect repositories', async () => {
+  process.env.GITHUB_APP_SLUG = 'env-slug';
+  try {
+    const res = await call(
+      'GET',
+      '/api/setup/github/status',
+      `Bearer ${USER_TOKEN}`,
+    );
+    // The install link would work, but listing the installation's
+    // repositories needs the App key, so the portal must not offer it.
+    assert.deepEqual(res.body, {
+      created: false,
+      source: 'env',
+      installationReady: false,
+    });
+  } finally {
+    delete process.env.GITHUB_APP_SLUG;
+  }
+});
+
+test('a corrupt credentials store fails cleanly without echoing its contents', async () => {
+  fs.writeFileSync(
+    path.join(tempDir, 'github-app-credentials.json'),
+    '{"pem": "-----BEGIN RSA PRIVATE KEY----- SECRETKEYMATERIAL',
+  );
+  const install = await call(
+    'POST',
+    '/api/connections/github/install-url',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.equal(install.status, 500);
+  assert.deepEqual(install.body, {
+    error: 'GitHub App configuration is unavailable',
+  });
+
+  const status = await call(
+    'GET',
+    '/api/setup/github/status',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.equal(status.status, 500);
+
+  for (const res of [install, status]) {
+    assert.doesNotMatch(JSON.stringify(res.body), /SECRETKEY|PRIVATE KEY/);
+  }
+});
+
+test('a PORTAL_URL without a scheme does not break status or the callback', async () => {
+  process.env.PORTAL_URL = 'portal.example.com/settings';
+  try {
+    const status = await call(
+      'GET',
+      '/api/setup/github/status',
+      `Bearer ${USER_TOKEN}`,
+    );
+    assert.equal(status.status, 200);
+    assert.equal(status.body.source, 'none');
+
+    const callback = await call(
+      'GET',
+      '/api/setup/github/callback?code=abc&state=forged',
+    );
+    assert.equal(callback.status, 302);
+    assert.equal(callback.headers.location, '/automations?setup=github_error');
+
+    // The manifest is baked into the App: refuse rather than guess a URL.
+    const manifest = await call(
+      'GET',
+      '/api/setup/github/manifest',
+      `Bearer ${ADMIN_TOKEN}`,
+    );
+    assert.equal(manifest.status, 500);
+  } finally {
+    process.env.PORTAL_URL = 'https://portal.example.com/settings';
   }
 });
 
