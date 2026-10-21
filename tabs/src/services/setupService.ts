@@ -25,8 +25,12 @@ const auth = (idToken: string) => ({
 
 export const getGithubSetupStatus = async (
   idToken: string,
+  signal?: AbortSignal,
 ): Promise<GithubSetupStatus> => {
-  const response = await axios.get('/api/setup/github/status', auth(idToken));
+  const response = await axios.get('/api/setup/github/status', {
+    ...auth(idToken),
+    signal,
+  });
   return response.data;
 };
 

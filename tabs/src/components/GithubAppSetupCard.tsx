@@ -39,6 +39,10 @@ export const useGithubSetupReturnStatus = () => {
 export const isGithubAppReady = (status: GithubSetupStatus) =>
   status.installationReady;
 
+// Covers the token acquisition and the status request together, so a stalled
+// one cannot leave the card on "Checking" with its controls hidden.
+const STATUS_TIMEOUT_MS = 15_000;
+
 // Admin-only block inside the GitHub connection card: creates the org's own
 // GitHub App through the manifest flow. Mount it keyed by account so a switch
 // never shows the previous account's status.
@@ -53,6 +57,14 @@ const GithubAppSetupCard: FunctionComponent<{
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const deadline = setTimeout(() => {
+      controller.abort();
+      if (!cancelled) {
+        console.error('GitHub App status timed out');
+        setLoadError(true);
+      }
+    }, STATUS_TIMEOUT_MS);
     const load = async () => {
       try {
         const account = accounts[0];
@@ -60,23 +72,31 @@ const GithubAppSetupCard: FunctionComponent<{
           return;
         }
         const idToken = await acquireIdToken(instance, account);
-        const next = await getGithubSetupStatus(idToken);
-        if (cancelled) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const next = await getGithubSetupStatus(idToken, controller.signal);
+        if (cancelled || controller.signal.aborted) {
           return;
         }
         setStatus(next);
         onStatus(next);
       } catch (err) {
-        if (cancelled) {
+        // The deadline already reported; an unmount reports nothing.
+        if (cancelled || controller.signal.aborted) {
           return;
         }
         console.error('Error fetching GitHub App status:', err);
         setLoadError(true);
+      } finally {
+        clearTimeout(deadline);
       }
     };
     load();
     return () => {
       cancelled = true;
+      clearTimeout(deadline);
+      controller.abort();
     };
     // Mounted per account; `accounts` gets a new identity on every token
     // refresh and must not re-run this.
@@ -123,7 +143,7 @@ const GithubAppSetupCard: FunctionComponent<{
         GitHub App: configured by environment
       </span>
     );
-  } else if (status.created) {
+  } else if (status.created && status.installationReady) {
     body = (
       <span className={styles.appSetupStatus}>
         App created:{' '}
@@ -138,8 +158,9 @@ const GithubAppSetupCard: FunctionComponent<{
     );
   } else {
     // Also reached when env vars set only part of the App (a slug without its
-    // key, say). The status says so; the fix is the env vars or creating the
-    // App, and the server still reports readiness either way.
+    // key, say) or override a stored App with an unreadable key. The status
+    // says so; the fix is the env vars or creating the App, and the server
+    // still reports readiness either way.
     body = (
       <>
         <span className={styles.appSetupStatus}>
