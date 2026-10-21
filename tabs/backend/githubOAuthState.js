@@ -44,25 +44,32 @@ const verifyState = (state) => {
   return oid;
 };
 
-// State for the install-ownership check: binds the oid to the installation id
-// GitHub reported, so the verify callback checks exactly that pair. The
-// leading purpose tag and the different part count keep it from passing
-// verifyState, and a plain state from passing this, in either direction.
-const INSTALL_PURPOSE = 'install-verify';
+// Purpose-tagged state for the GitHub round trips that must not be mixed up:
+// 'identity' (oid) for "Connect GitHub" and 'install' (oid) for "Connect
+// repositories". The tag must match, so neither passes as the other, and
+// neither passes verifyState (whose payload has no tag) or the reverse: the
+// manifest callback still accepts only the plain 'admin' state.
+const PURPOSE_FIELDS = { identity: 1, install: 1 };
 
-const signInstallState = (oid, installationId) => {
-  const nonce = crypto.randomBytes(8).toString('hex');
+const signPurposeState = (purpose, fields) => {
+  if (
+    fields.length !== PURPOSE_FIELDS[purpose] ||
+    fields.some((field) => typeof field !== 'string' || field.includes('|'))
+  ) {
+    throw new Error(`invalid ${purpose} state fields`);
+  }
   const expiry = Date.now() + STATE_TTL_MS;
-  const payload = [INSTALL_PURPOSE, oid, installationId, nonce, expiry].join('|');
+  const payload = [purpose, ...fields, expiry].join('|');
   return Buffer.from(`${payload}|${sign(payload)}`).toString('base64url');
 };
 
-const verifyInstallState = (state) => {
-  if (typeof state !== 'string') {
+// Returns the fields, or null for anything forged, expired or of another flow.
+const verifyPurposeState = (purpose, state) => {
+  if (typeof state !== 'string' || !PURPOSE_FIELDS[purpose]) {
     return null;
   }
   const parts = Buffer.from(state, 'base64url').toString('utf8').split('|');
-  if (parts.length !== 6 || parts[0] !== INSTALL_PURPOSE) {
+  if (parts.length !== PURPOSE_FIELDS[purpose] + 3 || parts[0] !== purpose) {
     return null;
   }
   const signature = parts.pop();
@@ -74,17 +81,16 @@ const verifyInstallState = (state) => {
   ) {
     return null;
   }
-  const [, oid, installationId, , expiryStr] = parts;
-  const expiry = Number(expiryStr);
+  const expiry = Number(parts.pop());
   if (!Number.isFinite(expiry) || Date.now() > expiry) {
     return null;
   }
-  return { oid, installationId };
+  return parts.slice(1);
 };
 
 module.exports = {
   signState,
   verifyState,
-  signInstallState,
-  verifyInstallState,
+  signPurposeState,
+  verifyPurposeState,
 };

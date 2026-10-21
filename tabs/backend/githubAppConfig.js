@@ -69,25 +69,21 @@ const resolveApp = (stored) => {
     };
   }
   if (source === 'manifest') {
-    return {
-      value: { appId: String(stored.appId), privateKeyPem: stored.pem },
-      source,
-    };
+    const value = { appId: String(stored.appId), privateKeyPem: stored.pem };
+    // The account the manifest created the App under (the install check
+    // compares installations against it). An env App looks it up instead.
+    if (stored.ownerLogin) value.ownerLogin = stored.ownerLogin;
+    return { value, source };
   }
   return { value: null, source };
 };
 
-// The manifest registers this exact callback for the stored client. An env
-// client (a separate OAuth App) may override it with GITHUB_OAUTH_REDIRECT_URI.
-// Only derived once a client exists, so a malformed PORTAL_URL breaks the
-// OAuth flow that needs it and nothing else.
+// The manifest registers this exact callback for the stored client. Env OAuth
+// credentials may override it with GITHUB_OAUTH_REDIRECT_URI. Only derived
+// once a client exists, so a malformed PORTAL_URL breaks the OAuth flow that
+// needs it and nothing else.
 const manifestCallbackUri = () =>
   `${portalOrigin()}/api/identities/github/callback`;
-
-// User-authorization callback for the install ownership check
-// (connectionsRoutes /github/verify); the manifest registers it too.
-const installVerifyCallbackUri = () =>
-  `${portalOrigin()}/api/connections/github/verify`;
 
 const redirectUri = () =>
   process.env.GITHUB_OAUTH_REDIRECT_URI || manifestCallbackUri();
@@ -180,8 +176,6 @@ module.exports = {
   portalOrigin,
   getGithubAppConfig,
   getGithubSetupState,
-  installVerifyCallbackUri,
-  manifestCallbackUri,
   requireGithubApp,
   requireGithubOAuth,
   requireGithubSlug,

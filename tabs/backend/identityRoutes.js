@@ -4,8 +4,7 @@
 // only (never the renamable login). See docs/identity-connections.md.
 const express = require('express');
 const authMiddleware = require('./authMiddleware');
-const { verifyMsalToken, extractBearerToken } = require('./msalValidator');
-const { signState, verifyState } = require('./githubOAuthState');
+const { signPurposeState, verifyPurposeState } = require('./githubOAuthState');
 const identityStore = require('./identityStore');
 const { requireLnbitsConfig, getLnbitsToken, lnbitsGet } = require('./lnbitsAdmin');
 const { requestTimeoutSignal } = require('./httpTimeout');
@@ -15,27 +14,13 @@ const {
   portalUrl,
   requireGithubOAuth,
 } = require('./githubAppConfig');
+const { requireMsalOid } = require('./requireMsalOid');
 
 const router = express.Router();
 
 const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
 const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const GITHUB_USER_URL = 'https://api.github.com/user';
-
-const requireMsalOid = async (req, res) => {
-  const token = extractBearerToken(req);
-  if (!token) {
-    res.status(401).json({ error: 'missing bearer token' });
-    return null;
-  }
-  try {
-    return await verifyMsalToken(token);
-  } catch (error) {
-    console.error('MSAL token validation failed:', error.message);
-    res.status(401).json({ error: 'invalid token' });
-    return null;
-  }
-};
 
 // POST /api/identities/github/authorize-url
 // Caller authenticates with a real MSAL ID token — never a client-supplied oid.
@@ -61,8 +46,9 @@ router.post('/github/authorize-url', async (req, res) => {
   const url = new URL(GITHUB_AUTHORIZE_URL);
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('scope', 'read:user');
-  url.searchParams.set('state', signState(oid));
+  // No scope: a GitHub App's user token carries the App's permissions, and
+  // GET /user needs none.
+  url.searchParams.set('state', signPurposeState('identity', [oid]));
   res.json({ authorizeUrl: url.toString() });
 });
 
@@ -73,11 +59,12 @@ router.get('/github/callback', async (req, res) => {
     res.status(400).send('missing code or state');
     return;
   }
-  const oid = verifyState(state);
-  if (!oid) {
+  const fields = verifyPurposeState('identity', state);
+  if (!fields) {
     res.status(400).send('invalid or expired state');
     return;
   }
+  const [oid] = fields;
 
   let clientId, clientSecret, redirectUri;
   try {

@@ -59,6 +59,8 @@ router.get('/github/status', async (req, res) => {
     res.status(500).json({ error: 'GitHub App status is unavailable' });
     return;
   }
+  // created: the manifest flow has stored an App. An env-configured App
+  // reports created: false with source 'env'.
   res.json(
     credentials
       ? {
@@ -71,9 +73,26 @@ router.get('/github/status', async (req, res) => {
   );
 });
 
-// GET /api/setup/github/manifest — admin-only; returns the form-POST target
-// and manifest JSON the browser submits to github.com/settings/apps/new.
+// A GitHub user or organisation login: alphanumerics and single inner
+// hyphens, at most 39 characters.
+const GITHUB_LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+
+// GET /api/setup/github/manifest[?organization=<login>] — admin-only; returns
+// the form-POST target and manifest JSON the browser submits to GitHub.
+// The App is private, and GitHub lets a private App be installed only on the
+// account that owns it, so it must be registered under the organisation that
+// owns the repositories. Without ?organization it goes to the admin's
+// personal account.
 router.get('/github/manifest', requireAdmin, async (req, res) => {
+  const { organization } = req.query;
+  if (
+    organization !== undefined &&
+    organization !== '' &&
+    (typeof organization !== 'string' || !GITHUB_LOGIN_PATTERN.test(organization))
+  ) {
+    res.status(400).json({ error: 'organization must be a GitHub organisation login' });
+    return;
+  }
   const oid = 'admin'; // state binds the callback to a flow we started, not to a person
   const state = signState(oid);
   let origin;
@@ -91,20 +110,17 @@ router.get('/github/manifest', requireAdmin, async (req, res) => {
     url: portalUrl(),
     // This backend serves the portal, so its routes hang off the origin.
     redirect_url: `${origin}/api/setup/github/callback`,
-    // Identity linking first (GitHub's default when no redirect_uri is sent),
-    // then the install ownership check; every authorize request names one.
-    // Apps created from the earlier manifest need these settings by hand: see
-    // "Apps created from the earlier manifest" in docs/setup/zero-config-github.md.
-    callback_urls: [
-      `${origin}/api/identities/github/callback`,
-      `${origin}/api/connections/github/verify`,
-    ],
-    // Installs return to the connections route, which records the installation
-    // against the signed state's oid; setup_on_update does the same when repos
-    // are added or removed later. request_oauth_on_install stays off: with it
+    callback_urls: [`${origin}/api/identities/github/callback`],
+    // Installs return to the connections route, which checks the installation
+    // with the App JWT and records it against the signed state's oid;
+    // setup_on_update also sends later repository changes there (those made
+    // on GitHub's own page carry no state and record nothing).
+    // request_oauth_on_install stays off: with it
     // on, GitHub skips the setup URL and runs its own OAuth flow straight into
     // the identity callback, carrying no state and no installation to record.
     // People link their GitHub identity from Settings instead.
+    // Apps created from the earlier manifest need these settings by hand: see
+    // "Apps created from the earlier manifest" in docs/setup/zero-config-github.md.
     setup_url: `${origin}/api/connections/github/setup`,
     setup_on_update: true,
     // hook_attributes and default_events are omitted until the webhook route
@@ -118,8 +134,11 @@ router.get('/github/manifest', requireAdmin, async (req, res) => {
       metadata: 'read',
     },
   };
+  const registerUrl = organization
+    ? `https://github.com/organizations/${organization}/settings/apps/new`
+    : 'https://github.com/settings/apps/new';
   res.json({
-    action: `https://github.com/settings/apps/new?state=${state}`,
+    action: `${registerUrl}?state=${state}`,
     manifest: JSON.stringify(manifest),
   });
 });
@@ -130,8 +149,9 @@ router.get('/github/callback', async (req, res) => {
   const { code, state } = req.query;
   // Bind this callback to the manifest flow: /github/manifest mints
   // signState('admin'), and only that sentinel is accepted here. Identity- and
-  // installation-flow states carry a real Entra oid, so they can't be replayed
-  // to persist GitHub App credentials (cross-flow state confusion).
+  // installation-flow states are purpose-tagged and never pass verifyState,
+  // so they can't be replayed to persist GitHub App credentials (cross-flow
+  // state confusion).
   if (
     typeof code !== 'string' ||
     typeof state !== 'string' ||
@@ -164,6 +184,9 @@ router.get('/github/callback', async (req, res) => {
       clientSecret: app.client_secret,
       webhookSecret: app.webhook_secret,
       pem: app.pem,
+      // The account the App was registered under. A private App installs only
+      // there, so /connections/github/setup accepts only its installations.
+      ownerLogin: app.owner?.login,
       createdAt: new Date().toISOString(),
     });
     res.redirect(automationsUrl('github_created'));

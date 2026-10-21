@@ -200,10 +200,60 @@ test('setup manifest registers callbacks on the portal origin', async () => {
   );
   assert.deepEqual(manifest.callback_urls, [
     'https://portal.example.com/api/identities/github/callback',
-    'https://portal.example.com/api/connections/github/verify',
   ]);
   assert.equal(manifest.hook_attributes, undefined);
 });
+
+test('setup manifest registers under an organisation when one is given', async () => {
+  const personal = await call(
+    'GET',
+    '/api/setup/github/manifest',
+    `Bearer ${ADMIN_TOKEN}`,
+  );
+  assert.match(
+    personal.body.action,
+    /^https:\/\/github\.com\/settings\/apps\/new\?state=/,
+  );
+
+  const org = await call(
+    'GET',
+    '/api/setup/github/manifest?organization=knowall-ai',
+    `Bearer ${ADMIN_TOKEN}`,
+  );
+  assert.equal(org.status, 200);
+  assert.match(
+    org.body.action,
+    /^https:\/\/github\.com\/organizations\/knowall-ai\/settings\/apps\/new\?state=/,
+  );
+  // Still private: it is installable on the organisation that owns it.
+  assert.equal(JSON.parse(org.body.manifest).public, false);
+
+  const empty = await call(
+    'GET',
+    '/api/setup/github/manifest?organization=',
+    `Bearer ${ADMIN_TOKEN}`,
+  );
+  assert.match(empty.body.action, /^https:\/\/github\.com\/settings\/apps\/new/);
+});
+
+for (const organization of [
+  'evil.com%2F',
+  '-leading',
+  'trailing-',
+  'double--hyphen',
+  'a'.repeat(40),
+  '..%2F..%2Fsettings',
+]) {
+  test(`setup manifest rejects the organisation "${organization}"`, async () => {
+    const res = await call(
+      'GET',
+      `/api/setup/github/manifest?organization=${organization}`,
+      `Bearer ${ADMIN_TOKEN}`,
+    );
+    assert.equal(res.status, 400);
+    assert.equal(res.body.action, undefined);
+  });
+}
 
 test('setup status reports where the configuration comes from', async () => {
   const before = await call(

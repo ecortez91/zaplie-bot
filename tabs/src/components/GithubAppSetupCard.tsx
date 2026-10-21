@@ -1,5 +1,6 @@
 import React, { FunctionComponent, useEffect, useState } from 'react';
 import { useMsal } from '@azure/msal-react';
+import axios from 'axios';
 import { toast } from 'react-toastify';
 import styles from './AutomationsComponent.module.css';
 import { acquireIdToken } from '../services/adminRole';
@@ -48,6 +49,7 @@ const GithubAppSetupCard: FunctionComponent<{
   const [status, setStatus] = useState<GithubSetupStatus | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [organization, setOrganization] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -90,10 +92,16 @@ const GithubAppSetupCard: FunctionComponent<{
     try {
       const idToken = await acquireIdToken(instance, account);
       // Navigates away to GitHub; the button stays disabled until it does.
-      await startGithubAppCreation(idToken);
+      await startGithubAppCreation(idToken, organization.trim() || undefined);
     } catch (err) {
       console.error('Error starting GitHub App creation:', err);
-      toast.error('Could not start creating the GitHub App.');
+      const invalidOrganization =
+        axios.isAxiosError(err) && err.response?.status === 400;
+      toast.error(
+        invalidOrganization
+          ? 'Enter the organisation as its GitHub login, like knowall-ai.'
+          : 'Could not start creating the GitHub App.',
+      );
       setCreating(false);
     }
   };
@@ -138,6 +146,25 @@ const GithubAppSetupCard: FunctionComponent<{
           {status.source === 'env'
             ? 'GitHub App: environment configuration is incomplete'
             : 'GitHub App: not created'}
+        </span>
+        <label className={styles.appSetupField}>
+          <span>GitHub organisation that owns the repositories</span>
+          <input
+            type="text"
+            className={styles.addInput}
+            placeholder="your-org"
+            value={organization}
+            onChange={e => setOrganization(e.target.value)}
+            disabled={creating}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        <span className={styles.connHint}>
+          The App is private, so GitHub only lets it be installed on the account
+          that owns it. Creating it under an organisation needs an owner or App
+          manager of that organisation. Leave this empty to create it under your
+          own GitHub account.
         </span>
         <button
           type="button"

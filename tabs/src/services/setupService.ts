@@ -5,6 +5,9 @@ import axios from 'axios';
 export type GithubConfigSource = 'env' | 'manifest' | 'none';
 
 export interface GithubSetupStatus {
+  // True only once the manifest flow has stored an App (slug and htmlUrl come
+  // with it). An App configured purely by env vars reports false, with
+  // source 'env'.
   created: boolean;
   slug?: string;
   htmlUrl?: string;
@@ -27,12 +30,18 @@ export const getGithubSetupStatus = async (
   return response.data;
 };
 
-// Submits a real form POST to github.com/settings/apps/new: GitHub only
+// Submits a real form POST to GitHub's App registration page: GitHub only
 // accepts the manifest as a posted form field, not as a redirect parameter.
+// With an organisation the App is registered under it (needed to install a
+// private App on that organisation); without, under the admin's own account.
 export const startGithubAppCreation = async (
   idToken: string,
+  organization?: string,
 ): Promise<void> => {
-  const response = await axios.get('/api/setup/github/manifest', auth(idToken));
+  const response = await axios.get('/api/setup/github/manifest', {
+    ...auth(idToken),
+    params: organization ? { organization } : undefined,
+  });
   const { action, manifest } = response.data;
   const form = document.createElement('form');
   form.method = 'post';

@@ -1,49 +1,25 @@
 // filepath: tabs/backend/connectionsRoutes.js
 // GitHub App "install -> select repositories" flow. The person installs the
 // app choosing repos; GitHub redirects back to /github/setup with the
-// installation id and our signed state. The id is then checked against the
-// person's own GitHub user token (/github/verify) before it is tied to their
-// oid.
+// installation id and our signed state, which ties it to the caller's oid.
+// GitHub documents that the setup URL's installation_id can be spoofed, so the
+// id is checked with the App JWT before it is saved (see /github/setup).
 const express = require('express');
-const { verifyMsalToken, extractBearerToken } = require('./msalValidator');
-const {
-  signState,
-  verifyState,
-  signInstallState,
-  verifyInstallState,
-} = require('./githubOAuthState');
+const { signPurposeState, verifyPurposeState } = require('./githubOAuthState');
 const connectionsStore = require('./connectionsStore');
 const {
   listInstallationRepos,
-  exchangeUserCode,
-  userCanAccessInstallation,
+  findAppInstallation,
+  getAppOwnerLogin,
 } = require('./githubAppAuth');
 const {
   GithubAppNotConfiguredError,
-  installVerifyCallbackUri,
   portalUrl,
-  requireGithubOAuth,
   requireGithubSlug,
 } = require('./githubAppConfig');
+const { requireMsalOid } = require('./requireMsalOid');
 
 const router = express.Router();
-
-const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
-
-const requireMsalOid = async (req, res) => {
-  const token = extractBearerToken(req);
-  if (!token) {
-    res.status(401).json({ error: 'missing bearer token' });
-    return null;
-  }
-  try {
-    return await verifyMsalToken(token);
-  } catch (error) {
-    console.error('MSAL token validation failed:', error.message);
-    res.status(401).json({ error: 'invalid token' });
-    return null;
-  }
-};
 
 // POST /api/connections/github/install-url — caller authenticates with a real
 // MSAL ID token; the signed state ties the install redirect back to their oid.
@@ -64,9 +40,8 @@ router.post('/github/install-url', async (req, res) => {
     res.status(500).json({ error: 'GitHub App configuration is unavailable' });
     return;
   }
-  const installUrl = `https://github.com/apps/${slug}/installations/new?state=${signState(
-    oid,
-  )}`;
+  const state = signPurposeState('install', [oid]);
+  const installUrl = `https://github.com/apps/${slug}/installations/new?state=${state}`;
   res.json({ installUrl });
 });
 
@@ -74,86 +49,63 @@ router.post('/github/install-url', async (req, res) => {
 // manifest). GitHub redirects the browser here after an install or, with
 // setup_on_update, after the repository selection changes, passing
 // installation_id, setup_action and the state from our install link.
-router.get('/github/setup', (req, res) => {
+router.get('/github/setup', async (req, res) => {
   const {
     installation_id: installationId,
     setup_action: setupAction,
     state,
   } = req.query;
+  const fail = () => res.redirect(`${portalUrl()}?github=install_error`);
   // An org member without rights asked an owner to install: nothing exists yet.
   if (setupAction === 'request') {
     res.redirect(`${portalUrl()}?github=install_requested`);
     return;
   }
-  const oid = typeof state === 'string' ? verifyState(state) : null;
-  if (!oid) {
+  const started = verifyPurposeState('install', state);
+  if (!started) {
     // A change made on GitHub's own settings page carries no state of ours.
     // The installation was recorded when it was created and its repositories
     // are listed live, so there is nothing to write.
-    const status = setupAction === 'update' ? 'repos_updated' : 'install_error';
-    res.redirect(`${portalUrl()}?github=${status}`);
-    return;
-  }
-  if (typeof installationId !== 'string' || !/^\d+$/.test(installationId)) {
-    res.redirect(`${portalUrl()}?github=install_error`);
-    return;
-  }
-  // The id is not trusted yet (GitHub documents that it can be spoofed). Send
-  // the person through the App's user authorization; /github/verify saves the
-  // installation only if their own token can see it.
-  let clientId;
-  let redirectUri;
-  try {
-    ({ clientId } = requireGithubOAuth());
-    redirectUri = installVerifyCallbackUri();
-  } catch (error) {
-    console.error('Cannot verify the GitHub installation:', error.message);
-    res.redirect(`${portalUrl()}?github=install_error`);
-    return;
-  }
-  const url = new URL(GITHUB_AUTHORIZE_URL);
-  url.searchParams.set('client_id', clientId);
-  url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('state', signInstallState(oid, installationId));
-  res.redirect(url.toString());
-});
-
-// GET /api/connections/github/verify — GitHub's user-authorization callback
-// for the ownership check. The user token is used for one lookup and dropped:
-// it is never stored, logged or sent to the browser.
-router.get('/github/verify', async (req, res) => {
-  const fail = () => res.redirect(`${portalUrl()}?github=install_error`);
-  const { code } = req.query;
-  const verified = verifyInstallState(req.query.state);
-  if (!verified || typeof code !== 'string') {
+    if (setupAction === 'update') {
+      res.redirect(`${portalUrl()}?github=repos_updated`);
+      return;
+    }
     fail();
     return;
   }
+  const [oid] = started;
+  if (typeof installationId !== 'string' || !/^\d+$/.test(installationId)) {
+    fail();
+    return;
+  }
+  // The manifest makes the App private, and GitHub installs a private App only
+  // on the account that owns it. So a genuine installation of this App belongs
+  // to that account: ask GitHub (App JWT, no user sign-in) and save the id only
+  // if it is ours and on the owner's account.
   try {
-    const { clientId, clientSecret } = requireGithubOAuth();
-    const userToken = await exchangeUserCode({
-      clientId,
-      clientSecret,
-      code,
-      redirectUri: installVerifyCallbackUri(),
-    });
-    const owns = await userCanAccessInstallation(
-      userToken,
-      verified.installationId,
-    );
-    if (!owns) {
+    const installation = await findAppInstallation(installationId);
+    if (!installation) {
       console.error(
-        `GitHub installation ${verified.installationId} is not accessible to the authorizing user`,
+        `GitHub installation ${installationId} is not an installation of this App (404)`,
       );
       fail();
       return;
     }
-    connectionsStore.setInstallation(verified.oid, verified.installationId);
-    res.redirect(`${portalUrl()}?github=repos_connected`);
+    const ownerLogin = await getAppOwnerLogin();
+    if (installation.accountLogin.toLowerCase() !== ownerLogin.toLowerCase()) {
+      console.error(
+        `GitHub installation ${installationId} is on ${installation.accountLogin}, not the App owner ${ownerLogin}`,
+      );
+      fail();
+      return;
+    }
   } catch (error) {
-    console.error('GitHub installation verification failed:', error.message);
+    console.error('GitHub installation check failed:', error.message);
     fail();
+    return;
   }
+  connectionsStore.setInstallation(oid, installationId);
+  res.redirect(`${portalUrl()}?github=repos_connected`);
 });
 
 // GET /api/connections/github/repos — caller authenticates with a real MSAL ID

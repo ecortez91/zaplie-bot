@@ -80,66 +80,67 @@ const listInstallationRepos = async (installationId) => {
   return repos;
 };
 
-// Exchanges a GitHub App user-authorization code for a user access token.
-// The token is returned to the caller for one lookup and never stored.
-const exchangeUserCode = async ({ clientId, clientSecret, code, redirectUri }) => {
-  const response = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      client_id: clientId,
-      client_secret: clientSecret,
-      code,
-      redirect_uri: redirectUri,
-    }),
+const appRequest = (url) =>
+  fetch(url, {
+    headers: {
+      Authorization: `Bearer ${createAppJwt()}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'zaplie-connections',
+    },
     signal: requestTimeoutSignal(),
   });
+
+// GET /app/installations/{id} with the App JWT: the installation's account
+// login, or null when GitHub answers 404 (not an installation of this App).
+// Anything else (network, 5xx, bad credentials) throws, so the caller can tell
+// "not ours" from "could not check".
+const findAppInstallation = async (installationId) => {
+  const response = await appRequest(
+    `https://api.github.com/app/installations/${encodeURIComponent(installationId)}`,
+  );
+  if (response.status === 404) {
+    return null;
+  }
   if (!response.ok) {
-    throw new Error(`user token exchange failed: ${response.status}`);
+    throw new Error(`installation lookup failed: ${response.status}`);
   }
   const body = await response.json();
-  if (!body.access_token) {
-    // body.error is GitHub's code (e.g. bad_verification_code), never a secret.
-    throw new Error(`user token exchange returned no token: ${body.error}`);
+  const accountLogin = body.account?.login;
+  if (typeof accountLogin !== 'string' || accountLogin.length === 0) {
+    throw new Error('installation lookup returned no account login');
   }
-  return body.access_token;
+  return { accountLogin };
 };
 
-// GitHub documents that the setup URL's installation_id can be spoofed, so
-// ownership is checked against the installations this user can access.
-const userCanAccessInstallation = async (userToken, installationId) => {
-  let url = 'https://api.github.com/user/installations?per_page=100';
-  while (url) {
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${userToken}`,
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'zaplie-connections',
-      },
-      signal: requestTimeoutSignal(),
-    });
-    if (!response.ok) {
-      throw new Error(`user installations request failed: ${response.status}`);
-    }
-    const body = await response.json();
-    if (
-      body.installations.some(
-        (installation) => String(installation.id) === installationId,
-      )
-    ) {
-      return true;
-    }
-    const next = nextPageUrl(response.headers.get('link'));
-    // The user token only ever goes to GitHub's API.
-    url = next && next.startsWith('https://api.github.com/') ? next : null;
+// The login of the account that owns the App. The manifest flow stores it; an
+// env-configured App is asked once (GET /app) and cached per App id.
+const ownerLoginCache = new Map();
+
+const getAppOwnerLogin = async () => {
+  const { appId, ownerLogin } = requireGithubApp();
+  if (ownerLogin) {
+    return ownerLogin;
   }
-  return false;
+  if (ownerLoginCache.has(appId)) {
+    return ownerLoginCache.get(appId);
+  }
+  const response = await appRequest('https://api.github.com/app');
+  if (!response.ok) {
+    throw new Error(`App lookup failed: ${response.status}`);
+  }
+  const body = await response.json();
+  const login = body.owner?.login;
+  if (typeof login !== 'string' || login.length === 0) {
+    throw new Error('App lookup returned no owner login');
+  }
+  ownerLoginCache.set(appId, login);
+  return login;
 };
 
 module.exports = {
   createAppJwt,
   getInstallationToken,
   listInstallationRepos,
-  exchangeUserCode,
-  userCanAccessInstallation,
+  findAppInstallation,
+  getAppOwnerLogin,
 };

@@ -524,6 +524,15 @@
   color: #84cc16;
 }
 
+.appSetupField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: stretch;
+  color: #9a9a9a;
+  font-size: 11px;
+}
+
 .cardBadge {
   width: 28px;
   height: 28px;

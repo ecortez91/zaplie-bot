@@ -33,7 +33,10 @@ const mockGetGithubSetupStatus = jest.fn<
   Promise<GithubSetupStatus>,
   [string]
 >();
-const mockStartGithubAppCreation = jest.fn<Promise<void>, [string]>();
+const mockStartGithubAppCreation = jest.fn<
+  Promise<void>,
+  [string, string | undefined]
+>();
 
 jest.mock('@azure/msal-react', () => ({
   useMsal: () => mockUseMsal(),
@@ -46,8 +49,8 @@ jest.mock('../services/adminRole', () => ({
 
 jest.mock('../services/setupService', () => ({
   getGithubSetupStatus: (idToken: string) => mockGetGithubSetupStatus(idToken),
-  startGithubAppCreation: (idToken: string) =>
-    mockStartGithubAppCreation(idToken),
+  startGithubAppCreation: (idToken: string, organization?: string) =>
+    mockStartGithubAppCreation(idToken, organization),
 }));
 
 jest.mock('../apiService', () => ({
@@ -257,6 +260,17 @@ describe('AutomationsComponent panel independence', () => {
   });
 });
 
+// React tracks an input's value itself, so set it through the native setter
+// and dispatch the event React listens for.
+const typeInto = (input: HTMLInputElement, value: string) => {
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+};
+
 const findButton = (label: string) =>
   Array.from(container.querySelectorAll('button')).find(
     button => button.textContent === label,
@@ -294,8 +308,72 @@ describe('AutomationsComponent GitHub App setup', () => {
       create?.click();
     });
 
-    expect(mockStartGithubAppCreation).toHaveBeenCalledWith('id-token');
+    // Empty organisation: GitHub registers it under the admin's own account.
+    expect(mockStartGithubAppCreation).toHaveBeenCalledWith(
+      'id-token',
+      undefined,
+    );
     expect(findButton('Redirecting to GitHub...')?.disabled).toBe(true);
+  });
+
+  test('the organisation entered is passed on so the App can be installed there', async () => {
+    mockGetGithubSetupStatus.mockResolvedValue({
+      created: false,
+      source: 'none',
+      installationReady: false,
+    });
+
+    await renderAutomations();
+    const input = container.querySelector<HTMLInputElement>(
+      'input[placeholder="your-org"]',
+    );
+    expect(input).not.toBeNull();
+    expect(container.textContent).toContain(
+      'GitHub organisation that owns the repositories',
+    );
+    await act(async () => {
+      typeInto(input as HTMLInputElement, '  knowall-ai ');
+    });
+    await act(async () => {
+      findButton('Create the Zaplie GitHub App')?.click();
+    });
+
+    expect(mockStartGithubAppCreation).toHaveBeenCalledWith(
+      'id-token',
+      'knowall-ai',
+    );
+  });
+
+  test('an organisation the server rejects gets a specific toast', async () => {
+    mockGetGithubSetupStatus.mockResolvedValue({
+      created: false,
+      source: 'none',
+      installationReady: false,
+    });
+    mockStartGithubAppCreation.mockRejectedValue(
+      Object.assign(new Error('Request failed with status code 400'), {
+        isAxiosError: true,
+        response: { status: 400 },
+      }),
+    );
+
+    await renderAutomations();
+    await act(async () => {
+      typeInto(
+        container.querySelector<HTMLInputElement>(
+          'input[placeholder="your-org"]',
+        ) as HTMLInputElement,
+        'not/an/org',
+      );
+    });
+    await act(async () => {
+      findButton('Create the Zaplie GitHub App')?.click();
+    });
+
+    expect(mockToastError).toHaveBeenCalledWith(
+      'Enter the organisation as its GitHub login, like knowall-ai.',
+    );
+    expect(findButton('Create the Zaplie GitHub App')?.disabled).toBe(false);
   });
 
   test('a failed start re-enables the create button with a toast', async () => {
