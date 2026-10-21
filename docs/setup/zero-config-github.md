@@ -52,6 +52,24 @@ The conversion code is one-shot and the whole flow must finish within one
 hour; a stale or replayed code fails loudly and the admin just clicks the
 button again.
 
+## Apps created from the earlier manifest
+
+The earlier manifest registered only the identity callback, set no setup URL
+and turned on "Request user authorization (OAuth) during installation". An
+App created from it never returns to the setup URL, so it cannot connect
+repositories. In that App's settings on GitHub (Settings > Developer settings
+> GitHub Apps > the Zaplie App):
+
+1. Add `<origin>/api/connections/github/verify` under "Callback URL", keeping
+   `<origin>/api/identities/github/callback` as the first entry.
+2. Set "Setup URL" to `<origin>/api/connections/github/setup` and enable
+   "Redirect on update".
+3. Disable "Request user authorization (OAuth) during installation".
+
+Alternatively, delete the App on GitHub, remove `github-app-credentials.json`
+from `ZAPLIE_DATA_DIR`, and create it again from Automations. If no App was
+created before this change (true for production today), nothing needs doing.
+
 ## Design notes
 
 - No `GITHUB_*` environment variables are needed. Every GitHub-backed route

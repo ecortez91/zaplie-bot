@@ -93,6 +93,8 @@ router.get('/github/manifest', requireAdmin, async (req, res) => {
     redirect_url: `${origin}/api/setup/github/callback`,
     // Identity linking first (GitHub's default when no redirect_uri is sent),
     // then the install ownership check; every authorize request names one.
+    // Apps created from the earlier manifest need these settings by hand: see
+    // "Apps created from the earlier manifest" in docs/setup/zero-config-github.md.
     callback_urls: [
       `${origin}/api/identities/github/callback`,
       `${origin}/api/connections/github/verify`,
