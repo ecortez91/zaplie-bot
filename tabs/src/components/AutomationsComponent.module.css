@@ -504,6 +504,26 @@
   gap: 8px;
 }
 
+.appSetup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #3b393a;
+  border-radius: 4px;
+}
+
+.appSetupStatus {
+  color: #d6d6d6;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.appSetupStatus a {
+  color: #84cc16;
+}
+
 .cardBadge {
   width: 28px;
   height: 28px;

@@ -25,6 +25,10 @@ import {
   revokeWebhookKey,
   WebhookKey,
 } from '../services/webhookKeysService';
+import GithubAppSetupCard, {
+  isGithubAppReady,
+  useGithubSetupReturnStatus,
+} from './GithubAppSetupCard';
 import GithubIcon from '../images/GitHub.svg';
 import ZapIcon from '../images/ZapIcon.svg';
 import MicrosoftIcon from '../images/Microsoft.svg';
@@ -157,6 +161,11 @@ const AutomationsComponent: FunctionComponent = () => {
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [ruleAudience, setRuleAudience] =
     useState<AutomationAudience>('teammates');
+  // null until the setup status loads (or if it fails): the server still
+  // answers 409 with the setup pointer, so only a known "not created" blocks.
+  const [githubAppReady, setGithubAppReady] = useState<boolean | null>(null);
+
+  useGithubSetupReturnStatus();
 
   const accountId = accounts[0]?.homeAccountId;
   // Read after an await to tell whether the account changed mid-flight. A ref,
@@ -178,6 +187,7 @@ const AutomationsComponent: FunctionComponent = () => {
     setRepos([]);
     setAmounts({});
     setAppInstalled(false);
+    setGithubAppReady(null);
     setStats(null);
     setWebhookKeys([]);
     setCreatedKey(null);
@@ -758,10 +768,19 @@ const AutomationsComponent: FunctionComponent = () => {
           )}
           {isAdmin && (
             <div className={styles.connCardActions}>
+              <GithubAppSetupCard
+                key={accountId}
+                onStatus={status => setGithubAppReady(isGithubAppReady(status))}
+              />
+              {githubAppReady === false && (
+                <span className={styles.connHint}>
+                  Create the Zaplie GitHub App first, then connect repositories.
+                </span>
+              )}
               <button
                 className={styles.installButton}
                 onClick={handleInstallApp}
-                disabled={installing}
+                disabled={installing || githubAppReady === false}
               >
                 {installing
                   ? 'Redirecting to GitHub...'

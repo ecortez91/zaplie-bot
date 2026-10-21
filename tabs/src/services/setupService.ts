@@ -1,9 +1,14 @@
 import axios from 'axios';
 
+// Where the GitHub App configuration in use comes from: GITHUB_* env vars on
+// the server (they win), the credentials the manifest flow stored, or neither.
+export type GithubConfigSource = 'env' | 'manifest' | 'none';
+
 export interface GithubSetupStatus {
   created: boolean;
   slug?: string;
   htmlUrl?: string;
+  source: GithubConfigSource;
 }
 
 // idToken (not the Graph access token): its audience is this app's own AAD
