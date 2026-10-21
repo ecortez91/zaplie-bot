@@ -23,7 +23,7 @@ const router = express.Router();
 // Built from the origin because PORTAL_URL may point at the Settings route.
 // This backend serves the portal too, so a PORTAL_URL that does not parse
 // falls back to the same host rather than failing the redirect.
-const automationsUrl = (status) => {
+const automationsUrl = status => {
   const path = `/automations?setup=${status}`;
   try {
     return `${portalOrigin()}${path}`;
@@ -75,7 +75,8 @@ router.get('/github/status', async (req, res) => {
 
 // A GitHub user or organisation login: alphanumerics and single inner
 // hyphens, at most 39 characters.
-const GITHUB_LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+const GITHUB_LOGIN_PATTERN =
+  /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 
 // GET /api/setup/github/manifest[?organization=<login>] — admin-only; returns
 // the form-POST target and manifest JSON the browser submits to GitHub.
@@ -88,13 +89,26 @@ router.get('/github/manifest', requireAdmin, async (req, res) => {
   if (
     organization !== undefined &&
     organization !== '' &&
-    (typeof organization !== 'string' || !GITHUB_LOGIN_PATTERN.test(organization))
+    (typeof organization !== 'string' ||
+      !GITHUB_LOGIN_PATTERN.test(organization))
   ) {
-    res.status(400).json({ error: 'organization must be a GitHub organisation login' });
+    res
+      .status(400)
+      .json({ error: 'organization must be a GitHub organisation login' });
     return;
   }
   const oid = 'admin'; // state binds the callback to a flow we started, not to a person
   const state = signState(oid);
+  // Without PORTAL_URL the URLs fall back to localhost, and the manifest bakes
+  // them into the App, so production must set it.
+  if (
+    process.env.NODE_ENV === 'production' &&
+    !process.env.PORTAL_URL?.trim()
+  ) {
+    console.error('PORTAL_URL is not set; refusing to register the GitHub App');
+    res.status(500).json({ error: 'PORTAL_URL is not set' });
+    return;
+  }
   let origin;
   try {
     origin = portalOrigin();

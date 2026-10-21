@@ -124,12 +124,22 @@ const call = (method, route, auth) =>
     req.end();
   });
 
+test('install-url is admin-only', async () => {
+  saveCredentials(STORED);
+  const res = await call(
+    'POST',
+    '/api/connections/github/install-url',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.equal(res.status, 403);
+  assert.equal(res.body.installUrl, undefined);
+});
 
 test('install-url is a 409 setup pointer before the app is created', async () => {
   const res = await call(
     'POST',
     '/api/connections/github/install-url',
-    `Bearer ${USER_TOKEN}`,
+    `Bearer ${ADMIN_TOKEN}`,
   );
   assert.equal(res.status, 409);
   assert.equal(res.body.error, NOT_CONFIGURED_MESSAGE);
@@ -140,7 +150,7 @@ test('install-url uses the stored slug once the manifest flow has run', async ()
   const res = await call(
     'POST',
     '/api/connections/github/install-url',
-    `Bearer ${USER_TOKEN}`,
+    `Bearer ${ADMIN_TOKEN}`,
   );
   assert.equal(res.status, 200);
   assert.match(
@@ -204,6 +214,29 @@ test('setup manifest registers callbacks on the portal origin', async () => {
   assert.equal(manifest.hook_attributes, undefined);
 });
 
+test('setup manifest refuses to register localhost when PORTAL_URL is unset in production', async () => {
+  const portal = process.env.PORTAL_URL;
+  const nodeEnv = process.env.NODE_ENV;
+  process.env.PORTAL_URL = '  ';
+  process.env.NODE_ENV = 'production';
+  try {
+    const res = await call(
+      'GET',
+      '/api/setup/github/manifest',
+      `Bearer ${ADMIN_TOKEN}`,
+    );
+    assert.equal(res.status, 500);
+    assert.deepEqual(res.body, { error: 'PORTAL_URL is not set' });
+  } finally {
+    process.env.PORTAL_URL = portal;
+    if (nodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = nodeEnv;
+    }
+  }
+});
+
 test('setup manifest registers under an organisation when one is given', async () => {
   const personal = await call(
     'GET',
@@ -233,7 +266,10 @@ test('setup manifest registers under an organisation when one is given', async (
     '/api/setup/github/manifest?organization=',
     `Bearer ${ADMIN_TOKEN}`,
   );
-  assert.match(empty.body.action, /^https:\/\/github\.com\/settings\/apps\/new/);
+  assert.match(
+    empty.body.action,
+    /^https:\/\/github\.com\/settings\/apps\/new/,
+  );
 });
 
 for (const organization of [
@@ -339,7 +375,7 @@ test('a corrupt credentials store fails cleanly without echoing its contents', a
   const install = await call(
     'POST',
     '/api/connections/github/install-url',
-    `Bearer ${USER_TOKEN}`,
+    `Bearer ${ADMIN_TOKEN}`,
   );
   assert.equal(install.status, 500);
   assert.deepEqual(install.body, {

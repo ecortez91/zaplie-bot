@@ -18,12 +18,17 @@ const {
   requireGithubSlug,
 } = require('./githubAppConfig');
 const { requireMsalOid } = require('./requireMsalOid');
+const { requireAdmin } = require('./adminAuth');
 
 const router = express.Router();
 
-// POST /api/connections/github/install-url — caller authenticates with a real
-// MSAL ID token; the signed state ties the install redirect back to their oid.
-router.post('/github/install-url', async (req, res) => {
+// POST /api/connections/github/install-url — admin-only (Zaplie.Admin). The
+// installation belongs to the organisation and exposes its private repository
+// list, so only an admin may attach it. The signed state ties the install
+// redirect back to the admin's oid, and /github/setup accepts nothing else, so
+// this gate also covers the setup URL (a top-level GitHub redirect that carries
+// no bearer token).
+router.post('/github/install-url', requireAdmin, async (req, res) => {
   const oid = await requireMsalOid(req, res);
   if (!oid) {
     return;
@@ -74,7 +79,11 @@ router.get('/github/setup', async (req, res) => {
     return;
   }
   const [oid] = started;
-  if (typeof installationId !== 'string' || !/^\d+$/.test(installationId)) {
+  // Canonical positive id only: no leading zeros, at most 15 digits.
+  if (
+    typeof installationId !== 'string' ||
+    !/^[1-9]\d{0,14}$/.test(installationId)
+  ) {
     fail();
     return;
   }

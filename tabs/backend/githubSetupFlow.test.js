@@ -128,13 +128,13 @@ const stub = async (input, options = {}) => {
       pem: privateKey,
     });
   }
-  const installation = /^https:\/\/api\.github\.com\/app\/installations\/(\d+)$/.exec(
-    url,
-  );
+  const installation =
+    /^https:\/\/api\.github\.com\/app\/installations\/(\d+)$/.exec(url);
   if (installation) {
     if (!verifyAppJwt(auth)) return json(401, { message: 'Bad credentials' });
     const id = installation[1];
-    if (id === OURS) return json(200, { id: 4242, account: { login: 'acme-org' } });
+    if (id === OURS)
+      return json(200, { id: 4242, account: { login: 'acme-org' } });
     if (id === ELSEWHERE) {
       return json(200, { id: 5150, account: { login: 'someone-else' } });
     }
@@ -163,7 +163,9 @@ const stub = async (input, options = {}) => {
     assert.equal(auth, `Bearer ${USER_TOKEN_VALUE}`);
     return json(200, { id: 583231, login: 'octocat' });
   }
-  if (url === `https://api.github.com/app/installations/${OURS}/access_tokens`) {
+  if (
+    url === `https://api.github.com/app/installations/${OURS}/access_tokens`
+  ) {
     return verifyAppJwt(auth)
       ? json(201, { token: 'installation-token' })
       : json(401, { message: 'Bad credentials' });
@@ -216,6 +218,8 @@ before(async () => {
 
 beforeEach(() => {
   calls.length = 0;
+  // Each test starts with no recorded installation.
+  fs.rmSync(path.join(tempDir, 'connections.json'), { force: true });
 });
 
 after(async () => {
@@ -336,18 +340,20 @@ test('setup -> install -> owner-checked connection -> identity link, with no GIT
   // 3. Install; GitHub's setup URL is checked with the App JWT against the
   // stored owner (case-insensitively) and saved straight away.
   calls.length = 0;
-  const location = await installAndReturn(USER_TOKEN, OURS);
+  const location = await installAndReturn(ADMIN_TOKEN, OURS);
   assert.equal(location, `${SETTINGS}?github=repos_connected`);
   assert.deepEqual(calls, [`https://api.github.com/app/installations/${OURS}`]);
   assertNoUserAuthorization();
-  assert.equal(await connected(USER_TOKEN), true);
+  assert.equal(await connected(ADMIN_TOKEN), true);
+  // Recorded against the admin who installed it (tenant-wide: issue 496).
+  assert.equal(await connected(USER_TOKEN), false);
 
   // 4. Repositories are listed with an installation token minted from the
   // stored App key (the stub checks the JWT against the stored key).
   const repos = await call(
     'GET',
     '/api/connections/github/repos',
-    `Bearer ${USER_TOKEN}`,
+    `Bearer ${ADMIN_TOKEN}`,
   );
   assert.equal(repos.status, 200);
   assert.deepEqual(repos.body.repositories, [
@@ -411,7 +417,9 @@ test('a GitHub error during the check saves nothing', async () => {
   assert.equal(location, `${SETTINGS}?github=install_error`);
   assert.ok(
     logged.some(line =>
-      line.includes('GitHub installation check failed: installation lookup failed: 502'),
+      line.includes(
+        'GitHub installation check failed: installation lookup failed: 502',
+      ),
     ),
   );
   assert.equal(await connected(ADMIN_TOKEN), false);
@@ -428,7 +436,9 @@ test('the setup URL records nothing without our install state', async () => {
   const identityState = signPurposeState('identity', ['oid-admin']);
   const crossed = await call(
     'GET',
-    setupUrl(`installation_id=${OURS}&setup_action=install&state=${identityState}`),
+    setupUrl(
+      `installation_id=${OURS}&setup_action=install&state=${identityState}`,
+    ),
   );
   assert.equal(crossed.headers.location, `${SETTINGS}?github=install_error`);
   const installState = signPurposeState('install', ['oid-admin']);
@@ -454,9 +464,22 @@ test('the setup URL records nothing without our install state', async () => {
   // A non-numeric id is refused before GitHub is asked anything.
   const odd = await call(
     'GET',
-    setupUrl(`installation_id=..%2F1&setup_action=install&state=${installState}`),
+    setupUrl(
+      `installation_id=..%2F1&setup_action=install&state=${installState}`,
+    ),
   );
   assert.equal(odd.headers.location, `${SETTINGS}?github=install_error`);
+
+  // Only canonical ids: no leading zeros, no zero, at most 15 digits.
+  for (const id of ['0', `0${OURS}`, '1234567890123456']) {
+    const refused = await call(
+      'GET',
+      setupUrl(
+        `installation_id=${id}&setup_action=install&state=${installState}`,
+      ),
+    );
+    assert.equal(refused.headers.location, `${SETTINGS}?github=install_error`);
+  }
 
   assert.deepEqual(calls, []);
   assert.equal(await connected(ADMIN_TOKEN), false);
