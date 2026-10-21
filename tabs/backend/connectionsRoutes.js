@@ -7,10 +7,13 @@ const { verifyMsalToken, extractBearerToken } = require('./msalValidator');
 const { signState, verifyState } = require('./githubOAuthState');
 const connectionsStore = require('./connectionsStore');
 const { listInstallationRepos } = require('./githubAppAuth');
+const {
+  GithubAppNotConfiguredError,
+  portalUrl,
+  requireGithubSlug,
+} = require('./githubAppConfig');
 
 const router = express.Router();
-
-const PORTAL_URL = process.env.PORTAL_URL || 'https://localhost:3000';
 
 const requireMsalOid = async (req, res) => {
   const token = extractBearerToken(req);
@@ -34,10 +37,12 @@ router.post('/github/install-url', async (req, res) => {
   if (!oid) {
     return;
   }
-  const slug = process.env.GITHUB_APP_SLUG;
-  if (!slug) {
-    console.error('GITHUB_APP_SLUG is not set');
-    res.status(503).json({ error: 'GitHub App is not configured' });
+  let slug;
+  try {
+    slug = requireGithubSlug();
+  } catch (error) {
+    console.error(error.message);
+    res.status(error.status).json({ error: error.message });
     return;
   }
   const installUrl = `https://github.com/apps/${slug}/installations/new?state=${signState(
@@ -52,15 +57,15 @@ router.get('/github/setup', (req, res) => {
   const { installation_id: installationId, state } = req.query;
   const oid = typeof state === 'string' ? verifyState(state) : null;
   if (!oid) {
-    res.redirect(`${PORTAL_URL}?github=install_error`);
+    res.redirect(`${portalUrl()}?github=install_error`);
     return;
   }
   if (installationId) {
     connectionsStore.setInstallation(oid, String(installationId));
-    res.redirect(`${PORTAL_URL}?github=repos_connected`);
+    res.redirect(`${portalUrl()}?github=repos_connected`);
     return;
   }
-  res.redirect(`${PORTAL_URL}?github=install_error`);
+  res.redirect(`${portalUrl()}?github=install_error`);
 });
 
 // GET /api/connections/github/repos — caller authenticates with a real MSAL ID
@@ -80,7 +85,8 @@ router.get('/github/repos', async (req, res) => {
     res.json({ connected: true, repositories });
   } catch (error) {
     console.error('Listing installation repositories failed:', error.message);
-    res.status(502).json({ error: error.message });
+    const status = error instanceof GithubAppNotConfiguredError ? 409 : 502;
+    res.status(status).json({ error: error.message });
   }
 });
 

@@ -2,29 +2,14 @@
 // GitHub App auth: mint the App JWT, exchange it for an installation token, and
 // list the repos the installer selected. RS256 signing uses Node's built-in
 // crypto (the private key GitHub issues is PKCS1, which crypto signs directly).
-const fs = require('fs');
 const crypto = require('crypto');
 const { requestTimeoutSignal } = require('./httpTimeout');
+const { requireGithubApp } = require('./githubAppConfig');
 
 const base64url = (input) => Buffer.from(input).toString('base64url');
 
 const createAppJwt = () => {
-  const appId = process.env.GITHUB_APP_ID;
-  if (!appId) {
-    throw new Error('GITHUB_APP_ID is not set');
-  }
-  const keyPath = process.env.GITHUB_APP_PRIVATE_KEY_PATH;
-  if (!keyPath) {
-    throw new Error('GITHUB_APP_PRIVATE_KEY_PATH is not set');
-  }
-  let privateKeyPem;
-  try {
-    privateKeyPem = fs.readFileSync(keyPath, 'utf8');
-  } catch (error) {
-    throw new Error(
-      `failed to read GitHub App private key at ${keyPath}: ${error.message}`,
-    );
-  }
+  const { appId, privateKeyPem } = requireGithubApp();
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   const header = { alg: 'RS256', typ: 'JWT' };

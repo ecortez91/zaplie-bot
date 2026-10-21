@@ -10,25 +10,17 @@ const identityStore = require('./identityStore');
 const { requireLnbitsConfig, getLnbitsToken, lnbitsGet } = require('./lnbitsAdmin');
 const { requestTimeoutSignal } = require('./httpTimeout');
 const { findUniqueUserByAadObjectId } = require('./lnbitsUserDirectory');
+const {
+  GithubAppNotConfiguredError,
+  portalUrl,
+  requireGithubOAuth,
+} = require('./githubAppConfig');
 
 const router = express.Router();
 
 const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
 const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const GITHUB_USER_URL = 'https://api.github.com/user';
-const PORTAL_URL = process.env.PORTAL_URL || '/';
-
-const requireGithubOAuthConfig = () => {
-  const clientId = process.env.GITHUB_OAUTH_CLIENT_ID;
-  const clientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
-  const redirectUri = process.env.GITHUB_OAUTH_REDIRECT_URI;
-  if (!clientId || !clientSecret || !redirectUri) {
-    throw new Error(
-      'GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET and GITHUB_OAUTH_REDIRECT_URI must be set',
-    );
-  }
-  return { clientId, clientSecret, redirectUri };
-};
 
 const requireMsalOid = async (req, res) => {
   const token = extractBearerToken(req);
@@ -55,9 +47,13 @@ router.post('/github/authorize-url', async (req, res) => {
 
   let clientId, redirectUri;
   try {
-    ({ clientId, redirectUri } = requireGithubOAuthConfig());
+    ({ clientId, redirectUri } = requireGithubOAuth());
   } catch (error) {
     console.error(error.message);
+    if (error instanceof GithubAppNotConfiguredError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
     res.status(503).json({ error: 'GitHub OAuth is not configured' });
     return;
   }
@@ -85,9 +81,13 @@ router.get('/github/callback', async (req, res) => {
 
   let clientId, clientSecret, redirectUri;
   try {
-    ({ clientId, clientSecret, redirectUri } = requireGithubOAuthConfig());
+    ({ clientId, clientSecret, redirectUri } = requireGithubOAuth());
   } catch (error) {
     console.error(error.message);
+    if (error instanceof GithubAppNotConfiguredError) {
+      res.redirect(`${portalUrl()}?github=error`);
+      return;
+    }
     res.status(503).send('GitHub OAuth is not configured');
     return;
   }
@@ -135,14 +135,14 @@ router.get('/github/callback', async (req, res) => {
       personAad: oid,
     });
 
-    res.redirect(`${PORTAL_URL}?github=connected`);
+    res.redirect(`${portalUrl()}?github=connected`);
   } catch (error) {
     console.error('GitHub OAuth callback failed:', error);
     if (error.statusCode === 409) {
-      res.redirect(`${PORTAL_URL}?github=conflict`);
+      res.redirect(`${portalUrl()}?github=conflict`);
       return;
     }
-    res.redirect(`${PORTAL_URL}?github=error`);
+    res.redirect(`${portalUrl()}?github=error`);
   }
 });
 

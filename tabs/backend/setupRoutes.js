@@ -11,10 +11,31 @@ const { requireAdmin } = require('./adminAuth');
 const { signState, verifyState } = require('./githubOAuthState');
 const { getCredentials, saveCredentials } = require('./githubAppCredentials');
 const { requestTimeoutSignal } = require('./httpTimeout');
+const {
+  getGithubAppConfig,
+  portalOrigin,
+  portalUrl,
+} = require('./githubAppConfig');
 
 const router = express.Router();
 
-const PORTAL_URL = process.env.PORTAL_URL || 'https://localhost:3000';
+// The admin starts the flow from Automations, so that is where it returns.
+// Built from the origin because PORTAL_URL may point at the Settings route.
+const automationsUrl = (status) =>
+  `${portalOrigin()}/automations?setup=${status}`;
+
+// Where the configuration in use comes from: env vars (an operator set them,
+// and they win), the stored manifest credentials, or nothing yet.
+const configSource = () => {
+  try {
+    return getGithubAppConfig().source || 'none';
+  } catch (error) {
+    // Only an unreadable GITHUB_APP_PRIVATE_KEY_PATH throws here, and that is
+    // still an env configuration, just a broken one.
+    console.error(error.message);
+    return 'env';
+  }
+};
 
 // GET /api/setup/github/status — non-secret creation state for the portal.
 router.get('/github/status', async (req, res) => {
@@ -31,10 +52,16 @@ router.get('/github/status', async (req, res) => {
     return;
   }
   const credentials = getCredentials();
+  const source = configSource();
   res.json(
     credentials
-      ? { created: true, slug: credentials.slug, htmlUrl: credentials.htmlUrl }
-      : { created: false },
+      ? {
+          created: true,
+          slug: credentials.slug,
+          htmlUrl: credentials.htmlUrl,
+          source,
+        }
+      : { created: false, source },
   );
 });
 
@@ -46,9 +73,10 @@ router.get('/github/manifest', requireAdmin, async (req, res) => {
   const suffix = crypto.randomBytes(2).toString('hex');
   const manifest = {
     name: `zaplie-rewards-${suffix}`,
-    url: PORTAL_URL,
-    redirect_url: `${PORTAL_URL}/api/setup/github/callback`,
-    callback_urls: [`${PORTAL_URL}/api/identities/github/callback`],
+    url: portalUrl(),
+    // This backend serves the portal, so its routes hang off the origin.
+    redirect_url: `${portalOrigin()}/api/setup/github/callback`,
+    callback_urls: [`${portalOrigin()}/api/identities/github/callback`],
     // hook_attributes and default_events are omitted until the webhook route
     // exists. The manifest is baked into every App created from it, so naming
     // a missing URL would leave a permanent 404 in each customer's App.
@@ -79,7 +107,7 @@ router.get('/github/callback', async (req, res) => {
     typeof state !== 'string' ||
     verifyState(state) !== 'admin'
   ) {
-    res.redirect(`${PORTAL_URL}?setup=github_error`);
+    res.redirect(automationsUrl('github_error'));
     return;
   }
   try {
@@ -108,10 +136,10 @@ router.get('/github/callback', async (req, res) => {
       pem: app.pem,
       createdAt: new Date().toISOString(),
     });
-    res.redirect(`${PORTAL_URL}?setup=github_created`);
+    res.redirect(automationsUrl('github_created'));
   } catch (error) {
     console.error('GitHub App manifest conversion failed:', error.message);
-    res.redirect(`${PORTAL_URL}?setup=github_error`);
+    res.redirect(automationsUrl('github_error'));
   }
 });
 

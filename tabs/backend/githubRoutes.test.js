@@ -1,0 +1,269 @@
+// Boots the real Express app and walks the GitHub routes before and after the
+// manifest flow stores credentials, with no GITHUB_* env vars set: the stored
+// credentials alone must be enough to install the app and link identities.
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zaplie-github-routes-'));
+process.env.ZAPLIE_DATA_DIR = tempDir;
+process.env.TAB_BACKEND_TOKEN = 'test-internal-token';
+process.env.AAD_TENANT_ID = 'test-tenant';
+process.env.AAD_CLIENT_ID = 'test-client';
+// The identity docs point PORTAL_URL at the Settings route; GitHub callbacks
+// must still land on the origin.
+process.env.PORTAL_URL = 'https://portal.example.com/settings';
+for (const key of [
+  'GITHUB_APP_ID',
+  'GITHUB_APP_PRIVATE_KEY_PATH',
+  'GITHUB_APP_SLUG',
+  'GITHUB_OAUTH_CLIENT_ID',
+  'GITHUB_OAUTH_CLIENT_SECRET',
+  'GITHUB_OAUTH_REDIRECT_URI',
+]) {
+  delete process.env[key];
+}
+
+const assert = require('node:assert/strict');
+const { after, before, beforeEach, test } = require('node:test');
+const http = require('http');
+
+const ADMIN_TOKEN = 'admin-token';
+const USER_TOKEN = 'user-token';
+
+// Same require.cache stand-in as configRoutes.test.js: real verification
+// would need live JWKS.
+const claimsFor = token => {
+  if (token !== ADMIN_TOKEN && token !== USER_TOKEN) {
+    throw new Error('invalid token');
+  }
+  return { oid: 'oid-1', roles: token === ADMIN_TOKEN ? ['Zaplie.Admin'] : [] };
+};
+
+const validatorPath = require.resolve('./msalValidator');
+require.cache[validatorPath] = {
+  id: validatorPath,
+  filename: validatorPath,
+  loaded: true,
+  exports: {
+    verifyMsalPayload: async token => claimsFor(token),
+    verifyMsalToken: async token => claimsFor(token).oid,
+    verifyMsalClaims: async token => claimsFor(token),
+    extractBearerToken: req => {
+      const header = req.headers['authorization'] || '';
+      return header.startsWith('Bearer ') ? header.slice(7) : null;
+    },
+  },
+};
+
+const {
+  saveCredentials,
+  clearCredentialsForTests,
+} = require('./githubAppCredentials');
+const app = require('./server');
+
+const STORED = {
+  appId: '1001',
+  slug: 'zaplie-rewards-abcd',
+  htmlUrl: 'https://github.com/apps/zaplie-rewards-abcd',
+  clientId: 'Iv1.stored',
+  clientSecret: 'stored-secret',
+  webhookSecret: 'stored-webhook',
+  pem: 'stored-pem',
+  createdAt: '2026-10-21T00:00:00.000Z',
+};
+
+let server;
+let base;
+
+before(async () => {
+  await new Promise(resolve => {
+    server = app.listen(0, () => {
+      base = `http://127.0.0.1:${server.address().port}`;
+      resolve();
+    });
+  });
+});
+
+beforeEach(() => {
+  clearCredentialsForTests();
+});
+
+after(async () => {
+  await new Promise(resolve => server.close(resolve));
+  delete process.env.ZAPLIE_DATA_DIR;
+  const safePrefix = `${path.resolve(os.tmpdir())}${path.sep}`;
+  assert.equal(path.resolve(tempDir).startsWith(safePrefix), true);
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+const call = (method, route, auth) =>
+  new Promise((resolve, reject) => {
+    const req = http.request(
+      `${base}${route}`,
+      { method, headers: auth ? { Authorization: auth } : {} },
+      res => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => {
+          raw += chunk;
+        });
+        res.on('end', () => {
+          let body = null;
+          try {
+            body = JSON.parse(raw);
+          } catch {
+            // Redirects and plain-text bodies stay null.
+          }
+          resolve({ status: res.statusCode, body, headers: res.headers });
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+
+const SETUP_POINTER =
+  'GitHub app not created yet: an admin can create it from Automations';
+
+test('install-url is a 409 setup pointer before the app is created', async () => {
+  const res = await call(
+    'POST',
+    '/api/connections/github/install-url',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, SETUP_POINTER);
+});
+
+test('install-url uses the stored slug once the manifest flow has run', async () => {
+  saveCredentials(STORED);
+  const res = await call(
+    'POST',
+    '/api/connections/github/install-url',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.equal(res.status, 200);
+  assert.match(
+    res.body.installUrl,
+    /^https:\/\/github\.com\/apps\/zaplie-rewards-abcd\/installations\/new\?state=/,
+  );
+});
+
+test('identity authorize-url is a 409 setup pointer before the app is created', async () => {
+  const res = await call(
+    'POST',
+    '/api/identities/github/authorize-url',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, SETUP_POINTER);
+});
+
+test('identity authorize-url uses the stored client and the manifest callback', async () => {
+  saveCredentials(STORED);
+  const res = await call(
+    'POST',
+    '/api/identities/github/authorize-url',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.equal(res.status, 200);
+  const url = new URL(res.body.authorizeUrl);
+  assert.equal(url.searchParams.get('client_id'), 'Iv1.stored');
+  assert.equal(
+    url.searchParams.get('redirect_uri'),
+    'https://portal.example.com/api/identities/github/callback',
+  );
+  // The client secret never reaches the browser.
+  assert.doesNotMatch(res.body.authorizeUrl, /stored-secret/);
+});
+
+test('setup manifest is admin-only', async () => {
+  const res = await call(
+    'GET',
+    '/api/setup/github/manifest',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.equal(res.status, 403);
+});
+
+test('setup manifest registers callbacks on the portal origin', async () => {
+  const res = await call(
+    'GET',
+    '/api/setup/github/manifest',
+    `Bearer ${ADMIN_TOKEN}`,
+  );
+  assert.equal(res.status, 200);
+  const manifest = JSON.parse(res.body.manifest);
+  assert.equal(
+    manifest.redirect_url,
+    'https://portal.example.com/api/setup/github/callback',
+  );
+  assert.deepEqual(manifest.callback_urls, [
+    'https://portal.example.com/api/identities/github/callback',
+  ]);
+  assert.equal(manifest.hook_attributes, undefined);
+});
+
+test('setup status reports where the configuration comes from', async () => {
+  const before = await call(
+    'GET',
+    '/api/setup/github/status',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.equal(before.status, 200);
+  assert.deepEqual(before.body, { created: false, source: 'none' });
+
+  saveCredentials(STORED);
+  const afterSave = await call(
+    'GET',
+    '/api/setup/github/status',
+    `Bearer ${USER_TOKEN}`,
+  );
+  assert.deepEqual(afterSave.body, {
+    created: true,
+    slug: STORED.slug,
+    htmlUrl: STORED.htmlUrl,
+    source: 'manifest',
+  });
+
+  process.env.GITHUB_APP_SLUG = 'env-slug';
+  try {
+    const withEnv = await call(
+      'GET',
+      '/api/setup/github/status',
+      `Bearer ${USER_TOKEN}`,
+    );
+    // The stored app signs (its key group is complete); only the slug is env.
+    assert.equal(withEnv.body.source, 'manifest');
+
+    const keyPath = path.join(tempDir, 'env-key.pem');
+    fs.writeFileSync(keyPath, 'env-pem');
+    process.env.GITHUB_APP_ID = '42';
+    process.env.GITHUB_APP_PRIVATE_KEY_PATH = keyPath;
+    const envApp = await call(
+      'GET',
+      '/api/setup/github/status',
+      `Bearer ${USER_TOKEN}`,
+    );
+    assert.equal(envApp.body.source, 'env');
+    // Non-secret fields only, whichever source is in use.
+    assert.doesNotMatch(JSON.stringify(envApp.body), /pem|secret/i);
+  } finally {
+    delete process.env.GITHUB_APP_SLUG;
+    delete process.env.GITHUB_APP_ID;
+    delete process.env.GITHUB_APP_PRIVATE_KEY_PATH;
+  }
+});
+
+test('setup callback with a bad state returns to Automations with an error', async () => {
+  const res = await call(
+    'GET',
+    '/api/setup/github/callback?code=abc&state=forged',
+  );
+  assert.equal(res.status, 302);
+  assert.equal(
+    res.headers.location,
+    'https://portal.example.com/automations?setup=github_error',
+  );
+});

@@ -1,6 +1,7 @@
 // filepath: tabs/backend/githubAppCredentials.js
-// Credentials issued by the GitHub App manifest conversion. Stored server-side
-// only, and read exclusively from this file: there is no env var fallback.
+// Credentials issued by the GitHub App manifest conversion, stored server-side
+// only. This module is just the store: githubAppConfig.js chooses between
+// these and the GITHUB_* env vars (env wins when set).
 const fs = require('fs');
 const { dataPath } = require('./dataPaths');
 const { writeJsonSecure } = require('./secureJsonStore');
@@ -18,4 +19,8 @@ const saveCredentials = (credentials) => {
   writeJsonSecure(STORE_PATH, credentials);
 };
 
-module.exports = { getCredentials, saveCredentials };
+const clearCredentialsForTests = () => {
+  fs.rmSync(STORE_PATH, { force: true });
+};
+
+module.exports = { getCredentials, saveCredentials, clearCredentialsForTests };
