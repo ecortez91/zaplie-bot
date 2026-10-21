@@ -55,10 +55,17 @@ button again.
   `409 GitHub app not created yet: an admin can create it from Automations` -
   a clear pointer to the setup button, never a crash or a silent failure.
 - `GET /api/setup/github/status` (any signed-in user, non-secret fields only)
-  returns `created`, `slug`, `htmlUrl` and `source`: `env` when the App comes
-  from env vars, `manifest` when it comes from the stored credentials, `none`
-  before either exists. Automations shows "configured by environment" for
-  `env` and needs no creation click.
+  returns `created`, `slug`, `htmlUrl`, `source` and `installationReady`.
+  `source` is `env` when the App comes from env vars, `manifest` when it comes
+  from the stored credentials, `none` before either exists.
+  `installationReady` is true only when both the slug and the App key resolve,
+  since listing an installation's repositories needs the key: a
+  `GITHUB_APP_SLUG` on its own reports `env` but not ready. Automations
+  enables "Connect repositories" only when ready, and shows "configured by
+  environment" (no creation click) for a complete env configuration.
+- A corrupt credentials file or a `PORTAL_URL` that does not parse fails the
+  affected route with a generic error. Neither the file's contents nor the
+  parser's message reaches a response.
 - The same app authorizes users for identity linking ("Connect GitHub" in
   Settings), so one creation click covers both the org connection and personal
   identity.
