@@ -45,11 +45,12 @@ const verifyState = (state) => {
 };
 
 // Purpose-tagged state for the GitHub round trips that must not be mixed up:
-// 'identity' (oid) for "Connect GitHub" and 'install' (oid) for "Connect
-// repositories". The tag must match, so neither passes as the other, and
-// neither passes verifyState (whose payload has no tag) or the reverse: the
+// 'identity' (oid, browser binding hash) for "Connect GitHub" and 'install'
+// (oid, browser binding hash) for "Connect repositories". The tag and the
+// field count must both match, so neither passes as the other, and neither
+// passes verifyState (which takes exactly three parts) or the reverse: the
 // manifest callback still accepts only the plain 'admin' state.
-const PURPOSE_FIELDS = { identity: 1, install: 1 };
+const PURPOSE_FIELDS = { identity: 2, install: 2 };
 
 const signPurposeState = (purpose, fields) => {
   if (

@@ -5,6 +5,11 @@
 const express = require('express');
 const authMiddleware = require('./authMiddleware');
 const { signPurposeState, verifyPurposeState } = require('./githubOAuthState');
+const {
+  issueBinding,
+  bindingMatches,
+  clearBinding,
+} = require('./browserBinding');
 const identityStore = require('./identityStore');
 const { requireLnbitsConfig, getLnbitsToken, lnbitsGet } = require('./lnbitsAdmin');
 const { requestTimeoutSignal } = require('./httpTimeout');
@@ -21,6 +26,8 @@ const router = express.Router();
 const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
 const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const GITHUB_USER_URL = 'https://api.github.com/user';
+const BINDING_COOKIE = 'zaplie_gh_identity';
+const BINDING_PATH = '/api/identities/github';
 
 // POST /api/identities/github/authorize-url
 // Caller authenticates with a real MSAL ID token — never a client-supplied oid.
@@ -48,13 +55,20 @@ router.post('/github/authorize-url', async (req, res) => {
   url.searchParams.set('redirect_uri', redirectUri);
   // No scope: a GitHub App's user token carries the App's permissions, and
   // GET /user needs none.
-  url.searchParams.set('state', signPurposeState('identity', [oid]));
+  // Bound to this browser too: otherwise someone could pass their link to a
+  // colleague and have the colleague's GitHub account (and rewards) linked to
+  // the sender (login CSRF). The flow runs in a top-level browser tab, where
+  // the portal is first-party. See browserBinding.js.
+  const binding = issueBinding(res, BINDING_COOKIE, BINDING_PATH);
+  url.searchParams.set('state', signPurposeState('identity', [oid, binding]));
   res.json({ authorizeUrl: url.toString() });
 });
 
 // GET /api/identities/github/callback — GitHub redirects here after authorizing.
 router.get('/github/callback', async (req, res) => {
   const { code, state } = req.query;
+  // One use only, whatever the outcome.
+  clearBinding(res, BINDING_COOKIE, BINDING_PATH);
   if (typeof code !== 'string' || typeof state !== 'string') {
     res.status(400).send('missing code or state');
     return;
@@ -64,7 +78,14 @@ router.get('/github/callback', async (req, res) => {
     res.status(400).send('invalid or expired state');
     return;
   }
-  const [oid] = fields;
+  const [oid, binding] = fields;
+  if (!bindingMatches(req, BINDING_COOKIE, binding)) {
+    console.error(
+      'GitHub identity link returned to a browser that did not start it',
+    );
+    res.redirect(`${portalUrl()}?github=error`);
+    return;
+  }
 
   let clientId, clientSecret, redirectUri;
   try {

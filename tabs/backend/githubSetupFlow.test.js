@@ -4,7 +4,8 @@
 // is an installation of this App on the account that owns it; the portal
 // lists its repositories with the stored key; and a teammate links their
 // GitHub identity with the stored OAuth client, which is what the reward flow
-// resolves recipients by.
+// resolves recipients by. Both round trips are bound to the browser that
+// started them by a cookie, so a forwarded link records nothing.
 // GitHub and LNbits are stubbed at fetch; everything else is the real server.
 const crypto = require('crypto');
 const fs = require('fs');
@@ -66,7 +67,6 @@ require.cache[validatorPath] = {
   },
 };
 
-const { signPurposeState } = require('./githubOAuthState');
 const app = require('./server');
 
 // GitHub issues PKCS1 keys from the manifest conversion.
@@ -233,32 +233,71 @@ after(async () => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-// node:http, not fetch: the test's own calls must not hit the stub.
-const call = (method, route, auth) =>
-  new Promise((resolve, reject) => {
-    const req = http.request(
-      `${base}${route}`,
-      { method, headers: auth ? { Authorization: auth } : {} },
-      res => {
-        let raw = '';
-        res.setEncoding('utf8');
-        res.on('data', chunk => {
-          raw += chunk;
-        });
-        res.on('end', () => {
-          let body = null;
-          try {
-            body = JSON.parse(raw);
-          } catch {
-            // Redirects stay null.
-          }
-          resolve({ status: res.statusCode, body, headers: res.headers });
-        });
-      },
+// A minimal cookie jar per simulated browser, so the binding cookie travels
+// the way a browser would carry it (or, for a link forwarded to someone else,
+// doesn't).
+const newBrowser = () => new Map();
+
+const remember = (jar, setCookie) => {
+  for (const header of setCookie || []) {
+    const [pair, ...attributes] = header.split(';');
+    const index = pair.indexOf('=');
+    const name = pair.slice(0, index).trim();
+    const value = pair.slice(index + 1).trim();
+    const expired = attributes.some(attribute =>
+      /^\s*expires=Thu, 01 Jan 1970/i.test(attribute),
     );
+    if (expired || !value) {
+      jar.delete(name);
+    } else {
+      jar.set(name, { value, attributes: attributes.map(a => a.trim()) });
+    }
+  }
+};
+
+// node:http, not fetch: the test's own calls must not hit the stub. With a
+// jar, the request sends its cookies and the response's Set-Cookie updates it.
+const call = (method, route, auth, jar) =>
+  new Promise((resolve, reject) => {
+    const headers = auth ? { Authorization: auth } : {};
+    if (jar && jar.size > 0) {
+      headers.Cookie = [...jar]
+        .map(([name, cookie]) => `${name}=${cookie.value}`)
+        .join('; ');
+    }
+    const req = http.request(`${base}${route}`, { method, headers }, res => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => {
+        raw += chunk;
+      });
+      res.on('end', () => {
+        if (jar) remember(jar, res.headers['set-cookie']);
+        let body = null;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          // Redirects stay null.
+        }
+        resolve({ status: res.statusCode, body, headers: res.headers });
+      });
+    });
     req.on('error', reject);
     req.end();
   });
+
+const assertBindingCookie = (cookie, cookiePath) => {
+  assert.ok(cookie, 'binding cookie set');
+  for (const attribute of [
+    `Path=${cookiePath}`,
+    'Max-Age=600',
+    'HttpOnly',
+    'Secure',
+    'SameSite=Lax',
+  ]) {
+    assert.ok(cookie.attributes.includes(attribute), attribute);
+  }
+};
 
 const setupUrl = query => `/api/connections/github/setup?${query}`;
 
@@ -266,24 +305,55 @@ const connected = async token =>
   (await call('GET', '/api/connections/github', `Bearer ${token}`)).body
     .connected;
 
-// Starts an install as `token` and follows GitHub's setup URL redirect with
-// `installationId`, returning where the portal sends the browser next.
-const installAndReturn = async (token, installationId) => {
+// Starts an install as `token` in the browser `jar` and returns the install
+// link's state.
+const startInstall = async (token, jar) => {
   const install = await call(
     'POST',
     '/api/connections/github/install-url',
     `Bearer ${token}`,
+    jar,
   );
-  const state = new URL(install.body.installUrl).searchParams.get('state');
+  return new URL(install.body.installUrl).searchParams.get('state');
+};
+
+// Follows GitHub's setup URL redirect in `jar` with `installationId` and
+// `state`, returning where the portal sends the browser next.
+const returnToSetup = async (installationId, state, jar) => {
   const back = await call(
     'GET',
     setupUrl(
       `installation_id=${installationId}&setup_action=install&state=${state}`,
     ),
+    undefined,
+    jar,
   );
   assert.equal(back.status, 302);
   return back.headers.location;
 };
+
+// Starts an install as `token` and comes back in the same browser.
+const installAndReturn = async (token, installationId, jar = newBrowser()) =>
+  returnToSetup(installationId, await startInstall(token, jar), jar);
+
+// Starts an identity link as `token` in `jar`; returns GitHub's authorize URL.
+const startIdentity = async (token, jar) => {
+  const start = await call(
+    'POST',
+    '/api/identities/github/authorize-url',
+    `Bearer ${token}`,
+    jar,
+  );
+  return new URL(start.body.authorizeUrl);
+};
+
+const identityCallback = (state, jar) =>
+  call(
+    'GET',
+    `/api/identities/github/callback?code=identity-code&state=${state}`,
+    undefined,
+    jar,
+  );
 
 // No install check may involve a user sign-in or user token.
 const assertNoUserAuthorization = () => {
@@ -337,11 +407,17 @@ test('setup -> install -> owner-checked connection -> identity link, with no GIT
   assert.equal(status.body.installationReady, true);
   assert.equal(status.body.source, 'manifest');
 
-  // 3. Install; GitHub's setup URL is checked with the App JWT against the
-  // stored owner (case-insensitively) and saved straight away.
+  // 3. Install. The install link sets the browser binding cookie, scoped to
+  // the connections routes; the same browser returns to GitHub's setup URL,
+  // which is checked with the App JWT against the stored owner
+  // (case-insensitively) and saved straight away. The cookie is then cleared.
   calls.length = 0;
-  const location = await installAndReturn(ADMIN_TOKEN, OURS);
+  const jar = newBrowser();
+  const installState = await startInstall(ADMIN_TOKEN, jar);
+  assertBindingCookie(jar.get('zaplie_gh_install'), '/api/connections/github');
+  const location = await returnToSetup(OURS, installState, jar);
   assert.equal(location, `${SETTINGS}?github=repos_connected`);
+  assert.equal(jar.has('zaplie_gh_install'), false, 'cleared after use');
   assert.deepEqual(calls, [`https://api.github.com/app/installations/${OURS}`]);
   assertNoUserAuthorization();
   assert.equal(await connected(ADMIN_TOKEN), true);
@@ -368,22 +444,23 @@ test('setup -> install -> owner-checked connection -> identity link, with no GIT
   // 5. Identity linking with the stored OAuth client (the stub asserts the
   // stored client id and secret), then the lookup the reward flow uses:
   // GitHub numeric id -> Entra oid -> LNbits user.
-  const identityStart = await call(
-    'POST',
-    '/api/identities/github/authorize-url',
-    `Bearer ${USER_TOKEN}`,
+  // The authorize link sets its own binding cookie, scoped to the identity
+  // routes, and the callback clears it.
+  const userBrowser = newBrowser();
+  const identityUrl = await startIdentity(USER_TOKEN, userBrowser);
+  assertBindingCookie(
+    userBrowser.get('zaplie_gh_identity'),
+    '/api/identities/github',
   );
-  const identityUrl = new URL(identityStart.body.authorizeUrl);
   assert.equal(identityUrl.searchParams.get('client_id'), 'Iv1.manifest');
   assert.equal(identityUrl.searchParams.get('redirect_uri'), IDENTITY_URI);
   assert.equal(identityUrl.searchParams.has('scope'), false);
-  const linked = await call(
-    'GET',
-    `/api/identities/github/callback?code=identity-code&state=${identityUrl.searchParams.get(
-      'state',
-    )}`,
+  const linked = await identityCallback(
+    identityUrl.searchParams.get('state'),
+    userBrowser,
   );
   assert.equal(linked.headers.location, `${SETTINGS}?github=connected`);
+  assert.equal(userBrowser.has('zaplie_gh_identity'), false, 'cleared');
 
   const resolved = await call(
     'GET',
@@ -395,6 +472,68 @@ test('setup -> install -> owner-checked connection -> identity link, with no GIT
     personAad: 'oid-user',
     lnbitsUserId: 'lnbits-user-1',
   });
+});
+
+test('an install link opened in another browser saves nothing (login CSRF)', async () => {
+  // The admin starts an install and forwards the GitHub link. The state is
+  // valid, but the browser that comes back did not start the flow.
+  const sender = newBrowser();
+  const state = await startInstall(ADMIN_TOKEN, sender);
+  calls.length = 0;
+
+  // No cookie at all...
+  assert.equal(
+    await returnToSetup(OURS, state, newBrowser()),
+    `${SETTINGS}?github=install_error`,
+  );
+  // ...or the cookie of another install started in that browser.
+  const other = newBrowser();
+  await startInstall(ADMIN_TOKEN, other);
+  assert.equal(
+    await returnToSetup(OURS, state, other),
+    `${SETTINGS}?github=install_error`,
+  );
+  assert.equal(other.has('zaplie_gh_install'), false, 'cleared on failure');
+
+  assert.ok(
+    logged.some(line =>
+      line.includes('GitHub install returned to a browser that did not start it'),
+    ),
+  );
+  // Refused before GitHub is asked anything.
+  assert.deepEqual(calls, []);
+  assert.equal(await connected(ADMIN_TOKEN), false);
+});
+
+test('an identity link opened in another browser links nothing (login CSRF)', async () => {
+  const sender = newBrowser();
+  const state = (await startIdentity(ADMIN_TOKEN, sender)).searchParams.get(
+    'state',
+  );
+  const other = newBrowser();
+  await startIdentity(USER_TOKEN, other);
+  calls.length = 0;
+
+  for (const browser of [newBrowser(), other]) {
+    const res = await identityCallback(state, browser);
+    assert.equal(res.headers.location, `${SETTINGS}?github=error`);
+  }
+  assert.equal(other.has('zaplie_gh_identity'), false, 'cleared');
+  assert.ok(
+    logged.some(line =>
+      line.includes(
+        'GitHub identity link returned to a browser that did not start it',
+      ),
+    ),
+  );
+  // The one-shot code is never exchanged.
+  assert.deepEqual(calls, []);
+  const mine = await call(
+    'GET',
+    '/api/identities/mine',
+    `Bearer ${ADMIN_TOKEN}`,
+  );
+  assert.deepEqual(mine.body, { identities: [] });
 });
 
 test('an installation on another account is not saved', async () => {
@@ -432,20 +571,16 @@ test('the setup URL records nothing without our install state', async () => {
   );
   assert.equal(forged.headers.location, `${SETTINGS}?github=install_error`);
 
-  // An identity state is not an install state, nor the reverse.
-  const identityState = signPurposeState('identity', ['oid-admin']);
-  const crossed = await call(
-    'GET',
-    setupUrl(
-      `installation_id=${OURS}&setup_action=install&state=${identityState}`,
-    ),
+  // An identity state is not an install state, nor the reverse, even in the
+  // browser that holds both binding cookies.
+  const jar = newBrowser();
+  const identityState = (await startIdentity(ADMIN_TOKEN, jar)).searchParams.get(
+    'state',
   );
-  assert.equal(crossed.headers.location, `${SETTINGS}?github=install_error`);
-  const installState = signPurposeState('install', ['oid-admin']);
-  const identity = await call(
-    'GET',
-    `/api/identities/github/callback?code=identity-code&state=${installState}`,
-  );
+  const crossed = await returnToSetup(OURS, identityState, jar);
+  assert.equal(crossed, `${SETTINGS}?github=install_error`);
+  const installState = await startInstall(ADMIN_TOKEN, jar);
+  const identity = await identityCallback(installState, jar);
   assert.equal(identity.status, 400);
 
   // A repository change made on GitHub itself carries no state of ours.
@@ -461,24 +596,12 @@ test('the setup URL records nothing without our install state', async () => {
     `${SETTINGS}?github=install_requested`,
   );
 
-  // A non-numeric id is refused before GitHub is asked anything.
-  const odd = await call(
-    'GET',
-    setupUrl(
-      `installation_id=..%2F1&setup_action=install&state=${installState}`,
-    ),
-  );
-  assert.equal(odd.headers.location, `${SETTINGS}?github=install_error`);
-
-  // Only canonical ids: no leading zeros, no zero, at most 15 digits.
-  for (const id of ['0', `0${OURS}`, '1234567890123456']) {
-    const refused = await call(
-      'GET',
-      setupUrl(
-        `installation_id=${id}&setup_action=install&state=${installState}`,
-      ),
-    );
-    assert.equal(refused.headers.location, `${SETTINGS}?github=install_error`);
+  // A non-numeric id is refused before GitHub is asked anything, and so is
+  // any id that is not canonical: no leading zeros, no zero, at most 15
+  // digits. Each comes back in the browser that started its install.
+  for (const id of ['..%2F1', '0', `0${OURS}`, '1234567890123456']) {
+    const refused = await installAndReturn(ADMIN_TOKEN, id);
+    assert.equal(refused, `${SETTINGS}?github=install_error`);
   }
 
   assert.deepEqual(calls, []);

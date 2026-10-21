@@ -2,10 +2,18 @@
 // GitHub App "install -> select repositories" flow. The person installs the
 // app choosing repos; GitHub redirects back to /github/setup with the
 // installation id and our signed state, which ties it to the caller's oid.
-// GitHub documents that the setup URL's installation_id can be spoofed, so the
-// id is checked with the App JWT before it is saved (see /github/setup).
+// The setup URL also requires the browser binding cookie set when the install
+// link was issued (browserBinding.js), so a link handed to someone else cannot
+// attach their installation to the sender's account. GitHub documents that the
+// setup URL's installation_id can be spoofed, so the id is then checked with
+// the App JWT before it is saved (see /github/setup).
 const express = require('express');
 const { signPurposeState, verifyPurposeState } = require('./githubOAuthState');
+const {
+  issueBinding,
+  bindingMatches,
+  clearBinding,
+} = require('./browserBinding');
 const connectionsStore = require('./connectionsStore');
 const {
   listInstallationRepos,
@@ -21,6 +29,9 @@ const { requireMsalOid } = require('./requireMsalOid');
 const { requireAdmin } = require('./adminAuth');
 
 const router = express.Router();
+
+const BINDING_COOKIE = 'zaplie_gh_install';
+const BINDING_PATH = '/api/connections/github';
 
 // POST /api/connections/github/install-url — admin-only (Zaplie.Admin). The
 // installation belongs to the organisation and exposes its private repository
@@ -45,7 +56,12 @@ router.post('/github/install-url', requireAdmin, async (req, res) => {
     res.status(500).json({ error: 'GitHub App configuration is unavailable' });
     return;
   }
-  const state = signPurposeState('install', [oid]);
+  // Bound to this browser too: the install link only works in the browser that
+  // asked for it. The flow runs in a top-level browser tab (GitHub refuses to
+  // load in a frame), where the portal is first-party, so the SameSite=Lax
+  // cookie returns on GitHub's redirect to the setup URL.
+  const binding = issueBinding(res, BINDING_COOKIE, BINDING_PATH);
+  const state = signPurposeState('install', [oid, binding]);
   const installUrl = `https://github.com/apps/${slug}/installations/new?state=${state}`;
   res.json({ installUrl });
 });
@@ -78,7 +94,15 @@ router.get('/github/setup', async (req, res) => {
     fail();
     return;
   }
-  const [oid] = started;
+  // From here on this is our install round trip: the binding is one use only,
+  // whatever the outcome, and must match before GitHub is asked anything.
+  clearBinding(res, BINDING_COOKIE, BINDING_PATH);
+  const [oid, binding] = started;
+  if (!bindingMatches(req, BINDING_COOKIE, binding)) {
+    console.error('GitHub install returned to a browser that did not start it');
+    fail();
+    return;
+  }
   // Canonical positive id only: no leading zeros, at most 15 digits.
   if (
     typeof installationId !== 'string' ||
