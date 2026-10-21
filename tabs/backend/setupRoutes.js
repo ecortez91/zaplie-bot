@@ -92,11 +92,19 @@ router.get('/github/manifest', requireAdmin, async (req, res) => {
     // This backend serves the portal, so its routes hang off the origin.
     redirect_url: `${origin}/api/setup/github/callback`,
     callback_urls: [`${origin}/api/identities/github/callback`],
+    // Installs return to the connections route, which records the installation
+    // against the signed state's oid; setup_on_update does the same when repos
+    // are added or removed later. request_oauth_on_install stays off: with it
+    // on, GitHub skips the setup URL and runs its own OAuth flow straight into
+    // the identity callback, carrying no state and no installation to record.
+    // People link their GitHub identity from Settings instead.
+    setup_url: `${origin}/api/connections/github/setup`,
+    setup_on_update: true,
     // hook_attributes and default_events are omitted until the webhook route
     // exists. The manifest is baked into every App created from it, so naming
     // a missing URL would leave a permanent 404 in each customer's App.
     public: false,
-    request_oauth_on_install: true,
+    request_oauth_on_install: false,
     default_permissions: {
       issues: 'read',
       pull_requests: 'read',

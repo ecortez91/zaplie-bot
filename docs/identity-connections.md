@@ -35,7 +35,7 @@ Configure these values in the tab backend's approved server-side secret store.
 | `AAD_CLIENT_ID` | Audience expected on the portal's MSAL ID token. |
 | `GITHUB_OAUTH_CLIENT_ID` | Optional. GitHub OAuth client id; when unset, the client of the App created from Automations is used. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | Optional, set together with the client id. Server only. |
-| `GITHUB_OAUTH_REDIRECT_URI` | Optional. Defaults to `<PORTAL_URL origin>/api/identities/github/callback`, the callback the App manifest registers. Set it only when a separate OAuth App registered a different URL. |
+| `GITHUB_OAUTH_REDIRECT_URI` | Optional, and used only with the env client above. Defaults to `<PORTAL_URL origin>/api/identities/github/callback`, the callback the App manifest registers. Set it only when a separate OAuth App registered a different URL. The stored App client always uses the manifest callback. |
 | `IDENTITY_STATE_SECRET` | Random secret used to sign the expiring OAuth state. |
 | `PORTAL_URL` | Portal URL that receives the `?github=connected`, `conflict`, or `error` result. Its origin is also where the GitHub callbacks are registered. |
 | `TAB_BACKEND_TOKEN` | Shared server-to-server token expected from the bot. Generate independently with `openssl rand -hex 32`. |

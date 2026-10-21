@@ -55,17 +55,32 @@ router.post('/github/install-url', async (req, res) => {
   res.json({ installUrl });
 });
 
-// GET /api/connections/github/setup — GitHub redirects the browser here after
-// the user installs the app and picks repositories.
+// GET /api/connections/github/setup — the App's setup URL (set by the
+// manifest). GitHub redirects the browser here after an install or, with
+// setup_on_update, after the repository selection changes, passing
+// installation_id, setup_action and the state from our install link.
 router.get('/github/setup', (req, res) => {
-  const { installation_id: installationId, state } = req.query;
-  const oid = typeof state === 'string' ? verifyState(state) : null;
-  if (!oid) {
-    res.redirect(`${portalUrl()}?github=install_error`);
+  const {
+    installation_id: installationId,
+    setup_action: setupAction,
+    state,
+  } = req.query;
+  // An org member without rights asked an owner to install: nothing exists yet.
+  if (setupAction === 'request') {
+    res.redirect(`${portalUrl()}?github=install_requested`);
     return;
   }
-  if (installationId) {
-    connectionsStore.setInstallation(oid, String(installationId));
+  const oid = typeof state === 'string' ? verifyState(state) : null;
+  if (!oid) {
+    // A change made on GitHub's own settings page carries no state of ours.
+    // The installation was recorded when it was created and its repositories
+    // are listed live, so there is nothing to write.
+    const status = setupAction === 'update' ? 'repos_updated' : 'install_error';
+    res.redirect(`${portalUrl()}?github=${status}`);
+    return;
+  }
+  if (typeof installationId === 'string' && /^\d+$/.test(installationId)) {
+    connectionsStore.setInstallation(oid, installationId);
     res.redirect(`${portalUrl()}?github=repos_connected`);
     return;
   }

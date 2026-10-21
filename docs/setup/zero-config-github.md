@@ -26,8 +26,17 @@ Reference: [Registering a GitHub App from a manifest](https://docs.github.com/en
    lands back on `/automations?setup=github_created` (or
    `?setup=github_error`), which the page shows as a toast.
 4. **Install** - the "Connect repositories" button sends the admin to
-   `github.com/apps/{slug}/installations/new` to pick repositories, exactly
-   like Vercel or Linear. The button stays disabled until the App exists.
+   `github.com/apps/{slug}/installations/new?state=...` to pick repositories,
+   exactly like Vercel or Linear. The button stays disabled until the App
+   exists. GitHub then redirects to the App's setup URL,
+   `/api/connections/github/setup?installation_id=...&setup_action=install&state=...`,
+   which records the installation against the person in the signed `state`
+   and returns to the portal with `?github=repos_connected`. With
+   `setup_on_update`, later repository changes come back the same way. A
+   change made on GitHub's own settings page carries no state of ours, so it
+   records nothing and shows `?github=repos_updated`. An install that an
+   organisation owner still has to approve (`setup_action=request`) shows
+   `?github=install_requested`.
 
 The conversion code is one-shot and the whole flow must finish within one
 hour; a stale or replayed code fails loudly and the admin just clicks the
@@ -48,9 +57,13 @@ button again.
 - Callback URLs are built from the origin of `PORTAL_URL`, because that
   variable may point at a route such as Settings: the manifest registers
   `<origin>/api/setup/github/callback` and
-  `<origin>/api/identities/github/callback`, and the identity flow sends the
-  same callback as its `redirect_uri` unless `GITHUB_OAUTH_REDIRECT_URI` is
-  set.
+  `<origin>/api/identities/github/callback` plus the setup URL
+  `<origin>/api/connections/github/setup`. With the stored client, the
+  identity flow always sends that callback as its `redirect_uri`.
+  `GITHUB_OAUTH_REDIRECT_URI` applies only to an env OAuth client (a separate
+  OAuth App), since the stored client has nothing else registered.
+- A group set entirely in env never reads the credentials file, so a corrupt
+  file cannot block it.
 - Until the app is created, GitHub-backed endpoints respond
   `409 GitHub app not created yet: an admin can create it from Automations` -
   a clear pointer to the setup button, never a crash or a silent failure.
@@ -68,7 +81,11 @@ button again.
   parser's message reaches a response.
 - The same app authorizes users for identity linking ("Connect GitHub" in
   Settings), so one creation click covers both the org connection and personal
-  identity.
+  identity. The manifest sets `request_oauth_on_install: false`: with it on,
+  GitHub skips the setup URL after an install and runs its own OAuth flow into
+  the identity callback with no `state` and no installation id, so the
+  installation was never recorded. Installing the App and linking an identity
+  are therefore two separate steps.
 - Internal secrets that only Zaplie itself consumes (`IDENTITY_STATE_SECRET`,
   the Nostr org key) are generated with `crypto.randomBytes` on first use and
   persisted server-side (`tabs/backend/secrets.json`, gitignored). They are

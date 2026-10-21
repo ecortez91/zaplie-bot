@@ -286,8 +286,9 @@ created. Must be a positive integer; a failed grant is logged, not retried
 | Portal backend
 
 | `GITHUB_OAUTH_REDIRECT_URI`
-| Optional. Defaults to `<PORTAL_URL origin>/api/identities/github/callback`,
-  the callback the App manifest registers
+| Optional, and used only with the env OAuth client above. Defaults to
+  `<PORTAL_URL origin>/api/identities/github/callback`, the callback the App
+  manifest registers. The stored App client always uses the manifest callback
 | Portal backend
 
 | `TREASURY_USERNAME`

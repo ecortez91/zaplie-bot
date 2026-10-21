@@ -71,7 +71,11 @@ npm test                               # watch mode
 - Test files: `tabs/backend/*.test.js` (auth middleware, config routes, rate
   limiting, reward amounts, automation payments, LNbits user directory, SPA
   fallback route, GitHub App configuration precedence, and the GitHub routes
-  before and after the manifest flow stores credentials)
+  before and after the manifest flow stores credentials).
+  `githubSetupFlow.test.js` walks the whole zero-config path with no
+  `GITHUB_*` env vars and GitHub's API stubbed at `fetch`: manifest
+  conversion, the install link, the App's setup URL recording the
+  installation, and listing its repositories with the stored key
 - `server.js` only calls `listen()` when run directly, so each test file can
   `require('./server')` and bind an ephemeral port
 - Needs no credentials: each file that loads the server sets placeholder
