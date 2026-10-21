@@ -73,9 +73,13 @@ npm test                               # watch mode
   fallback route, GitHub App configuration precedence, and the GitHub routes
   before and after the manifest flow stores credentials).
   `githubSetupFlow.test.js` walks the whole zero-config path with no
-  `GITHUB_*` env vars and GitHub's API stubbed at `fetch`: manifest
-  conversion, the install link, the App's setup URL recording the
-  installation, and listing its repositories with the stored key
+  `GITHUB_*` env vars, with GitHub and LNbits stubbed at `fetch`. It covers
+  manifest conversion, the install link, the setup URL, the installation
+  ownership check against the user's `/user/installations`, listing the
+  repositories with the stored key, identity linking with the stored OAuth
+  client, and the identity resolution the reward flow uses. It also covers
+  spoofed installation ids, failed token exchanges, tampered states, and
+  checks that no GitHub user token reaches disk or logs
 - `server.js` only calls `listen()` when run directly, so each test file can
   `require('./server')` and bind an ephemeral port
 - Needs no credentials: each file that loads the server sets placeholder

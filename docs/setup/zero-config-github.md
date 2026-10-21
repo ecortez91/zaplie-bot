@@ -29,14 +29,24 @@ Reference: [Registering a GitHub App from a manifest](https://docs.github.com/en
    `github.com/apps/{slug}/installations/new?state=...` to pick repositories,
    exactly like Vercel or Linear. The button stays disabled until the App
    exists. GitHub then redirects to the App's setup URL,
-   `/api/connections/github/setup?installation_id=...&setup_action=install&state=...`,
-   which records the installation against the person in the signed `state`
-   and returns to the portal with `?github=repos_connected`. With
-   `setup_on_update`, later repository changes come back the same way. A
-   change made on GitHub's own settings page carries no state of ours, so it
-   records nothing and shows `?github=repos_updated`. An install that an
-   organisation owner still has to approve (`setup_action=request`) shows
-   `?github=install_requested`.
+   `/api/connections/github/setup?installation_id=...&setup_action=install&state=...`.
+5. **Verify** - GitHub documents that a setup URL's `installation_id` can be
+   spoofed, so the setup route saves nothing yet. It sends the person through
+   the App's user authorization (`github.com/login/oauth/authorize`, with the
+   App's OAuth client and a new signed state binding their oid to that
+   installation id). GitHub returns to `/api/connections/github/verify`,
+   which exchanges the code for a user token and pages through
+   `GET /user/installations`. It records the installation only if that user
+   can access it, then returns to the portal with `?github=repos_connected`.
+   The user token serves that one lookup and is never stored, logged or sent
+   to the browser. A failed exchange or lookup, a missing installation or a
+   tampered state returns `?github=install_error`.
+
+With `setup_on_update`, GitHub also redirects to the setup URL after a
+repository change made on its own settings page. That redirect carries no
+state of ours, so it records nothing and shows `?github=repos_updated`. An
+install that an organisation owner still has to approve
+(`setup_action=request`) shows `?github=install_requested`.
 
 The conversion code is one-shot and the whole flow must finish within one
 hour; a stale or replayed code fails loudly and the admin just clicks the
@@ -56,12 +66,19 @@ button again.
   one.
 - Callback URLs are built from the origin of `PORTAL_URL`, because that
   variable may point at a route such as Settings: the manifest registers
-  `<origin>/api/setup/github/callback` and
-  `<origin>/api/identities/github/callback` plus the setup URL
-  `<origin>/api/connections/github/setup`. With the stored client, the
+  `<origin>/api/setup/github/callback`, the callback URLs
+  `<origin>/api/identities/github/callback` (identity linking, listed first)
+  and `<origin>/api/connections/github/verify` (install ownership check), and
+  the setup URL `<origin>/api/connections/github/setup`. With the stored
+  client, the
   identity flow always sends that callback as its `redirect_uri`.
   `GITHUB_OAUTH_REDIRECT_URI` applies only to an env OAuth client (a separate
   OAuth App), since the stored client has nothing else registered.
+- The install ownership check needs a GitHub App user token:
+  `/user/installations` does not accept OAuth App tokens. With env OAuth
+  credentials, they must therefore be the GitHub App's own client, with
+  `<origin>/api/connections/github/verify` registered as a callback URL.
+  Otherwise "Connect repositories" ends in `install_error`.
 - A group set entirely in env never reads the credentials file, so a corrupt
   file cannot block it.
 - Until the app is created, GitHub-backed endpoints respond

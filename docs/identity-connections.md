@@ -70,6 +70,14 @@ To use a separate GitHub OAuth App instead, set `GITHUB_OAUTH_CLIENT_ID` and
 register `<PORTAL_URL origin>/api/identities/github/callback` as its callback,
 or set `GITHUB_OAUTH_REDIRECT_URI` to the URL it registers.
 
+The same OAuth client also verifies repository installs. Before saving an
+installation, "Connect repositories" asks the person to authorize the App and
+checks `GET /user/installations` with that user token. The check needs a
+GitHub App user token, so env OAuth credentials that belong to a separate
+OAuth App break that step. To keep it working, use the GitHub App's own
+client and register `<PORTAL_URL origin>/api/connections/github/verify` as
+another callback URL.
+
 Identity and pending-reward JSON stores are runtime data and are gitignored.
 Do not copy production identity data into the repository or screenshots.
 
