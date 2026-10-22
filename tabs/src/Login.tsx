@@ -39,9 +39,19 @@ export function Login() {
       <div className="content">
         <Image
           src={KnowAllLogo}
-          styles={{ root: centeredImageStyle }}
+          // A fixed logo height, not a share of the width: sized by width,
+          // the logo grew taller than its box in a wide tab and the box
+          // clipped off its wordmark.
+          styles={{
+            root: centeredImageStyle,
+            image: {
+              display: 'block',
+              height: '42px',
+              width: 'auto',
+              margin: '0 auto',
+            },
+          }}
           alt="KnowAll AI"
-          width="10%"
         />
         <AuthenticatedTemplate>
           <Text styles={{ root: { color: 'white' } }}>Opening your feed…</Text>
@@ -51,7 +61,7 @@ export function Login() {
             styles={{
               root: {
                 color: '#84cc16',
-                fontSize: '4vw',
+                fontSize: 'clamp(32px, 4vw, 64px)',
                 fontWeight: 'bold',
                 lineHeight: '64px',
               },
