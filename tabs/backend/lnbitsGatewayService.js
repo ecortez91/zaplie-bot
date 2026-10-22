@@ -170,7 +170,10 @@ const redactSensitive = (value, depth = 0) => {
 
 const sanitizeUser = (user) => {
   const extra = parseExtra(user);
-  let displayName = String(user.username || user.name || user.id || '');
+  // Users created by the portal carry their name only in extra.display_name.
+  let displayName = String(
+    user.username || user.name || extra.display_name || user.id || '',
+  );
   if (displayName.includes('@')) {
     displayName = displayName
       .split('@')[0]
@@ -859,5 +862,6 @@ module.exports = {
   sanitizePayment,
   sanitizeWallet,
   sanitizeBalanceMsat,
+  sanitizeUser,
   sendZap,
 };

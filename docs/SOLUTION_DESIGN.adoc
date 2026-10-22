@@ -351,8 +351,10 @@ router basename and the MSAL redirect URIs, and `REACT_APP_API_BASE_URL` into
 the prefix of every `/api` call. In a browser the header and footer are shown;
 inside Teams (`useTeamsAuth` → `teams-js` context) they stay hidden.
 
-`RequireAuth` also calls `POST /api/lnbits/users/me` once per page load before
-rendering a guarded route. The bot creates LNbits users on a person's first
+`RequireAuth` also calls `POST /api/lnbits/users/me` before rendering a guarded
+route. The call is shared by every guarded route and keyed to the signed-in
+account: a different person signing in without a reload is set up afresh, and
+a failed call is retried on the next guarded route instead of being remembered. The bot creates LNbits users on a person's first
 Teams turn, so outside Teams nobody had one and every gateway route refused
 them. The route is the only one mounted before the gateway's `assertCaller`
 check; it acts on the verified token's `oid` alone, creates only the user and

@@ -16,6 +16,7 @@ const {
   sanitizePayment,
   sanitizeWallet,
   sanitizeBalanceMsat,
+  sanitizeUser,
 } = require('./lnbitsGatewayService');
 const {
   createZapIdempotencyStore,
@@ -894,4 +895,19 @@ test('provisioning refuses an oid that is not a plain id', async () => {
     (error) => error.status === 400,
   );
   assert.deepEqual(calls, []);
+});
+
+test('a portal-provisioned user is listed by the name stored in extra.display_name', () => {
+  const user = sanitizeUser({
+    id: 'lnbits-user-9',
+    external_id: 'oid-9',
+    extra: { display_name: 'Satoshi Nakamoto' },
+  });
+  assert.equal(user.displayName, 'Satoshi Nakamoto');
+  assert.equal(sanitizeUser({ id: 'lnbits-user-10' }).displayName, 'lnbits-user-10');
+  assert.equal(
+    sanitizeUser({ id: 'u', username: 'jack', extra: { display_name: 'Ignored' } })
+      .displayName,
+    'jack',
+  );
 });
