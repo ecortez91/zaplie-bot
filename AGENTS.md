@@ -168,10 +168,16 @@ table):
 - The reward-name API uses a placeholder shared secret (`your-secret-token`)
   across `tabs/src/apiService.tsx`, `tabs/backend/authMiddleware.js`, and
   `src/services/fetchRewardsName.ts`.
-- Bot conversation state uses `MemoryStorage`, and the zap-card ledger
-  (`src/services/zapLedger.ts`) is an in-process `Map` whose entries never
-  expire: both are lost on restart and not multi-instance safe, and an LNbits
-  call that never settles leaves that card locked until the bot restarts.
+- Bot conversation state uses `MemoryStorage`: it is lost on restart and not
+  multi-instance safe.
+- The zap-card ledger (`src/services/zapLedger.ts`) and the automation reward
+  ledger (`src/services/rewardLedger.ts`) are JSON files under
+  `ZAPLIE_DATA_DIR` that share the lock and atomic-write code in
+  `src/services/ledgerFile.ts`. A record left `processing`, `unknown` or
+  `uncertain` blocks that payment until an operator reconciles it with LNbits
+  (`docs/DEPLOYMENT.adoc`); never clear one just to let a retry through.
+  `POST /api/v1/rewards` (`src/rewardsRoute.ts`) requires an
+  `Idempotency-Key` header and replays the first result for a repeat.
 - The GitHub Actions workflows (`.github/workflows/`) build only `tabs/` and
   deploy to the `zappie-dev` App Service (slot per PR / `testing`); the bot is
   deployed via `teamsapp deploy`, not CI.
