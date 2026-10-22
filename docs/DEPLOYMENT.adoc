@@ -545,10 +545,10 @@ Complete these once per new environment, right after the first deployment:
   `aad.manifest.json`) against the production Zaplie app. The manifest would
   rename the app and replace its roles, redirect URIs and token settings with
   the development values. Production's admin role id also differs from the
-  manifest's, so applying it would drop the admin role people hold. In
-  production, create and change roles in Entra directly (App registrations →
-  the Zaplie app → App roles), using the same values as the manifest
-  (`Zaplie.Admin`, `Zaplie.User`).
+  manifest's (the `Zaplie.User` id matches), so applying it would drop the
+  admin role people hold. In production, create and change roles in Entra
+  directly (App registrations → the Zaplie app → App roles), using the same
+  values as the manifest (`Zaplie.Admin`, `Zaplie.User`).
 . *Create the app roles.* The roles are declared in `aad.manifest.json`.
   ** *Development and other provisioned environments:* they only materialise
      on the app registration after `teamsapp provision` runs again (the
