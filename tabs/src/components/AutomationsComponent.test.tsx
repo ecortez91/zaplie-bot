@@ -167,7 +167,7 @@ describe('AutomationsComponent panel independence', () => {
   });
 
   test('the Logic Apps pilot card names every remaining production blocker', async () => {
-    mockGetAutomationsStats.mockReturnValue(new Promise(() => undefined));
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
 
     await renderAutomations();
 
