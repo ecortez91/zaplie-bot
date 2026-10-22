@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { apiUrl } from './appLocation';
 
 // Where the GitHub App configuration in use comes from: GITHUB_* env vars on
 // the server (they win), the credentials the manifest flow stored, or neither.
@@ -30,7 +31,7 @@ export const getGithubSetupStatus = async (
   idToken: string,
   signal?: AbortSignal,
 ): Promise<GithubSetupStatus> => {
-  const response = await axios.get('/api/setup/github/status', {
+  const response = await axios.get(apiUrl('/api/setup/github/status'), {
     ...auth(idToken),
     signal,
   });
@@ -45,7 +46,7 @@ export const startGithubAppCreation = async (
   idToken: string,
   organization?: string,
 ): Promise<void> => {
-  const response = await axios.get('/api/setup/github/manifest', {
+  const response = await axios.get(apiUrl('/api/setup/github/manifest'), {
     ...auth(idToken),
     params: organization ? { organization } : undefined,
   });
