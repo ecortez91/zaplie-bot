@@ -226,7 +226,11 @@ describe('useTeamsAuth', () => {
         account,
       });
     } finally {
-      process.env.PUBLIC_URL = publicUrl;
+      if (publicUrl === undefined) {
+        delete process.env.PUBLIC_URL;
+      } else {
+        process.env.PUBLIC_URL = publicUrl;
+      }
     }
   });
 
