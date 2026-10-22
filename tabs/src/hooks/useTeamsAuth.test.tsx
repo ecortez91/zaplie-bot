@@ -16,6 +16,10 @@ import { toast } from 'react-toastify';
 import { createQueryClient } from '../query/queryClient';
 import { clearApiCache } from '../services/lnbits/cache';
 import { teamsContextQueryKey } from '../services/teamsContextService';
+import {
+  SILENT_SIGN_IN_GUARD_KEY,
+  markSilentSignInAttempted,
+} from '../services/silentSignIn';
 import { useTeamsAuth } from './useTeamsAuth';
 
 jest.mock('@microsoft/teams-js', () => ({
@@ -176,5 +180,22 @@ describe('useTeamsAuth', () => {
       postLogoutRedirectUri: `${window.location.origin}/login`,
       account: null,
     });
+  });
+
+  test('logout clears the silent sign-in guard so the next visit can try again', async () => {
+    mockIsInitialized.mockReturnValue(false);
+    mockInitialize.mockRejectedValue(new Error('Not running inside Teams'));
+    mockLogoutPopup.mockResolvedValue(undefined);
+    markSilentSignInAttempted();
+    const client = createQueryClient();
+
+    await renderConsumers(client, 1);
+    const button = container.querySelector('button');
+
+    await act(async () => {
+      button?.click();
+    });
+
+    expect(sessionStorage.getItem(SILENT_SIGN_IN_GUARD_KEY)).toBeNull();
   });
 });

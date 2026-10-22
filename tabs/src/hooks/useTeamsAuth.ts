@@ -4,6 +4,7 @@ import { InteractionStatus } from '@azure/msal-browser';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import { clearApiCache } from '../services/lnbits/cache';
+import { clearSilentSignInGuard } from '../services/silentSignIn';
 import { teamsContextQueryOptions } from '../services/teamsContextService';
 
 interface UseTeamsAuthReturn {
@@ -41,6 +42,8 @@ export const useTeamsAuth = (): UseTeamsAuthReturn => {
     try {
       // Clear API cache before logout to prevent stale data on re-login
       clearApiCache();
+      // A later visit to the sign-in page may try a silent sign-in again.
+      clearSilentSignInGuard();
 
       await instance.logoutPopup({
         postLogoutRedirectUri: window.location.origin + '/login',

@@ -15,6 +15,10 @@ import { theme } from './styles/Theme';
 import App from './App';
 import { ConfigurationError } from './services/authConfig';
 import { getMsalInstance } from './services/msalClient';
+import {
+  isSilentSignInResponse,
+  relaySilentSignInResponse,
+} from './services/silentSignIn';
 import { CacheProvider } from './utils/CacheContext';
 import { queryClient } from './query/queryClient';
 
@@ -105,5 +109,9 @@ export const initializeApp = async () => {
   renderApp(msalInstance);
 };
 
-// Exported so the startup sequence can be awaited in tests.
-export const startupComplete = initializeApp();
+// Exported so the startup sequence can be awaited in tests. The hidden iframe
+// of a silent Teams sign-in only hands its response back to the tab; it never
+// starts a second copy of the app.
+export const startupComplete = isSilentSignInResponse()
+  ? relaySilentSignInResponse()
+  : initializeApp();
