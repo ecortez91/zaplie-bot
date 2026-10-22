@@ -3,6 +3,7 @@
 import { describe, expect, test } from '@jest/globals';
 import {
   ZAP_MEMO_PREVIEW_MAX,
+  assistantUnavailableGuide,
   greetingGuide,
   isGreeting,
   unrecognizedCommandGuide,
@@ -109,5 +110,18 @@ describe('command guides', () => {
     expect(text.startsWith("Hi! I'm Zaplie.")).toBe(true);
     expect(text).not.toContain("D'oh");
     for (const name of names) expect(text).toContain(`- **${name}**`);
+  });
+
+  test("the assistant-unavailable reply says it can't chat and lists the commands, without a D'oh", () => {
+    const text = assistantUnavailableGuide(names);
+    expect(text.startsWith("I can't chat right now")).toBe(true);
+    expect(text).not.toContain("D'oh");
+    for (const name of names) expect(text).toContain(`- **${name}**`);
+    const lines = text.split('\n');
+    expect(lines[lines.length - 3]).toBe('- **show leaderboard**');
+    expect(lines[lines.length - 2]).toBe('');
+    expect(lines[lines.length - 1]).toBe(
+      'Type one of those, or ask me again in a few minutes.',
+    );
   });
 });

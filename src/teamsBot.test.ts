@@ -384,6 +384,61 @@ describe('TeamsBot free text in a 1:1 chat', () => {
     expect(sendActivity).toHaveBeenCalledWith('Hello from the assistant');
   });
 
+  test('lists the commands instead of the generic error when the assistant fails', async () => {
+    config.foundryProjectEndpoint = 'https://foundry.example';
+    config.foundryModel = 'model-1';
+    const failure = new Error('500 server_error');
+    jest.mocked(runConversationalTurn).mockRejectedValueOnce(failure);
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const bot = new TeamsBot();
+    const { context, sendActivity } = makeContext({ text: 'Hi Zaplie!' });
+
+    await bot.run(context);
+
+    expect(sendActivity).toHaveBeenCalledTimes(1);
+    const [guide] = sendActivity.mock.calls[0] as unknown as [string];
+    expect(guide).not.toBe(GENERIC_ERROR_MESSAGE);
+    expect(guide).toContain("I can't chat right now");
+    expect(guide).toContain('send zap');
+    expect(guide).toContain('show my balance');
+    expect(guide).toContain('show leaderboard');
+    expect(consoleError).toHaveBeenCalledWith(
+      'The assistant failed; sending the command guide instead:',
+      failure,
+    );
+  });
+
+  test('starts a fresh assistant conversation after a failed turn', async () => {
+    config.foundryProjectEndpoint = 'https://foundry.example';
+    config.foundryModel = 'model-1';
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest
+      .mocked(runConversationalTurn)
+      .mockResolvedValueOnce({
+        replyText: 'Hello from the assistant',
+        foundryConversationId: 'foundry-conv-1',
+      })
+      .mockRejectedValueOnce(new Error('500 server_error'))
+      .mockResolvedValueOnce({
+        replyText: 'Back again',
+        foundryConversationId: 'foundry-conv-2',
+      });
+    const bot = new TeamsBot();
+
+    for (const text of ['Hi Zaplie!', 'how are you?', 'still there?']) {
+      await bot.run(makeContext({ text }).context);
+    }
+
+    const conversationIds = jest
+      .mocked(runConversationalTurn)
+      .mock.calls.map(call => call[1]);
+    // The failed turn continued the first conversation; the turn after it
+    // starts a new one instead of reusing a conversation that may be broken.
+    expect(conversationIds).toEqual([undefined, 'foundry-conv-1', undefined]);
+  });
+
   test.each([
     ['Hi Zaplie!', "Hi! I'm Zaplie."],
     ['what can you do?', "D'oh! I didn't recognize that command."],
@@ -1051,6 +1106,38 @@ describe('TeamsBot records AgentActivity events', () => {
       expect.objectContaining({
         activityType: 'chat.answered',
         subject: 'command-guide',
+      }),
+    ]);
+  });
+
+  test('a failed assistant turn records chat.failed at level warning, not chat.answered', async () => {
+    const saved = {
+      endpoint: config.foundryProjectEndpoint,
+      model: config.foundryModel,
+    };
+    config.foundryProjectEndpoint = 'https://foundry.example';
+    config.foundryModel = 'model-1';
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest
+      .mocked(runConversationalTurn)
+      .mockRejectedValueOnce(new Error('500 server_error'));
+    const { context } = makeContext({ id: 'msg-assistant', text: 'hello' });
+
+    try {
+      await new TeamsBot().run(context);
+      await pulseSettled();
+    } finally {
+      config.foundryProjectEndpoint = saved.endpoint;
+      config.foundryModel = saved.model;
+    }
+
+    expect(events()).toEqual([
+      expect.objectContaining({
+        activityType: 'chat.failed',
+        level: 'warning',
+        subject: 'assistant-unavailable',
+        channel: 'teams',
+        activityId: 'sha256:msg-assistant',
       }),
     ]);
   });

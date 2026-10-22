@@ -454,7 +454,10 @@ created. Must be a positive integer; a failed grant is logged, not retried
 | Azure AI Foundry project endpoint and model for the conversational
   assistant. Free text that matches no command in a 1:1 chat goes to the
   assistant only when both are set; otherwise the bot replies with the list
-  of commands, as it does in group chats and channels
+  of commands, as it does in group chats and channels. If the assistant
+  fails (for example Foundry returns a server error after the SDK's
+  retries), the bot says it can't chat right now and lists the commands,
+  logs the error and starts a new Foundry conversation on the next message
 | Bot
 
 | `SCM_DO_BUILD_DURING_DEPLOYMENT`
@@ -526,7 +529,7 @@ any other free text:
 | `zap.failed` | error / warning | A zap fails before payment (error), its outcome cannot be confirmed (warning), or an automation reward fails (error)
 | `zap.queued` | info | An automation reward waits for the recipient to connect a wallet
 | `chat.answered` | success / info | A command ran (subject is the command), the assistant replied, or the command guide was shown
-| `chat.failed` | error / warning | A message could not be handled (error) or was turned down with a reason (warning); also the adapter's turn error handler
+| `chat.failed` | error / warning | A message could not be handled (error) or was turned down with a reason (warning); the assistant failed and the command guide was sent instead (warning, subject `assistant-unavailable`); also the adapter's turn error handler
 |===
 
 Telemetry is best effort: the library never throws and every call is wrapped,
