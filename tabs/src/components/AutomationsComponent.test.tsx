@@ -166,6 +166,24 @@ describe('AutomationsComponent panel independence', () => {
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
+  test('the Logic Apps pilot card names every remaining production blocker', async () => {
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+
+    await renderAutomations();
+
+    const card = container.querySelector(
+      '[data-testid="logic-apps-pilot-card"]',
+    );
+    expect(card).not.toBeNull();
+    expect(card?.textContent).toContain('Draft — not production ready');
+    expect(card?.textContent).toContain(
+      'remains blocked until aggregate budget controls, automatic ' +
+        'reconciliation of uncertain payment outcomes and GitHub webhook ' +
+        'signature verification land.',
+    );
+    expect(card?.textContent).not.toContain('durable idempotency');
+  });
+
   test('shows a stats-only error and keeps the other panels when stats rejects', async () => {
     mockGetAutomationsStats.mockRejectedValue(
       new Error('Automations stats response is malformed.'),

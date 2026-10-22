@@ -815,7 +815,7 @@ const AutomationsComponent: FunctionComponent = () => {
           )}
         </div>
 
-        <div className={styles.connCard}>
+        <div className={styles.connCard} data-testid="logic-apps-pilot-card">
           <div className={styles.connCardHead}>
             <span className={styles.cardBadge}>
               <img src={FlowArrowIcon} alt="" />
@@ -829,8 +829,9 @@ const AutomationsComponent: FunctionComponent = () => {
           </div>
           <p className={styles.connDescription}>
             Create a key for the GitHub pull-request sample flow. Production use
-            remains blocked until durable idempotency and aggregate budget
-            controls land.
+            remains blocked until aggregate budget controls, automatic
+            reconciliation of uncertain payment outcomes and GitHub webhook
+            signature verification land.
           </p>
           {isAdmin && (
             <>
