@@ -12,7 +12,10 @@ import { useMsal } from '@azure/msal-react';
 import { InteractionStatus } from '@azure/msal-browser';
 import * as microsoftTeams from '@microsoft/teams-js';
 import { useTeamsAuth } from './useTeamsAuth';
-import { useTeamsSilentSignIn } from './useTeamsSilentSignIn';
+import {
+  TEAMS_CONTEXT_TIMEOUT_MS,
+  useTeamsSilentSignIn,
+} from './useTeamsSilentSignIn';
 import {
   SILENT_SIGN_IN_GUARD_KEY,
   clearSilentSignInGuard,
@@ -111,6 +114,7 @@ describe('useTeamsSilentSignIn', () => {
   });
 
   afterEach(async () => {
+    jest.useRealTimers();
     await act(async () => {
       root.unmount();
     });
@@ -211,6 +215,40 @@ describe('useTeamsSilentSignIn', () => {
 
     expect(mockSsoSilent).not.toHaveBeenCalled();
     expect(container.textContent).toBe('idle');
+  });
+
+  test('shows the Sign In button when Teams never answers, and ignores a late context', async () => {
+    jest.useFakeTimers();
+    let answer:
+      ((context: ReturnType<typeof teamsContext>) => void) | undefined;
+    mockGetContext.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          answer = resolve;
+        }),
+    );
+
+    await act(async () => {
+      mountProbe();
+    });
+    expect(container.textContent).toBe('attempting');
+
+    await act(async () => {
+      jest.advanceTimersByTime(TEAMS_CONTEXT_TIMEOUT_MS);
+    });
+    expect(container.textContent).toBe('idle');
+    expect(mockSsoSilent).not.toHaveBeenCalled();
+    expect(console.debug).toHaveBeenCalledWith(
+      'Silent Teams sign-in did not complete; showing the Sign In button.',
+      expect.any(Error),
+    );
+
+    await act(async () => {
+      answer?.(teamsContext({ loginHint: 'late@example.test' }));
+    });
+    expect(mockSsoSilent).not.toHaveBeenCalled();
+    expect(mockSetActiveAccount).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(SILENT_SIGN_IN_GUARD_KEY)).toBe('1');
   });
 
   test('tries again once the guard is cleared (after a sign-out)', async () => {

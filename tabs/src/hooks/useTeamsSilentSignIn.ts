@@ -9,6 +9,30 @@ import {
 } from '../services/silentSignIn';
 import { useTeamsAuth } from './useTeamsAuth';
 
+// How long to wait for the Teams user before giving up on the silent sign-in.
+// Teams already answered one getContext for the isInTeams check, so a reply
+// normally takes milliseconds; MSAL's own ssoSilent timeout is 10 s.
+export const TEAMS_CONTEXT_TIMEOUT_MS = 5000;
+
+const withTimeout = <T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+
 interface UseTeamsSilentSignInReturn {
   attempting: boolean;
 }
@@ -49,7 +73,11 @@ export const useTeamsSilentSignIn = (): UseTeamsSilentSignInReturn => {
 
     const signIn = async () => {
       try {
-        const { user } = await microsoftTeams.app.getContext();
+        const { user } = await withTimeout(
+          microsoftTeams.app.getContext(),
+          TEAMS_CONTEXT_TIMEOUT_MS,
+          'Timed out waiting for the Teams context.',
+        );
         const result = await instance.ssoSilent({
           ...loginRequest,
           loginHint: user?.loginHint ?? user?.userPrincipalName,
