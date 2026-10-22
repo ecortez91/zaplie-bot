@@ -90,10 +90,15 @@ const createLnbitsRouter = ({
               ? claims.email
               : undefined,
         // Membership facts for the provisioning gate (memberGate.js): the
-        // tenant and the acct optional claim (0 member, 1 guest). Kept as
-        // issued; the gate decides what they mean.
+        // tenant, the acct optional claim (0 member, 1 guest) and the sign-in
+        // name. Kept as issued; the gate decides what they mean. `email`
+        // above is a label only and never reaches the gate.
         tid: typeof claims.tid === 'string' ? claims.tid : undefined,
         acct: claims.acct,
+        preferredUsername:
+          typeof claims.preferred_username === 'string'
+            ? claims.preferred_username
+            : undefined,
       };
       next();
     } catch (error) {
@@ -121,7 +126,7 @@ const createLnbitsRouter = ({
       oid: req.auth.oid,
       tid: req.auth.tid,
       acct: req.auth.acct,
-      preferred_username: req.auth.email,
+      preferred_username: req.auth.preferredUsername,
     });
     if (!verdict.allowed) {
       console.warn(`LNbits provisioning refused (${verdict.reason}) for ${req.auth.oid}`);

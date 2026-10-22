@@ -65,9 +65,9 @@ deployable components in one repository:
 - **Tabs app**: routes `/feed`, `/users`, `/rewards`, `/wallet`, `/settings`
   (MSAL-guarded via `RequireAuth`, which also provisions the signed-in
   person's LNbits user and wallets through `POST /api/lnbits/users/me` on
-  first use outside Teams), plus `/login`, `/auth-start`, `/auth-end`. The
-  same bundle is also served at `https://getzapl.ie/portal/` (built with
-  `PUBLIC_URL=/portal`).
+  first use outside Teams), plus `/login`, `/auth-start`, `/auth-end`. A
+  second build of the same source serves `https://getzapl.ie/portal/`
+  (`PUBLIC_URL=/portal`).
   `tabs/backend/server.js` is a tiny Express API that persists the renamable
   reward label ("Sats") to `tabs/backend/data.json` and serves the production
   build.

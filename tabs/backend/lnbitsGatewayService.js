@@ -424,7 +424,10 @@ const createEnsureCaller = ({
 } = {}) => {
   // Two tabs signing in at once must not create two LNbits users for one
   // person (findUniqueUserByAadObjectId would then refuse them both), so
-  // concurrent calls for the same oid share one operation.
+  // concurrent calls for the same oid share one operation. This map lives in
+  // one process: the portal backend runs as a single App Service instance
+  // (like its other in-memory caches), and a second instance could still
+  // race a first sign-in.
   const inFlight = new Map();
 
   return async ({ aadObjectId, displayName, email }) => {

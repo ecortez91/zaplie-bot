@@ -88,6 +88,17 @@ test('token claims map to the roster shape: acct 0 is a member, 1 a guest', () =
   assert.equal(memberFromTokenClaims({ oid: 'oid-1', tid: HOME, acct: 1 }).userRole, 'guest');
 });
 
+test('the mutable email claim never matches the allowlist', () => {
+  assert.deepEqual(
+    tokenMemberVerdict({ oid: 'o', tid: HOME, acct: 1, email: 'guest.ok@partner.test' }, HOME, allowlist),
+    { allowed: false, reason: 'guest' },
+  );
+  assert.equal(
+    memberFromTokenClaims({ oid: 'o', tid: HOME, acct: 1, email: 'guest.ok@partner.test' }).email,
+    undefined,
+  );
+});
+
 test('a token without a usable acct claim is refused, allowlisted or not', () => {
   for (const claims of [
     { oid: 'allowed-oid', tid: HOME },

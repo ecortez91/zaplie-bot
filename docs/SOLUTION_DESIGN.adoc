@@ -341,9 +341,11 @@ Routes (`tabs/src/App.tsx`): `/feed`, `/users`, `/rewards`, `/wallet`,
 to `/login` on failure) — plus `/login`, `/auth-start`, `/auth-end`. Providers:
 `MsalProvider` → `RewardNameProvider` → `PageLayout`.
 
-The app serves two hosts from one bundle: the Teams tabs at the root of the
-portal App Service, and the browser portal at `https://getzapl.ie/portal/`
-(static files on the website's Static Web App, API calls to the App Service).
+The app has two homes, built separately from the same source: the Teams tabs
+at the root of the portal App Service, and the browser portal at
+`https://getzapl.ie/portal/` (static files on the website's Static Web App,
+API calls to the App Service). A build fixes its asset paths and router
+basename, so one build cannot serve both.
 `tabs/src/services/appLocation.ts` turns the build-time `PUBLIC_URL` into the
 router basename and the MSAL redirect URIs, and `REACT_APP_API_BASE_URL` into
 the prefix of every `/api` call. In a browser the header and footer are shown;

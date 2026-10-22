@@ -1,10 +1,11 @@
 // Where this build of the app lives, and where its API is.
 //
-// The same bundle serves two homes: the Teams tabs at the root of the portal
-// App Service (same-origin Express backend under /api), and the signed-in
-// portal on the marketing site at https://getzapl.ie/portal/ (a static copy,
-// whose API is the App Service). Both are build-time settings, so nothing
-// here is read from the page or the URL at runtime:
+// The same source has two homes, each its own build: the Teams tabs at the
+// root of the portal App Service (same-origin Express backend under /api),
+// and the signed-in portal on the marketing site at https://getzapl.ie/portal/
+// (a static build whose API is the App Service). A build fixes its paths, so
+// one made for the root cannot serve /portal/ and vice versa. Both settings
+// are read at build time; nothing here reads the page or the URL at runtime:
 //
 // - PUBLIC_URL is Create React App's base path. CRA inlines it as
 //   process.env.PUBLIC_URL ('' at the root, '/portal' under /portal/), and

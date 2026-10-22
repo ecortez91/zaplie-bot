@@ -104,12 +104,13 @@ const memberFromTokenClaims = (claims) => {
   return {
     userRole,
     tenantId: typeof claims.tid === 'string' ? claims.tid : undefined,
+    // Only preferred_username (the sign-in name Entra issues) may match the
+    // allowlist. The `email` claim is a mutable profile attribute, so it is
+    // never an authorisation input, even as a fallback.
     email:
       typeof claims.preferred_username === 'string'
         ? claims.preferred_username
-        : typeof claims.email === 'string'
-          ? claims.email
-          : undefined,
+        : undefined,
     aadObjectId: typeof claims.oid === 'string' ? claims.oid : undefined,
   };
 };

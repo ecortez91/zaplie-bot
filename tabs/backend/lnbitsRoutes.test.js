@@ -81,6 +81,8 @@ const verifyMsalPayload = async (token) => {
     return { oid: 'unlinked-oid', tid: 'home-tenant', acct: 1, preferred_username: 'Guest.OK@partner.test' };
   if (token === 'other-tenant-token')
     return { oid: 'unlinked-oid', tid: 'elsewhere', acct: 0 };
+  if (token === 'email-claim-guest-token')
+    return { oid: 'unlinked-oid', tid: 'home-tenant', acct: 1, email: 'guest.ok@partner.test' };
   if (token === 'no-claims-token') return { oid: 'unlinked-oid' };
   if (token === 'no-acct-token') return { oid: 'unlinked-oid', tid: 'home-tenant' };
   throw new Error('bad token');
@@ -276,7 +278,13 @@ test('rejects pagination values that are not plain integers', async () => {
 // it is how they get one. It still needs a verified token, and it acts on the
 // token's oid, never on anything in the body.
 test('only members and allowlisted guests can provision; nothing is created otherwise', async () => {
-  for (const token of ['guest-token', 'other-tenant-token', 'no-claims-token', 'no-acct-token']) {
+  for (const token of [
+    'guest-token',
+    'other-tenant-token',
+    'no-claims-token',
+    'no-acct-token',
+    'email-claim-guest-token',
+  ]) {
     const before = calls.length;
     const response = await request('/api/lnbits/users/me', { method: 'POST', token });
     assert.equal(response.status, 403, token);

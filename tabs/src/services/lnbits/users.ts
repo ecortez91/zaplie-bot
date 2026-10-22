@@ -8,6 +8,12 @@ import {
 import { apiRequest } from './gateway';
 import { getUserWallets } from './wallets';
 
+// Bumped whenever the directory is known to have changed underneath a request
+// (provisioning created someone). A response from an older generation is
+// returned to its caller but never written to the cache, and never clears a
+// newer request's pending slot.
+let directoryGeneration = 0;
+
 // The gateway returns users already mapped to the User shape, so no LNbits
 // payload reaches the browser.
 const getAllUsersFromAPI = async (): Promise<User[]> => {
@@ -22,15 +28,19 @@ const getAllUsersFromAPI = async (): Promise<User[]> => {
     return pendingUsersRequest;
   }
 
-  const usersRequest = (async (): Promise<User[]> => {
-    try {
-      const users = await apiRequest<User[]>('/users');
+  const generation = directoryGeneration;
+  const fetched = (async (): Promise<User[]> => {
+    const users = await apiRequest<User[]>('/users');
+    if (generation === directoryGeneration) {
       apiCache.users = { data: users, timestamp: Date.now() };
-      return users;
-    } finally {
+    }
+    return users;
+  })();
+  const usersRequest: Promise<User[]> = fetched.finally(() => {
+    if (pendingRequests.users === usersRequest) {
       pendingRequests.users = null;
     }
-  })();
+  });
 
   pendingRequests.users = usersRequest;
   return usersRequest;
@@ -90,7 +100,9 @@ export interface EnsuredUser {
 const ensureCurrentUser = async (): Promise<EnsuredUser> => {
   const result = await apiRequest<EnsuredUser>('/users/me', { method: 'POST' });
   if (result.created || result.createdWallets.length > 0) {
-    // The directory was fetched (or refused) before this person existed.
+    // The directory was fetched (or refused) before this person existed:
+    // forget what is cached, and let nothing already in flight fill it.
+    directoryGeneration += 1;
     apiCache.users = undefined;
     pendingRequests.users = null;
   }

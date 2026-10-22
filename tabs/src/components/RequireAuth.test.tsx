@@ -138,6 +138,64 @@ describe('RequireAuth', () => {
     expect(container.querySelector('[data-testid="page"]')).not.toBeNull();
   });
 
+  test('tries again on the next guarded mount after a failure', async () => {
+    accounts.push({ localAccountId: 'caller-oid' });
+    mockEnsureCurrentUser.mockRejectedValueOnce(new Error('gateway down'));
+    mockEnsureCurrentUser.mockResolvedValue({
+      user: { id: 'user-1' },
+      created: true,
+      createdWallets: [],
+    });
+
+    await render();
+    await act(async () => {
+      root.unmount();
+    });
+    root = createRoot(container);
+    await render();
+
+    expect(mockEnsureCurrentUser).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[data-testid="page"]')).not.toBeNull();
+  });
+
+  test('a different account signing in without a reload is provisioned too', async () => {
+    accounts.push({ homeAccountId: 'first.home', localAccountId: 'first' });
+    let settleSecond: (value: unknown) => void = () => undefined;
+    mockEnsureCurrentUser
+      .mockResolvedValueOnce({
+        user: { id: 'user-1' },
+        created: false,
+        createdWallets: [],
+      })
+      .mockReturnValueOnce(
+        new Promise(resolve => {
+          settleSecond = resolve;
+        }),
+      );
+
+    await render();
+    expect(container.querySelector('[data-testid="page"]')).not.toBeNull();
+
+    // Sign out, sign in as somebody else: the same accounts array, new entry.
+    accounts.length = 0;
+    accounts.push({ homeAccountId: 'second.home', localAccountId: 'second' });
+    await render();
+
+    expect(mockEnsureCurrentUser).toHaveBeenCalledTimes(2);
+    // The first person's readiness must not show the page to the second.
+    expect(container.querySelector('[data-testid="page"]')).toBeNull();
+
+    await act(async () => {
+      settleSecond({
+        user: { id: 'user-2' },
+        created: true,
+        createdWallets: [],
+      });
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="page"]')).not.toBeNull();
+  });
+
   test('sends a signed-out visitor to /login without provisioning anything', async () => {
     mockAcquireTokenSilent.mockRejectedValue(new Error('no session'));
 
