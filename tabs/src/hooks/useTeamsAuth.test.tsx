@@ -18,7 +18,8 @@ import { clearApiCache } from '../services/lnbits/cache';
 import { teamsContextQueryKey } from '../services/teamsContextService';
 import {
   SILENT_SIGN_IN_GUARD_KEY,
-  markSilentSignInAttempted,
+  clearSilentSignInGuard,
+  hasAttemptedSilentSignIn,
 } from '../services/silentSignIn';
 import { useTeamsAuth } from './useTeamsAuth';
 
@@ -182,11 +183,11 @@ describe('useTeamsAuth', () => {
     });
   });
 
-  test('logout clears the silent sign-in guard so the next visit can try again', async () => {
+  test('logout blocks a silent sign-in for the rest of the tab session', async () => {
     mockIsInitialized.mockReturnValue(false);
     mockInitialize.mockRejectedValue(new Error('Not running inside Teams'));
     mockLogoutPopup.mockResolvedValue(undefined);
-    markSilentSignInAttempted();
+    clearSilentSignInGuard();
     const client = createQueryClient();
 
     await renderConsumers(client, 1);
@@ -196,6 +197,7 @@ describe('useTeamsAuth', () => {
       button?.click();
     });
 
-    expect(sessionStorage.getItem(SILENT_SIGN_IN_GUARD_KEY)).toBeNull();
+    expect(sessionStorage.getItem(SILENT_SIGN_IN_GUARD_KEY)).not.toBeNull();
+    expect(hasAttemptedSilentSignIn()).toBe(true);
   });
 });
