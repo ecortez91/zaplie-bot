@@ -15,7 +15,9 @@ export const PageLayout: React.FC<Props> = ({ children }) => {
   const hideNavBar = queryParams.get('hideNavBar') === 'true';
   // The sign-in page is a full-screen background, not a content column: in
   // the 1200px column it leaves empty bands either side inside a wide tab.
-  const fullBleed = location.pathname === '/login';
+  // Matched the way the router matches the route: case-insensitive, with or
+  // without a trailing slash.
+  const fullBleed = /^\/login\/?$/i.test(location.pathname);
 
   return (
     <div className={styles.pageContainer}>

@@ -71,11 +71,17 @@ describe('PageLayout', () => {
       ?.className;
   };
 
-  test('lets the sign-in page fill the width instead of the content column', async () => {
-    expect(await contentClassAt('/login')).toBe('fullBleed');
-  });
+  test.each(['/login', '/login/', '/Login'])(
+    'lets the sign-in page (%s) fill the width instead of the content column',
+    async pathname => {
+      expect(await contentClassAt(pathname)).toBe('fullBleed');
+    },
+  );
 
-  test('keeps the other pages in the content column', async () => {
-    expect(await contentClassAt('/feed')).toBe('contentWrap');
-  });
+  test.each(['/feed', '/login-help', '/settings/login'])(
+    'keeps other pages (%s) in the content column',
+    async pathname => {
+      expect(await contentClassAt(pathname)).toBe('contentWrap');
+    },
+  );
 });
