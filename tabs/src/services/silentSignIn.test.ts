@@ -24,9 +24,11 @@ const fakeWindow = (
   url: string,
   framed: boolean | 'cross-origin-throws',
 ): Window => {
-  const { hash, search } = new URL(url);
-  const win: { location: { hash: string; search: string }; parent?: unknown } =
-    { location: { hash, search } };
+  const { hash, search, pathname } = new URL(url);
+  const win: {
+    location: { hash: string; search: string; pathname: string };
+    parent?: unknown;
+  } = { location: { hash, search, pathname } };
   if (framed === 'cross-origin-throws') {
     Object.defineProperty(win, 'parent', {
       get: () => {
@@ -69,6 +71,38 @@ describe('isSilentSignInResponse', () => {
     ],
   ])('is false for %s', (_case, url, framed) => {
     expect(isSilentSignInResponse(fakeWindow(url, framed))).toBe(false);
+  });
+
+  test('is false for a framed /auth-end with a response (the Teams auth popup)', () => {
+    expect(
+      isSilentSignInResponse(
+        fakeWindow('https://zaplie.test/auth-end#code=abc&state=xyz', true),
+      ),
+    ).toBe(false);
+  });
+
+  test('accepts the base path, with or without a trailing slash, under /portal', () => {
+    const publicUrl = process.env.PUBLIC_URL;
+    process.env.PUBLIC_URL = '/portal';
+    try {
+      expect(
+        isSilentSignInResponse(
+          fakeWindow('https://getzapl.ie/portal#code=abc&state=xyz', true),
+        ),
+      ).toBe(true);
+      expect(
+        isSilentSignInResponse(
+          fakeWindow('https://getzapl.ie/portal/#code=abc&state=xyz', true),
+        ),
+      ).toBe(true);
+      expect(
+        isSilentSignInResponse(
+          fakeWindow('https://getzapl.ie/#code=abc&state=xyz', true),
+        ),
+      ).toBe(false);
+    } finally {
+      process.env.PUBLIC_URL = publicUrl;
+    }
   });
 });
 
@@ -125,5 +159,16 @@ describe('silent sign-in guard', () => {
     expect(hasAttemptedSilentSignIn()).toBe(true);
     expect(() => clearSilentSignInGuard()).not.toThrow();
     expect(hasAttemptedSilentSignIn()).toBe(false);
+  });
+
+  test('keeps the guard when only the storage write fails', () => {
+    jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota exceeded');
+    });
+
+    markSilentSignInAttempted();
+
+    expect(sessionStorage.getItem(SILENT_SIGN_IN_GUARD_KEY)).toBeNull();
+    expect(hasAttemptedSilentSignIn()).toBe(true);
   });
 });
