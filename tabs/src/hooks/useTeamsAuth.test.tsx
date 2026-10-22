@@ -170,7 +170,9 @@ describe('useTeamsAuth', () => {
     const client = createQueryClient();
 
     await renderConsumers(client, 1);
-    const button = container.querySelector('button');
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-consumer="consumer-0"]',
+    );
 
     await act(async () => {
       button?.click();
@@ -191,7 +193,9 @@ describe('useTeamsAuth', () => {
     const client = createQueryClient();
 
     await renderConsumers(client, 1);
-    const button = container.querySelector('button');
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-consumer="consumer-0"]',
+    );
 
     await act(async () => {
       button?.click();

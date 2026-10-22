@@ -44,13 +44,18 @@ jest.mock('./services/authConfig', () => ({
 }));
 
 jest.mock('./components/SignInSignOutButton', () => () => (
-  <button type="button">Sign In</button>
+  <button type="button" data-testid="sign-in-button">
+    Sign In
+  </button>
 ));
 
 const mockUseMsal = jest.mocked(useMsal);
 const mockUseTeamsAuth = jest.mocked(useTeamsAuth);
 const mockGetContext = jest.mocked(microsoftTeams.app.getContext);
 const mockSsoSilent = jest.fn<Promise<unknown>, [unknown]>();
+
+const signInButton = (container: HTMLElement) =>
+  container.querySelector<HTMLButtonElement>('[data-testid="sign-in-button"]');
 
 describe('Login in a Teams tab', () => {
   let container: HTMLDivElement;
@@ -118,14 +123,14 @@ describe('Login in a Teams tab', () => {
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       'Signing you in…',
     );
-    expect(container.querySelector('button')).toBeNull();
+    expect(signInButton(container)).toBeNull();
 
     await act(async () => {
       fail?.();
     });
 
     expect(container.querySelector('[role="status"]')).toBeNull();
-    expect(container.querySelector('button')?.textContent).toBe('Sign In');
+    expect(signInButton(container)?.textContent).toBe('Sign In');
   });
 
   test('outside Teams shows the Sign In button straight away', async () => {
@@ -139,6 +144,6 @@ describe('Login in a Teams tab', () => {
     await renderLogin();
 
     expect(mockSsoSilent).not.toHaveBeenCalled();
-    expect(container.querySelector('button')?.textContent).toBe('Sign In');
+    expect(signInButton(container)?.textContent).toBe('Sign In');
   });
 });
