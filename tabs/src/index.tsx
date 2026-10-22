@@ -20,6 +20,10 @@ import {
   isSilentSignInResponse,
   relaySilentSignInResponse,
 } from './services/silentSignIn';
+import {
+  isSignOutPopupResponse,
+  relaySignOutPopupResponse,
+} from './services/signOutPopup';
 import { CacheProvider } from './utils/CacheContext';
 import { queryClient } from './query/queryClient';
 
@@ -111,8 +115,17 @@ export const initializeApp = async () => {
 };
 
 // Exported so the startup sequence can be awaited in tests. The hidden iframe
-// of a silent Teams sign-in only hands its response back to the tab; it never
-// starts a second copy of the app.
-export const startupComplete = isSilentSignInResponse()
-  ? relaySilentSignInResponse()
-  : initializeApp();
+// of a silent Teams sign-in and the Teams sign-out popup only hand their
+// response back to the tab (the popup then closes); neither starts a second
+// copy of the app.
+const startup = (): Promise<void> => {
+  if (isSilentSignInResponse()) {
+    return relaySilentSignInResponse();
+  }
+  if (isSignOutPopupResponse()) {
+    return relaySignOutPopupResponse();
+  }
+  return initializeApp();
+};
+
+export const startupComplete = startup();

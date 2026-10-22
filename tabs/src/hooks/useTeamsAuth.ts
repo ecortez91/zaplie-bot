@@ -44,22 +44,33 @@ export const useTeamsAuth = (): UseTeamsAuthReturn => {
       // Clear API cache before logout to prevent stale data on re-login
       clearApiCache();
       // Signing out must not be undone by a silent sign-in on the sign-in
-      // page, so this tab session counts as attempted. MSAL resolves
-      // logoutPopup even when the popup is blocked or closed early, so the
-      // Entra session may still be alive. A fresh visit tries again.
+      // page, so this tab session counts as attempted (sessionStorage, so it
+      // survives the sign-out redirect). MSAL resolves logoutPopup even when
+      // the popup is blocked or closed early, so the Entra session may still
+      // be alive. A fresh visit tries again.
       markSilentSignInAttempted();
 
-      await instance.logoutPopup({
+      const request = {
         postLogoutRedirectUri: appUrl('/login'),
         account: accounts[0] || null,
-      });
+      };
+      if (isInTeams) {
+        // The tab is an iframe that cannot redirect, so Teams signs out in a
+        // popup. Its landing page relays the result and closes itself
+        // (services/signOutPopup.ts, called from index.tsx).
+        await instance.logoutPopup(request);
+      } else {
+        // A browser signs out in the same window and lands on the sign-in
+        // page, where handleRedirectPromise ends the sign-out interaction.
+        await instance.logoutRedirect(request);
+      }
     } catch (error) {
       toast.error('Failed to sign out. Please try again.');
     } finally {
       logoutInProgressRef.current = false;
       setIsLoggingOut(false);
     }
-  }, [instance, accounts, inProgress]);
+  }, [instance, accounts, inProgress, isInTeams]);
 
   return {
     isInTeams,

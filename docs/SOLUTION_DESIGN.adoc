@@ -351,6 +351,18 @@ router basename and the MSAL redirect URIs, and `REACT_APP_API_BASE_URL` into
 the prefix of every `/api` call. In a browser the header and footer are shown;
 inside Teams (`useTeamsAuth` → `teams-js` context) they stay hidden.
 
+Sign-out (`useTeamsAuth.handleLogout`) clears the API cache and marks the
+silent sign-in as attempted for the tab session, so the sign-in page does not
+sign the person straight back in. In a browser it is a full-page MSAL
+`logoutRedirect` that ends on the sign-in page (`/login`, or `/portal/login`
+on getzapl.ie), where `handleRedirectPromise` closes the sign-out interaction.
+Inside Teams the tab is an iframe that cannot redirect, so it uses
+`logoutPopup`. MSAL 5 does not close that popup itself: it waits for the
+post-logout page to broadcast the response (the redirect bridge). `index.tsx`
+recognises that page load (`services/signOutPopup.ts`: a top-level `/login`
+whose MSAL `state` was made for a popup), relays the response and closes the
+window instead of starting the app, as it does for the silent sign-in iframe.
+
 `RequireAuth` also calls `POST /api/lnbits/users/me` before rendering a guarded
 route. The call is shared by every guarded route and keyed to the signed-in
 account: a different person signing in without a reload is set up afresh, and
