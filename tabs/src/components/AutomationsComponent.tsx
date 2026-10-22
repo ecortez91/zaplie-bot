@@ -829,7 +829,8 @@ const AutomationsComponent: FunctionComponent = () => {
           </div>
           <p className={styles.connDescription}>
             Create a key for the GitHub pull-request sample flow. Production use
-            remains blocked until aggregate budget controls and GitHub webhook
+            remains blocked until aggregate budget controls, automatic
+            reconciliation of uncertain payment outcomes and GitHub webhook
             signature verification land.
           </p>
           {isAdmin && (
