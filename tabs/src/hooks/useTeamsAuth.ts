@@ -4,6 +4,7 @@ import { InteractionStatus } from '@azure/msal-browser';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import { clearApiCache } from '../services/lnbits/cache';
+import { markSilentSignInAttempted } from '../services/silentSignIn';
 import { teamsContextQueryOptions } from '../services/teamsContextService';
 import { appUrl } from '../services/appLocation';
 
@@ -42,6 +43,11 @@ export const useTeamsAuth = (): UseTeamsAuthReturn => {
     try {
       // Clear API cache before logout to prevent stale data on re-login
       clearApiCache();
+      // Signing out must not be undone by a silent sign-in on the sign-in
+      // page, so this tab session counts as attempted. MSAL resolves
+      // logoutPopup even when the popup is blocked or closed early, so the
+      // Entra session may still be alive. A fresh visit tries again.
+      markSilentSignInAttempted();
 
       await instance.logoutPopup({
         postLogoutRedirectUri: appUrl('/login'),

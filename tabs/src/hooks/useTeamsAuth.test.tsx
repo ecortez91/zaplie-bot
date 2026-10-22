@@ -16,6 +16,11 @@ import { toast } from 'react-toastify';
 import { createQueryClient } from '../query/queryClient';
 import { clearApiCache } from '../services/lnbits/cache';
 import { teamsContextQueryKey } from '../services/teamsContextService';
+import {
+  SILENT_SIGN_IN_GUARD_KEY,
+  clearSilentSignInGuard,
+  hasAttemptedSilentSignIn,
+} from '../services/silentSignIn';
 import { useTeamsAuth } from './useTeamsAuth';
 
 jest.mock('@microsoft/teams-js', () => ({
@@ -165,7 +170,9 @@ describe('useTeamsAuth', () => {
     const client = createQueryClient();
 
     await renderConsumers(client, 1);
-    const button = container.querySelector('button');
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-consumer="consumer-0"]',
+    );
 
     await act(async () => {
       button?.click();
@@ -176,5 +183,25 @@ describe('useTeamsAuth', () => {
       postLogoutRedirectUri: `${window.location.origin}/login`,
       account: null,
     });
+  });
+
+  test('logout blocks a silent sign-in for the rest of the tab session', async () => {
+    mockIsInitialized.mockReturnValue(false);
+    mockInitialize.mockRejectedValue(new Error('Not running inside Teams'));
+    mockLogoutPopup.mockResolvedValue(undefined);
+    clearSilentSignInGuard();
+    const client = createQueryClient();
+
+    await renderConsumers(client, 1);
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-consumer="consumer-0"]',
+    );
+
+    await act(async () => {
+      button?.click();
+    });
+
+    expect(sessionStorage.getItem(SILENT_SIGN_IN_GUARD_KEY)).not.toBeNull();
+    expect(hasAttemptedSilentSignIn()).toBe(true);
   });
 });
