@@ -481,9 +481,10 @@ Complete these once per new environment, right after the first deployment:
      looking for them.
   ** *Production:* create them by hand, as above. Don't provision.
 . *Assign the admin app role.* In Entra ID → Enterprise applications → the
-  Zaplie app → "Users and groups", assign the `Zaplie.Admin` role to at least
-  one user. The portal's org-configuration endpoints reject every write until
-  a signed-in user carries this role.
+  Zaplie app → "Users and groups", assign the "Zaplie Administrator" role
+  (value `Zaplie.Admin`) to at least one user. The portal's
+  org-configuration endpoints reject every write until a signed-in user
+  carries this role.
 . *Restrict who can sign in to the portal.* Portal authentication accepts any
   account that can sign in to the tenant, guests included, and the portal is
   reachable directly in a browser, not only through the Teams tabs. Teams app
@@ -497,9 +498,10 @@ Complete these once per new environment, right after the first deployment:
      (https://learn.microsoft.com/en-us/entra/identity-platform/howto-restrict-your-app-to-a-set-of-users#update-the-app-to-require-user-assignment[Microsoft]).
   .. In Enterprise applications → the Zaplie app → "Users and groups", assign
      the `Zaplie.User` role (no admin rights) to everyone who should use
-     Zaplie, and `Zaplie.Admin` to the admins. Use the role, not "Default
-     Access": Entra refuses Default Access on an app that defines roles, and
-     the portal UI would otherwise offer only `Zaplie.Admin`.
+     Zaplie, and "Zaplie Administrator" (value `Zaplie.Admin`) to the
+     admins. Use the role, not "Default Access": Entra refuses Default Access
+     on an app that defines roles, and the portal UI would otherwise offer
+     only "Zaplie Administrator".
   .. Only then set Properties → *Assignment required* to *Yes*. Anyone not
      assigned is refused at sign-in, except Global Administrators: Entra
      does not apply the assignment requirement to them
