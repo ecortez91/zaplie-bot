@@ -42,14 +42,17 @@ jest.mock(
   { virtual: true },
 );
 
-// An MSAL state value (base64url JSON of { id, meta }), as msal-common
-// setRequestState builds it.
+// An MSAL state value (standard, padded base64 JSON of { id, meta }), as
+// msal-common setRequestState builds it with msal-browser's base64Encode, and
+// URL-encoded as the query parameter it arrives in.
 const msalState = (interactionType: string): string =>
   encodeURIComponent(
-    btoa(JSON.stringify({ id: 'abc-123', meta: { interactionType } }))
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, ''),
+    btoa(
+      JSON.stringify({
+        id: '019a1c3e-1b2c-7d4e-8f90-abcdef123456',
+        meta: { interactionType },
+      }),
+    ),
   );
 
 const getMsalInstance = () =>

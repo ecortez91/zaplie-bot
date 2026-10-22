@@ -15,12 +15,19 @@
 //
 // So, like the silent sign-in iframe (silentSignIn.ts), that page load only
 // relays the response and never starts the app.
+//
+// The one-use popup URL pasted by hand into an ordinary tab relays to nobody,
+// and the browser refuses to close a tab the script did not open, so that tab
+// ends blank. That is deliberate: starting the app there would boot it on a
+// sign-out response, the same failure as issue 508, so it fails closed.
 
 import { getBasePath } from './appLocation';
 
-// Decodes the library part of an MSAL state value (base64url JSON, then an
-// optional '|' and the caller's own state), as msal-common ProtocolUtils
-// parseRequestState does. Null for anything that is not one.
+// Decodes the library part of an MSAL state value (base64 JSON as
+// msal-browser's base64Encode makes it, standard alphabet with padding;
+// decoded leniently so base64url also works), then an optional '|' and the
+// caller's own state, as msal-common ProtocolUtils parseRequestState does.
+// Null for anything that is not one.
 const readInteractionType = (state: string): string | null => {
   try {
     const encoded = state.split('|')[0].replace(/-/g, '+').replace(/_/g, '/');
@@ -70,23 +77,40 @@ export const isSignOutPopupResponse = (win: Window = window): boolean => {
   return state !== null && readInteractionType(state) === 'popup';
 };
 
+// The hand-off is one chunk load plus a synchronous broadcast, so it normally
+// settles in well under a second. The tab stops listening after MSAL's
+// popupBridgeTimeout (60 s), so a slower hand-off is as good as lost, and the
+// popup must not outlive it. Same budget as useTeamsSilentSignIn's context wait.
+export const SIGN_OUT_RELAY_TIMEOUT_MS = 5000;
+
 // Hands the sign-out response to the waiting tab and closes the popup. If the
-// hand-off fails the tab is already signed out locally (MSAL clears its cache
-// before opening the popup) and only waits out its timeout, so the popup is
-// still closed instead of starting the app.
+// hand-off fails or is slow the tab is already signed out locally (MSAL clears
+// its cache before opening the popup) and only waits out its timeout, so the
+// popup is still closed instead of starting the app.
 export const relaySignOutPopupResponse = async (
   win: Window = window,
 ): Promise<void> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const { broadcastResponseToMainFrame } =
-      await import('@azure/msal-browser/redirect-bridge');
-    await broadcastResponseToMainFrame();
+    await Promise.race([
+      import('@azure/msal-browser/redirect-bridge').then(
+        ({ broadcastResponseToMainFrame }) => broadcastResponseToMainFrame(),
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Timed out returning the sign-out response.')),
+          SIGN_OUT_RELAY_TIMEOUT_MS,
+        );
+      }),
+    ]);
   } catch (error) {
     console.debug('Could not return the sign-out response', error);
-  }
-  try {
-    win.close();
-  } catch {
-    // Nothing more to do; the window was not ours to close.
+  } finally {
+    clearTimeout(timer);
+    try {
+      win.close();
+    } catch {
+      // Nothing more to do; the window was not ours to close.
+    }
   }
 };

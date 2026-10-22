@@ -22,6 +22,7 @@ import {
   hasAttemptedSilentSignIn,
 } from '../services/silentSignIn';
 import { useTeamsAuth } from './useTeamsAuth';
+import { SignOutButton } from '../components/SignOutButton';
 
 jest.mock('@microsoft/teams-js', () => ({
   app: {
@@ -277,6 +278,46 @@ describe('useTeamsAuth', () => {
     expect(mockClearApiCache).not.toHaveBeenCalled();
     expect(mockLogoutRedirect).not.toHaveBeenCalled();
     expect(mockLogoutPopup).not.toHaveBeenCalled();
+  });
+
+  test('does not sign out while the host is still being detected', async () => {
+    // Until detection settles isInTeams is only a default, so the hook would
+    // pick the browser redirect inside a Teams iframe.
+    mockIsInitialized.mockReturnValue(false);
+    mockInitialize.mockReturnValue(new Promise(() => undefined));
+    await renderConsumers(createQueryClient(), 1);
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-consumer="consumer-0"]',
+    ) as HTMLButtonElement;
+    expect(button.textContent).toBe('loading');
+
+    await act(async () => {
+      button.click();
+    });
+
+    expect(mockLogoutRedirect).not.toHaveBeenCalled();
+    expect(mockLogoutPopup).not.toHaveBeenCalled();
+    expect(mockClearApiCache).not.toHaveBeenCalled();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test('SignOutButton is disabled while the host is still being detected', async () => {
+    mockIsInitialized.mockReturnValue(false);
+    mockInitialize.mockReturnValue(new Promise(() => undefined));
+    // eslint-disable-next-line testing-library/no-unnecessary-act
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={createQueryClient()}>
+          <SignOutButton />
+        </QueryClientProvider>,
+      );
+    });
+
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Sign Out"]',
+    );
+    expect(button?.disabled).toBe(true);
+    expect(button?.textContent).toBe('Sign Out');
   });
 
   test('a second click while signing out starts no second sign-out', async () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import {
+  SIGN_OUT_RELAY_TIMEOUT_MS,
   isSignOutPopupResponse,
   relaySignOutPopupResponse,
 } from './signOutPopup';
@@ -16,17 +17,27 @@ jest.mock(
   { virtual: true },
 );
 
-// An MSAL state value as msal-common setRequestState builds it: base64url
-// JSON of { id, meta }, optionally followed by '|' and the caller's state.
+// An MSAL state value as msal-common setRequestState builds it with
+// msal-browser's base64Encode: standard, padded base64 JSON of { id, meta },
+// optionally followed by '|' and the caller's state. This id makes the JSON a
+// length that needs '=' padding.
 const msalState = (interactionType: string, userState = ''): string => {
   const library = btoa(
-    JSON.stringify({ id: 'abc-123', meta: { interactionType } }),
-  )
+    JSON.stringify({
+      id: '019a1c3e-1b2c-7d4e-8f90-abcdef123456',
+      meta: { interactionType },
+    }),
+  );
+  return userState ? `${library}|${userState}` : library;
+};
+
+// The same state in the base64url alphabet without padding, which the decoder
+// also accepts.
+const base64UrlState = (interactionType: string): string =>
+  msalState(interactionType)
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
-  return userState ? `${library}|${userState}` : library;
-};
 
 const fakeWindow = (
   url: string,
@@ -71,6 +82,16 @@ describe('isSignOutPopupResponse', () => {
           `https://zaplie.test/login?state=${encodeURIComponent(
             msalState('popup', 'caller-state'),
           )}`,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test('also accepts a base64url state', () => {
+    expect(
+      isSignOutPopupResponse(
+        fakeWindow(
+          `https://zaplie.test/login?state=${base64UrlState('popup')}`,
         ),
       ),
     ).toBe(true);
@@ -172,5 +193,23 @@ describe('relaySignOutPopupResponse', () => {
     await expect(relaySignOutPopupResponse(win)).resolves.toBeUndefined();
     expect(debug).toHaveBeenCalled();
     expect(win.close).toHaveBeenCalled();
+  });
+
+  test('closes the popup when the hand-off never settles', async () => {
+    jest.useFakeTimers();
+    try {
+      const debug = jest.spyOn(console, 'debug').mockImplementation(() => {});
+      mockBroadcast.mockReturnValue(new Promise(() => undefined));
+      const win = fakeWindow(`https://zaplie.test/login?state=${popupState}`);
+
+      const relay = relaySignOutPopupResponse(win);
+      jest.advanceTimersByTime(SIGN_OUT_RELAY_TIMEOUT_MS);
+      await relay;
+
+      expect(win.close).toHaveBeenCalledTimes(1);
+      expect(debug).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

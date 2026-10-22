@@ -140,9 +140,12 @@ redirect URI (`https://getzapl.ie/portal`, no trailing slash, like
 unset, calls stay same-origin, so the Teams deployment is unchanged.
 
 Before the portal can sign anyone in there, the app registration
-(`aad.manifest.json`, single tenant) needs four more single-page application
+(`aad.manifest.json`, single tenant) needs six more single-page application
 redirect URIs: `https://getzapl.ie/portal`, `https://getzapl.ie/portal/auth-end`,
-`https://www.getzapl.ie/portal` and `https://www.getzapl.ie/portal/auth-end`.
+`https://getzapl.ie/portal/login`, `https://www.getzapl.ie/portal`,
+`https://www.getzapl.ie/portal/auth-end` and
+`https://www.getzapl.ie/portal/login`. The `/login` ones are the sign-out
+landing: Entra only redirects after sign-out to a registered URI.
 The backend already answers cross-origin requests (`cors()` in
 `tabs/backend/server.js`); `PORTAL_URL` on the App Service should point at
 `https://getzapl.ie/portal` once the GitHub identity and connection redirects
@@ -559,6 +562,11 @@ Complete these once per new environment, right after the first deployment:
      redirect URIs (https://github.com/knowall-ai/zaplie-bot/pull/488): add
      them in Entra (Token configuration, Authentication), not with
      `teamsapp provision`.
+. *Check the sign-out landing is registered.* Confirm the production
+  registration lists `https://<portal host>/login` (and the `/portal/login`
+  URIs above) as single-page application redirect URIs; sign-out depends on
+  it. Without it Entra ends a browser sign-out on its own page and the Teams
+  sign-out popup never closes.
 . *Assign the admin app role.* In Entra ID → Enterprise applications → the
   Zaplie app → "Users and groups", assign the admin role (value
   `Zaplie.Admin`; shown as "Zaplie Administrator" in provisioned

@@ -363,6 +363,17 @@ recognises that page load (`services/signOutPopup.ts`: a top-level `/login`
 whose MSAL `state` was made for a popup), relays the response and closes the
 window instead of starting the app, as it does for the silent sign-in iframe.
 
+The popup closes whether or not that hand-off succeeds, and no later than
+`SIGN_OUT_RELAY_TIMEOUT_MS` (5 s) after it loads. The hand-off is a
+`BroadcastChannel` message, which a browser that partitions storage by
+top-level site does not deliver from a top-level popup to a cross-site iframe,
+and in Teams on the web the tab is one (MSAL notes this in
+`PopupClient.waitForPopupResponse`). The tab then waits out MSAL's
+`popupBridgeTimeout` (60 s) before `logoutPopup` settles: the person is already
+signed out locally, because MSAL clears its cache before opening the popup, but
+`inProgress` stays `logout`, so Sign In is disabled until then. MSAL's
+`auth.popupRelayUri` is the designed remedy and is not part of this change.
+
 `RequireAuth` also calls `POST /api/lnbits/users/me` before rendering a guarded
 route. The call is shared by every guarded route and keyed to the signed-in
 account: a different person signing in without a reload is set up afresh, and

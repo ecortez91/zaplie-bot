@@ -133,6 +133,10 @@
         {
             "url": "${{TAB_ENDPOINT}}/auth-end",
             "type": "Spa"
+        },
+        {
+            "url": "${{TAB_ENDPOINT}}/login",
+            "type": "Spa"
         }
     ]
 }

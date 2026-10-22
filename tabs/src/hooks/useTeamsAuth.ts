@@ -30,6 +30,11 @@ export const useTeamsAuth = (): UseTeamsAuthReturn => {
   const logoutInProgressRef = useRef<boolean>(false);
 
   const handleLogout = useCallback(async () => {
+    // The redirect/popup choice needs the host; until Teams detection has
+    // settled, isInTeams is only a default.
+    if (isTeamsInitializing) {
+      return;
+    }
     // Check if MSAL has an interaction in progress
     if (inProgress !== InteractionStatus.None) {
       return;
@@ -70,7 +75,7 @@ export const useTeamsAuth = (): UseTeamsAuthReturn => {
       logoutInProgressRef.current = false;
       setIsLoggingOut(false);
     }
-  }, [instance, accounts, inProgress, isInTeams]);
+  }, [instance, accounts, inProgress, isInTeams, isTeamsInitializing]);
 
   return {
     isInTeams,
