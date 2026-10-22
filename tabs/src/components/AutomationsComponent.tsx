@@ -815,7 +815,7 @@ const AutomationsComponent: FunctionComponent = () => {
           )}
         </div>
 
-        <div className={styles.connCard}>
+        <div className={styles.connCard} data-testid="logic-apps-pilot-card">
           <div className={styles.connCardHead}>
             <span className={styles.cardBadge}>
               <img src={FlowArrowIcon} alt="" />

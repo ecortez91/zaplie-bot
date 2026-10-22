@@ -171,13 +171,17 @@ describe('AutomationsComponent panel independence', () => {
 
     await renderAutomations();
 
-    expect(container.textContent).toContain('Draft — not production ready');
-    expect(container.textContent).toContain(
+    const card = container.querySelector(
+      '[data-testid="logic-apps-pilot-card"]',
+    );
+    expect(card).not.toBeNull();
+    expect(card?.textContent).toContain('Draft — not production ready');
+    expect(card?.textContent).toContain(
       'remains blocked until aggregate budget controls, automatic ' +
         'reconciliation of uncertain payment outcomes and GitHub webhook ' +
         'signature verification land.',
     );
-    expect(container.textContent).not.toContain('durable idempotency');
+    expect(card?.textContent).not.toContain('durable idempotency');
   });
 
   test('shows a stats-only error and keeps the other panels when stats rejects', async () => {
