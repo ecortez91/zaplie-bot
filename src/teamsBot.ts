@@ -37,6 +37,7 @@ import {
 import {
   GENERIC_ERROR_MESSAGE,
   UserFacingError,
+  assistantUnavailableGuide,
   greetingGuide,
   isGreeting,
   unrecognizedCommandGuide,
@@ -408,16 +409,18 @@ export class TeamsBot extends TeamsActivityHandler {
             // (and therefore the Foundry conversation) is keyed per
             // conversation, so a team or groupchat would otherwise share one
             // agent thread across unrelated teammates. A deployment without
-            // the assistant gets the command guide below instead.
-            await this.replyConversationally(context, textMessage);
-            recordActivity({
-              activityType: 'chat.answered',
-              title: 'Answered question · assistant',
-              level: 'success',
-              subject: 'assistant',
-              channel: 'teams',
-              upstreamId: upstreamIdOf(context),
-            });
+            // the assistant gets the command guide below instead. A failed
+            // assistant turn sends the guide itself and records chat.failed.
+            if (await this.replyConversationally(context, textMessage)) {
+              recordActivity({
+                activityType: 'chat.answered',
+                title: 'Answered question · assistant',
+                level: 'success',
+                subject: 'assistant',
+                channel: 'teams',
+                upstreamId: upstreamIdOf(context),
+              });
+            }
           } else {
             const commandNames = SSOCommandMap.commandNames();
             await context.sendActivity(
@@ -485,36 +488,55 @@ export class TeamsBot extends TeamsActivityHandler {
     }
   }
 
+  // Returns true when the assistant answered, false when it failed and the
+  // user was sent the command guide instead.
   private async replyConversationally(
     context: TurnContext,
     textMessage: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const existingConversationId = await this.foundryConversationIdAccessor.get(
       context,
       undefined,
     );
+    const commandNames = SSOCommandMap.commandNames();
+    let result: Awaited<ReturnType<typeof runConversationalTurn>>;
     try {
-      const result = await runConversationalTurn(
+      result = await runConversationalTurn(
         textMessage,
         existingConversationId,
         createReadOnlyTools(),
         context,
-        SSOCommandMap.commandNames(),
-      );
-      await this.foundryConversationIdAccessor.set(
-        context,
-        result.foundryConversationId,
-      );
-      await context.sendActivity(
-        result.replyText || UNRECOGNIZED_COMMAND_MESSAGE,
+        commandNames,
       );
     } catch (error) {
-      // A failed turn can leave a dangling/invalid Foundry conversation id; clear
-      // it so the next message starts fresh. Then rethrow — a broken agent must
-      // surface as a real error, not be disguised as "unrecognized command".
+      // A failed turn can leave a dangling/invalid Foundry conversation id;
+      // clear it so the next message starts fresh. The failure is still logged
+      // and recorded as a warning, but the commands do not need the
+      // assistant, so the user gets them rather than a generic error.
       await this.foundryConversationIdAccessor.set(context, undefined);
-      throw error;
+      console.error(
+        'The assistant failed; sending the command guide instead:',
+        error,
+      );
+      recordActivity({
+        activityType: 'chat.failed',
+        title: 'Assistant unavailable · sent the command guide',
+        level: 'warning',
+        subject: 'assistant-unavailable',
+        channel: 'teams',
+        upstreamId: upstreamIdOf(context),
+      });
+      await context.sendActivity(assistantUnavailableGuide(commandNames));
+      return false;
     }
+    await this.foundryConversationIdAccessor.set(
+      context,
+      result.foundryConversationId,
+    );
+    await context.sendActivity(
+      result.replyText || UNRECOGNIZED_COMMAND_MESSAGE,
+    );
+    return true;
   }
 
   async handleTeamsSigninVerifyState(

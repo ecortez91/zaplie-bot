@@ -35,6 +35,14 @@ export const greetingGuide = (commandNames: string[]): string =>
   commandBullets(commandNames) +
   'Just type one of those to get started!';
 
+// The fallback when the conversational assistant fails (for example Azure AI
+// Foundry returns a server error after the SDK's retries): the commands do
+// not need the assistant, so offer them instead of a generic error.
+export const assistantUnavailableGuide = (commandNames: string[]): string =>
+  "I can't chat right now, but I can still help with:\n" +
+  commandBullets(commandNames) +
+  'Type one of those, or ask me again in a few minutes.';
+
 // Sent once when the bot is installed or added to a conversation.
 export const welcomeMessage = (commandNames: string[]): string =>
   "Hi, I'm Zaplie! I help you send zaps to your colleagues. " +
