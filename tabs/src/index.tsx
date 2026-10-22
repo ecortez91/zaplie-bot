@@ -15,6 +15,7 @@ import { theme } from './styles/Theme';
 import App from './App';
 import { ConfigurationError } from './services/authConfig';
 import { getMsalInstance } from './services/msalClient';
+import { getBasePath } from './services/appLocation';
 import {
   isSilentSignInResponse,
   relaySilentSignInResponse,
@@ -35,7 +36,7 @@ const renderApp = (msalInstance: PublicClientApplication) => {
     <QueryClientProvider client={queryClient}>
       <MsalProvider instance={msalInstance}>
         <CacheProvider>
-          <Router>
+          <Router basename={getBasePath()}>
             <ThemeProvider theme={theme}>
               <App pca={msalInstance} />
             </ThemeProvider>

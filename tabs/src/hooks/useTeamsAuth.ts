@@ -6,6 +6,7 @@ import { toast } from 'react-toastify';
 import { clearApiCache } from '../services/lnbits/cache';
 import { markSilentSignInAttempted } from '../services/silentSignIn';
 import { teamsContextQueryOptions } from '../services/teamsContextService';
+import { appUrl } from '../services/appLocation';
 
 interface UseTeamsAuthReturn {
   isInTeams: boolean;
@@ -49,7 +50,7 @@ export const useTeamsAuth = (): UseTeamsAuthReturn => {
       markSilentSignInAttempted();
 
       await instance.logoutPopup({
-        postLogoutRedirectUri: window.location.origin + '/login',
+        postLogoutRedirectUri: appUrl('/login'),
         account: accounts[0] || null,
       });
     } catch (error) {
