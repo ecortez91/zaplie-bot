@@ -165,8 +165,9 @@ well as the bot's); anyone else is refused with 403 and nothing is created.
 The portal backend has no Graph access, so membership comes from the verified
 idToken: `tid` is the tenant and the optional claim `acct` is the role
 (0 member, 1 guest). `aad.manifest.json` requests `acct` in idTokens; until
-that is applied to the app registration (`teamsapp provision`, or
-*Token configuration* in the Entra portal) no token carries it and the route
+that is applied to the app registration (`teamsapp provision` outside
+production, or *Token configuration* in the Entra portal; see Day One for
+production) no token carries it and the route
 refuses everyone, by design. People who already have an LNbits user are not
 affected: only creation is gated.
 
@@ -543,8 +544,8 @@ Complete these once per new environment, right after the first deployment:
   not run `teamsapp provision` (or anything else that applies
   `aad.manifest.json`) against the production Zaplie app. The manifest would
   rename the app and replace its roles, redirect URIs and token settings with
-  the development values. Production's role ids also differ from the
-  manifest's, so applying it would drop the roles people hold. In
+  the development values. Production's admin role id also differs from the
+  manifest's, so applying it would drop the admin role people hold. In
   production, create and change roles in Entra directly (App registrations →
   the Zaplie app → App roles), using the same values as the manifest
   (`Zaplie.Admin`, `Zaplie.User`).
@@ -553,12 +554,17 @@ Complete these once per new environment, right after the first deployment:
      on the app registration after `teamsapp provision` runs again (the
      `aadApp/update` step applies the manifest), so re-run it once before
      looking for them.
-  ** *Production:* create them by hand, as above. Don't provision.
+  ** *Production:* create them by hand, as above. Don't provision. The same
+     goes for the `acct` optional ID-token claim and the `/portal` SPA
+     redirect URIs (https://github.com/knowall-ai/zaplie-bot/pull/488): add
+     them in Entra (Token configuration, Authentication), not with
+     `teamsapp provision`.
 . *Assign the admin app role.* In Entra ID → Enterprise applications → the
-  Zaplie app → "Users and groups", assign the "Zaplie Administrator" role
-  (value `Zaplie.Admin`) to at least one user. The portal's
-  org-configuration endpoints reject every write until a signed-in user
-  carries this role.
+  Zaplie app → "Users and groups", assign the admin role (value
+  `Zaplie.Admin`; shown as "Zaplie Administrator" in provisioned
+  environments and "Zaplie.Admin" in production) to at least one user. The
+  portal's org-configuration endpoints reject every write until a signed-in
+  user carries this role.
 . *Restrict who can sign in to the portal.* Portal authentication accepts any
   account that can sign in to the tenant, guests included, and the portal is
   reachable directly in a browser, not only through the Teams tabs. Teams app
@@ -572,10 +578,11 @@ Complete these once per new environment, right after the first deployment:
      (https://learn.microsoft.com/en-us/entra/identity-platform/howto-restrict-your-app-to-a-set-of-users#update-the-app-to-require-user-assignment[Microsoft]).
   .. In Enterprise applications → the Zaplie app → "Users and groups", assign
      the `Zaplie.User` role (no admin rights) to everyone who should use
-     Zaplie, and "Zaplie Administrator" (value `Zaplie.Admin`) to the
-     admins. Use the role, not "Default Access": Entra refuses Default Access
-     on an app that defines roles, and the portal UI would otherwise offer
-     only "Zaplie Administrator".
+     Zaplie, and the admin role (value `Zaplie.Admin`; shown as "Zaplie
+     Administrator" in provisioned environments and "Zaplie.Admin" in
+     production) to the admins. Use the role, not "Default Access": Entra
+     refuses Default Access on an app that defines roles, and the portal UI
+     would otherwise offer only the admin role.
   .. Only then set Properties → *Assignment required* to *Yes*. Anyone not
      assigned is refused at sign-in, except Global Administrators: Entra
      does not apply the assignment requirement to them
