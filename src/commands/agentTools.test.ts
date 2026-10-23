@@ -243,19 +243,84 @@ describe('agentTools', () => {
       expect(result.periodDays).toBe(7);
     });
 
-    test('defaults to all-time when days is omitted', async () => {
-      mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
-      const tool = createReadOnlyTools().find(
-        t => t.name === 'get_leaderboard',
-      )!;
+    describe('when days is omitted', () => {
+      const originalWindow = process.env.LEADERBOARD_WINDOW_DAYS;
 
-      const allTime = requireRecord(
-        await tool.handler({}, makeTurnContext(currentUser)),
-      );
-      expect(mockGetZapLeaderboard).toHaveBeenLastCalledWith({
-        sinceTimestamp: undefined,
+      afterEach(() => {
+        if (originalWindow === undefined) {
+          delete process.env.LEADERBOARD_WINDOW_DAYS;
+        } else {
+          process.env.LEADERBOARD_WINDOW_DAYS = originalWindow;
+        }
       });
-      expect(allTime.periodDays).toBeNull();
+
+      // The `show leaderboard` card always measures LEADERBOARD_WINDOW_DAYS.
+      // An all-time default here made the assistant and the card quote
+      // different numbers for the same "who is top?" question.
+      test('uses the configured LEADERBOARD_WINDOW_DAYS, like the card', async () => {
+        process.env.LEADERBOARD_WINDOW_DAYS = '30';
+        mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+        const tool = createReadOnlyTools().find(
+          t => t.name === 'get_leaderboard',
+        )!;
+
+        const before = Math.floor(Date.now() / 1000);
+        const result = requireRecord(
+          await tool.handler({}, makeTurnContext(currentUser)),
+        );
+        const after = Math.floor(Date.now() / 1000);
+
+        const since = mockGetZapLeaderboard.mock.calls[0][0]!.sinceTimestamp!;
+        expect(since).toBeGreaterThanOrEqual(before - 30 * 86400);
+        expect(since).toBeLessThanOrEqual(after - 30 * 86400);
+        expect(result.periodDays).toBe(30);
+      });
+
+      test('falls back to the card default of 7 days when unset', async () => {
+        delete process.env.LEADERBOARD_WINDOW_DAYS;
+        mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+        const tool = createReadOnlyTools().find(
+          t => t.name === 'get_leaderboard',
+        )!;
+
+        const result = requireRecord(
+          await tool.handler({}, makeTurnContext(currentUser)),
+        );
+
+        expect(result.periodDays).toBe(7);
+        expect(
+          mockGetZapLeaderboard.mock.calls[0][0]!.sinceTimestamp,
+        ).toBeDefined();
+      });
+
+      test('returns an error, not an all-time ranking, when the setting is invalid', async () => {
+        process.env.LEADERBOARD_WINDOW_DAYS = '366';
+        const consoleError = jest
+          .spyOn(console, 'error')
+          .mockImplementation(() => undefined);
+        mockGetZapLeaderboard.mockResolvedValue(leaderboardResult([]));
+        const tool = createReadOnlyTools().find(
+          t => t.name === 'get_leaderboard',
+        )!;
+
+        try {
+          const result = requireRecord(
+            await tool.handler({}, makeTurnContext(currentUser)),
+          );
+
+          expect(result.error).toBeTruthy();
+          expect(result.leaderboard).toBeUndefined();
+          expect(mockGetZapLeaderboard).not.toHaveBeenCalled();
+          expect(consoleError).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({
+              message: expect.stringContaining('LEADERBOARD_WINDOW_DAYS'),
+            }),
+          );
+        } finally {
+          consoleError.mockRestore();
+        }
+      });
     });
 
     test('rejects an out-of-range or malformed days instead of clamping it', async () => {

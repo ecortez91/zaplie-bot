@@ -111,7 +111,13 @@ in a static `SSOCommandMap` keyed by lower-case message text:
 
 | `show leaderboard`
 | `src/commands/showLeaderboardCommand.ts`
-| Ranks users by Private wallet balance in an Adaptive Card
+| Ranks users by sats zapped out of their Allowance wallet inside
+  `LEADERBOARD_WINDOW_DAYS` (top `LEADERBOARD_TOP_N`) in an Adaptive Card;
+  the ranking itself is `zapHistoryService.getZapLeaderboard`, shared with the
+  assistant's `get_leaderboard` tool, so the card and the assistant cannot
+  disagree for the same window. When the assistant does not name a window,
+  the tool uses `LEADERBOARD_WINDOW_DAYS` too, so by default both quote the
+  same numbers. The card says so when a team-wide read was partial
 
 |===
 
@@ -522,9 +528,28 @@ REST API that supports programmatic user/wallet creation and payments.
 come from the LNbits allowance extension) and a Private wallet (receives
 Zaps).
 
-*Rationale:* Cleanly separates "money to give" from "money earned", enabling
-leaderboards on Private balances and periodic replenishment without touching
-earnings.
+*Rationale:* Cleanly separates "money to give" from "money earned". The
+Private wallet is private: its balance is never surfaced or ranked.
+Leaderboards measure zaps sent out of Allowance wallets that landed in a
+Private wallet, excluding the `Weekly Allowance cleared` sweep, so they
+reward giving rather than receiving or hoarding. Self-zaps do not count.
+Payments are read through the instance-wide paginated payments endpoint
+(`PAYMENTS_PAGE_SIZE` 1000 rows per request, at most `MAX_PAYMENT_PAGES` 100
+pages), falling back to paged per-wallet reads on an LNbits that lacks it. A
+wallet that cannot be read, or a read that stops at the page limit, marks the
+result partial, and the card and the assistant both say the ranking may be
+incomplete rather than presenting a floor as the total. The ranking is only as
+complete as the user list `getUsers` returns: someone missing from that list is
+missing from the leaderboard too. The window is bounded, 1 to 365 days
+(`MAX_LEADERBOARD_WINDOW_DAYS`, shared by `LEADERBOARD_WINDOW_DAYS` and the
+assistant tool's `days`), with no "all time" value: an unbounded read of a
+team's whole history is the slowest read the bot can make, and a very large
+window used to produce a negative cut-off that counted every zap while the
+card still named the window. `LEADERBOARD_TOP_N` is capped at 100 rows
+(`MAX_LEADERBOARD_TOP_N`) to keep the Teams card small. A value above either
+ceiling is rejected like a malformed one: the command replies "unavailable"
+and logs the variable name. A treasury wallet must not be named `Allowance`,
+or its automation payouts would rank as a person's zaps.
 
 === Scheduled top-ups are not bot code
 
