@@ -71,9 +71,11 @@ closing the gaps.
   and the language blocks in the leaderboard, calendar and zap command tests
   assert Spanish replies through the handlers; `src/teamsBot.i18n.test.ts`
   runs every registered command for an `es-MX` client and fails on any
-  English copy. `src/services/foundryAgentService.test.ts` pins that a
-  Spanish turn carries the reply-language hint on its input and that
-  switching language never re-creates the agent.
+  English copy. `src/services/foundryAgentService.test.ts` pins that every
+  turn carries a reply-language hint on its input (Spanish for a Spanish
+  client, an English counter-hint otherwise), that an English turn after a
+  Spanish one in the same conversation overrides the stored Spanish hint, and
+  that switching language never re-creates the agent.
 - `src/services/paymentExtra.test.ts` and the `SendZap payment metadata` block
   in `src/commands/sendZapCommand.test.ts` pin the keyless payment metadata
   projection (no wallet keys or balances in LNbits `extra`).

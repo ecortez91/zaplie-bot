@@ -53,9 +53,10 @@ deployable components in one repository:
   `activity.locale` to `t` (not the collapsed `Locale`): number parameters
   are formatted for the client's region with `formatNumber`, so never call
   `toLocaleString()` yourself. Command words, wallet names, display names and
-  the reward label are not translated. The assistant gets the language per
-  turn on its input, never in the agent instructions (they are cached by
-  hash). The recipient notification stays English: there is no recipient
+  the reward label are not translated. The assistant gets a reply-language
+  hint on every turn's input, Spanish or English, never in the agent
+  instructions (they are cached by hash); the English one cancels an earlier
+  Spanish one, because Foundry replays a conversation's items. The recipient notification stays English: there is no recipient
   activity to read a language from.
 - **Recipient notifications** (`src/services/recipientNotifier.ts`): after the
   ledger records a zap as paid and the sender's receipt is updated, the bot

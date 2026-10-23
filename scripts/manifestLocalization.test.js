@@ -6,6 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { findUnresolvedPlaceholders } = require('./manifestTemplate');
 
 const root = path.join(__dirname, '..');
 const template = JSON.parse(
@@ -80,4 +81,26 @@ test('command titles are left in English so the bot still matches them', () => {
     /commands\[\d+\]\.title$/.test(key),
   );
   assert.deepStrictEqual(titles, []);
+});
+
+test('the Spanish file uses only ${{NAME}} placeholders, the form Teams Toolkit resolves in localisation files', () => {
+  // build.js never reads es.json, so a {{NAME}} here would be resolved by
+  // nobody and ship literally; Teams Toolkit's resolver only matches ${{NAME}}.
+  const raw = fs.readFileSync(path.join(root, 'appPackage', 'es.json'), 'utf8');
+  assert.deepStrictEqual(findUnresolvedPlaceholders(raw), []);
+  // Every toolkit placeholder in es.json must also be one the template uses,
+  // so the same env/.env.<env> value satisfies both files.
+  const templateRaw = fs.readFileSync(
+    path.join(root, 'manifest.template.json'),
+    'utf8',
+  );
+  const toolkitVars = text =>
+    new Set(text.match(/\$\{\{ *[A-Za-z_][A-Za-z0-9_]* *\}\}/g) || []);
+  const templateVars = toolkitVars(templateRaw);
+  for (const placeholder of toolkitVars(raw)) {
+    assert.ok(
+      templateVars.has(placeholder),
+      `${placeholder} is not used in manifest.template.json`,
+    );
+  }
 });

@@ -605,12 +605,18 @@ Spanish copy (`es-ES` writes 10000 as `10.000`, `es-MX` and `es-419` as
 Formatting is copy only: the amount regex, the ledger, the memo and every
 comparison use the raw number, and nothing re-parses a formatted string.
 
-The conversational assistant gets the language per turn: a Spanish client's
-question is sent with a leading developer message asking for a Spanish reply
-(command words, names, amounts and the reward label unchanged). It is not part
-of the agent instructions, because `ensureAgent` re-creates the agent whenever
-their hash changes. Other languages get no hint, so the model keeps answering
-in the language it was asked.
+The conversational assistant gets the language per turn: every question is
+sent with a leading developer message, and the user's text stays its own item.
+A Spanish client's turn asks for a Spanish reply (command words, names, amounts
+and the reward label unchanged); any other client's turn says to reply in the
+language the user writes in, English by default, and that any earlier
+instruction to reply in Spanish no longer applies. The hint goes both ways
+because Foundry stores input items in the conversation and replays them on
+later turns: a Spanish hint with nothing after it would keep a later English
+turn in Spanish (https://github.com/knowall-ai/zaplie-bot/issues/516). The
+hint is not part of the agent instructions, because `ensureAgent` re-creates
+the agent whenever their hash changes, so a language switch never re-creates
+the agent.
 
 A missing parameter leaves its `{{name}}` token in the text and logs a
 warning, so a call-site typo is visible instead of rendering "tu saldo es .".

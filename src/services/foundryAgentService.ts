@@ -142,24 +142,40 @@ interface InputMessage {
 // The reply language rides on the turn's own input, never in the agent
 // instructions: ensureAgent caches the agent by a hash of those, so a language
 // there would re-create the agent each time a user's language differs from
-// the previous turn's. Only a Spanish client (the bot copy's other language)
-// gets a hint; any other question is left to the model, which answers in the
-// language it was asked.
+// the previous turn's. Every turn carries a hint, in both directions: the
+// items are stored in the Foundry conversation and replayed on later turns,
+// so a Spanish hint with no English counterpart would keep a later English
+// turn in Spanish (https://github.com/knowall-ai/zaplie-bot/issues/516).
 export const SPANISH_REPLY_HINT =
   "The user's Microsoft Teams client is set to Spanish. Reply in Spanish (neutral Latin American). " +
   'Keep the command words exactly as listed, in English (for example "send zap"), ' +
   'and keep wallet names, display names, amounts and the reward label unchanged.';
 
+// "English by default", not "Reply in English": resolveLocale maps every
+// non-Spanish locale (fr-FR, none, ...) to en, and those users still get an
+// answer in the language they wrote in. The hint only cancels the Spanish one.
+export const ENGLISH_REPLY_HINT =
+  "The user's Microsoft Teams client is not set to Spanish. Reply in the language the user writes in, English by default. " +
+  'Any earlier instruction in this conversation to reply in Spanish no longer applies. ' +
+  'Keep the command words exactly as listed, in English (for example "send zap").';
+
+const replyLanguageHint = (turnContext: TurnContext): string =>
+  resolveLocale(turnContext.activity?.locale) === 'es'
+    ? SPANISH_REPLY_HINT
+    : ENGLISH_REPLY_HINT;
+
+// The user's text is always its own item, never folded into the hint.
 const firstTurnInput = (
   userText: string,
   turnContext: TurnContext,
-): string | InputMessage[] =>
-  resolveLocale(turnContext.activity?.locale) === 'es'
-    ? [
-        { type: 'message', role: 'developer', content: SPANISH_REPLY_HINT },
-        { type: 'message', role: 'user', content: userText },
-      ]
-    : userText;
+): InputMessage[] => [
+  {
+    type: 'message',
+    role: 'developer',
+    content: replyLanguageHint(turnContext),
+  },
+  { type: 'message', role: 'user', content: userText },
+];
 
 const isFunctionCall = (value: unknown): value is FoundryFunctionCall =>
   isRecord(value) &&
@@ -357,8 +373,10 @@ export async function runConversationalTurn(
     return JSON.stringify(result);
   };
 
-  let nextInput: string | InputMessage[] | FunctionCallOutput[] =
-    firstTurnInput(userText, turnContext);
+  let nextInput: InputMessage[] | FunctionCallOutput[] = firstTurnInput(
+    userText,
+    turnContext,
+  );
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const rawResponse = await openai.responses.create(
