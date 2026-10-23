@@ -1,7 +1,7 @@
 // lnbitsService.ts
 
 import dotenvFlow from 'dotenv-flow';
-import { isRecord } from '../utils/typeGuards';
+import { isOptionalString, isRecord } from '../utils/typeGuards';
 
 dotenvFlow.config({ path: './env' });
 
@@ -398,12 +398,6 @@ export const USER_LIST_PAGE_SIZE = 100;
 // Guard against a server that ignores `offset`: 10,000 accounts is far beyond
 // any team this bot serves, so hitting it means something is wrong.
 const USER_LIST_MAX_PAGES = 100;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const isOptionalString = (value: unknown): value is string | null | undefined =>
-  value === undefined || value === null || typeof value === 'string';
 
 // One record of a user-list page. LNbits sends null for unset optional
 // fields; anything else that is not a string is a malformed page, and a
