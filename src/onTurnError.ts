@@ -1,5 +1,4 @@
 import { TurnContext } from 'botbuilder';
-import { resolveLocale } from './i18n';
 import { genericErrorMessage } from './messages';
 import { recordActivity } from './services/pulse';
 
@@ -46,7 +45,5 @@ export const onTurnErrorHandler = async (
   );
 
   // Send a single generic, friendly message to the user, in their language.
-  await context.sendActivity(
-    genericErrorMessage(resolveLocale(context.activity.locale)),
-  );
+  await context.sendActivity(genericErrorMessage(context.activity.locale));
 };

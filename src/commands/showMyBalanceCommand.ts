@@ -1,13 +1,15 @@
 import { SSOCommand } from './SSOCommandMap';
 import { TurnContext } from 'botbuilder';
 import { getUserWallets } from '../services/lnbitsService';
-import { resolveLocale, t } from '../i18n';
+import { t } from '../i18n';
 
 const adminKey = process.env.LNBITS_ADMINKEY as string;
 
 export class ShowMyBalanceCommand extends SSOCommand {
   async execute(context: TurnContext): Promise<void> {
-    const locale = resolveLocale(context.activity?.locale);
+    // The raw tag: it picks the language and groups the balance for the
+    // client's region.
+    const locale = context.activity?.locale;
     try {
       //await context.sendActivity('Showing your balance...');
       console.log('Showing your balance...');

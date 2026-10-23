@@ -49,8 +49,14 @@ deployable components in one repository:
   in `src/i18n/index.ts` with `en` and `es` dictionaries; replies follow the
   Teams client language (`activity.locale`, English fallback). Add new copy
   there, never as a literal in a handler, and throw `UserFacingError(key,
-  params)` so the catch can render it in the user's language. Command words,
-  wallet names, display names and the reward label are not translated.
+  params)` so the catch can render it in the user's language. Pass the raw
+  `activity.locale` to `t` (not the collapsed `Locale`): number parameters
+  are formatted for the client's region with `formatNumber`, so never call
+  `toLocaleString()` yourself. Command words, wallet names, display names and
+  the reward label are not translated. The assistant gets the language per
+  turn on its input, never in the agent instructions (they are cached by
+  hash). The recipient notification stays English: there is no recipient
+  activity to read a language from.
 - **Recipient notifications** (`src/services/recipientNotifier.ts`): after the
   ledger records a zap as paid and the sender's receipt is updated, the bot
   opens the recipient's personal chat on demand (`createConversationAsync`,

@@ -8,7 +8,7 @@ import {
 } from '../services/lnbitsService';
 import { UserService } from '../services/userService';
 import { genericErrorMessage } from '../messages';
-import { Locale, resolveLocale, t } from '../i18n';
+import { LocaleTag, formatNumber, t } from '../i18n';
 import { MAX_ZAP_SATS } from './zapBudget';
 import {
   ZapPaymentExtra,
@@ -28,8 +28,9 @@ export class SendZapCommand extends SSOCommand {
       // Await the createZapCard function and log the result
       const currentUser = context.turnState.get('user');
       // Optional chaining: a language mismatch or a bare context must never
-      // fail a turn, and the error path below runs for any failure.
-      const locale = resolveLocale(context.activity?.locale);
+      // fail a turn, and the error path below runs for any failure. The raw
+      // tag is kept so the card's numbers follow the client's region.
+      const locale = context.activity?.locale;
       const card = await createZapCard(currentUser, globalRewardName, locale);
       console.log('createZapCard:', card); // Log the card content
 
@@ -44,9 +45,7 @@ export class SendZapCommand extends SSOCommand {
       // The details belong in the logs: an LNbits error message can carry
       // wallet ids or configuration names into the chat.
       console.error('SendZapCommand failed:', error);
-      await context.sendActivity(
-        genericErrorMessage(resolveLocale(context.activity?.locale)),
-      );
+      await context.sendActivity(genericErrorMessage(context.activity?.locale));
     }
   }
 }
@@ -103,7 +102,7 @@ const receiptRow = (label: string, value: string) => ({
 // an earlier submit of the same card are not repeated here.
 export function buildZapReceiptCard(
   receipt: ZapReceipt,
-  locale: Locale = 'en',
+  locale: LocaleTag = 'en',
 ) {
   const {
     recipients,
@@ -164,19 +163,19 @@ export function buildZapReceiptCard(
       receiptRow(t(locale, 'receiptMessage'), message),
       receiptRow(
         t(locale, 'receiptAmount', { rewardName }),
-        amount.toLocaleString(),
+        formatNumber(amount, locale),
       ),
       ...(recipients.length > 1
         ? [
             receiptRow(
               t(locale, 'receiptTotal', { rewardName }),
-              totalAmountSent.toLocaleString(),
+              formatNumber(totalAmountSent, locale),
             ),
           ]
         : []),
       receiptRow(
         t(locale, 'receiptRemaining', { rewardName }),
-        remainingBalance.toLocaleString(),
+        formatNumber(remainingBalance, locale),
       ),
     ],
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -285,7 +284,7 @@ export async function SendZap(
           remainingBalance,
           rewardName: globalRewardName,
         },
-        resolveLocale(context.activity?.locale),
+        context.activity?.locale,
       );
 
       // Update responsive card in message
@@ -365,7 +364,7 @@ export const zapAmountRegex = (cap: number): string => {
 export const zapAmountInput = (
   liveBalance: number,
   rewardName: string,
-  locale: Locale = 'en',
+  locale: LocaleTag = 'en',
 ) => {
   const cap = Number.isFinite(liveBalance)
     ? Math.max(0, Math.min(Math.floor(liveBalance), MAX_ZAP_SATS))
@@ -376,11 +375,11 @@ export const zapAmountInput = (
       : cap < MAX_ZAP_SATS
         ? t(locale, 'cardAmountErrorCap', {
             rewardName,
-            cap: cap.toLocaleString(),
+            cap,
           })
         : t(locale, 'cardAmountErrorRange', {
             rewardName,
-            max: MAX_ZAP_SATS.toLocaleString(),
+            max: MAX_ZAP_SATS,
           });
   return {
     type: 'Input.Text',
@@ -397,7 +396,7 @@ export const zapAmountInput = (
 async function createZapCard(
   sender: User,
   globalRewardName: string,
-  locale: Locale,
+  locale: LocaleTag,
 ) {
   console.log('Creating Zap Card ...');
   const walletChoices = await populateWalletChoices();

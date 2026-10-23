@@ -3,10 +3,11 @@
 // Bot copy in the user's language. Teams sends the client language on every
 // activity (`activity.locale`, e.g. "es-MX"), so the bot answers in Spanish
 // for any `es-*` client and in English for everything else. Only bot copy is
-// translated: LNbits wallet names, display names, amounts and the reward
-// label are data and pass through untouched, and the command words people
-// type stay English (they are matched by SSOCommandMap). The zap card and
-// its receipt use the same keys, so a card built for a Spanish client is
+// translated: LNbits wallet names, display names and the reward label are
+// data and pass through untouched, amounts keep their value and only get the
+// client region's digit grouping (`formatNumber`), and the command words
+// people type stay English (they are matched by SSOCommandMap). The zap card
+// and its receipt use the same keys, so a card built for a Spanish client is
 // Spanish end to end.
 //
 // The dictionaries are typed objects rather than JSON files so a Spanish key
@@ -89,6 +90,21 @@ export const en = {
   receiptAmount: 'Amount ({{rewardName}}):',
   receiptTotal: 'Total Sent ({{rewardName}}):',
   receiptRemaining: 'Remaining Amount ({{rewardName}}):',
+  leaderboardTitle: 'Current leaders (Private wallet balance):',
+  leaderboardEmpty:
+    'No Private wallet balances to rank yet. Send a zap to get things started!',
+  leaderboardUnavailable:
+    'Sorry, I could not load the leaderboard just now. Please try again in a moment.',
+  leaderboardViewWallets: 'View Wallets',
+  calendarAlreadyConnected:
+    'Your calendar is already connected — ask me about your recent meetings!',
+  calendarCardTitle: 'Connect work signals',
+  calendarCardText:
+    'Zaplie requests delegated, read-only access to calendar and relevant people so it can suggest teammates to recognise.',
+  withdrawComingSoon: 'Ah! Steady on cowboy ... coming soon!',
+  zapReceived:
+    '⚡ {{sender}} zapped you {{amount}} {{rewardName}}: "{{message}}"',
+  zapReceivedUnknownSender: 'A colleague',
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -170,6 +186,21 @@ export const es: Record<MessageKey, string> = {
   receiptAmount: 'Cantidad ({{rewardName}}):',
   receiptTotal: 'Total enviado ({{rewardName}}):',
   receiptRemaining: 'Saldo restante ({{rewardName}}):',
+  leaderboardTitle: 'Líderes actuales (saldo de la cartera Private):',
+  leaderboardEmpty:
+    'Todavía no hay saldos de carteras Private para clasificar. ¡Envía un zap para empezar!',
+  leaderboardUnavailable:
+    'Lo siento, no pude cargar la clasificación en este momento. Inténtalo de nuevo en un momento.',
+  leaderboardViewWallets: 'Ver carteras',
+  calendarAlreadyConnected:
+    'Tu calendario ya está conectado. ¡Pregúntame por tus reuniones recientes!',
+  calendarCardTitle: 'Conectar señales de trabajo',
+  calendarCardText:
+    'Zaplie solicita acceso delegado y de solo lectura a tu calendario y a las personas relevantes para sugerirte compañeros a quienes reconocer.',
+  withdrawComingSoon: '¡Calma, vaquero! Muy pronto.',
+  zapReceived:
+    '⚡ {{sender}} te envió un zap de {{amount}} {{rewardName}}: "{{message}}"',
+  zapReceivedUnknownSender: 'Un colega',
 };
 
 export type Dictionaries = Record<Locale, Record<MessageKey, string>>;
@@ -198,6 +229,42 @@ export function resolveLocale(activityLocale: unknown): Locale {
 }
 
 /**
+ * What handlers pass around: the raw `activity.locale` Teams sent (e.g.
+ * "es-MX"), or a bare `Locale`. The copy language and the number format are
+ * both derived from it, so the region is never lost on the way to a number.
+ */
+export type LocaleTag = string | undefined;
+
+/**
+ * The BCP 47 tag numbers are formatted with. Spanish copy keeps the client's
+ * full tag, because the region decides the separators: Node 24 writes 10000
+ * as "10.000" for `es`/`es-ES` but "10,000" for `es-MX`/`es-419`. Anything
+ * else gets `en`, matching the English copy around it (a German client reads
+ * English text, so "10.000" inside it would be wrong). Never the server's
+ * default locale, and never a throw: a tag Intl cannot canonicalise is `es`.
+ */
+export function numberLocale(activityLocale: unknown): string {
+  if (resolveLocale(activityLocale) !== 'es') {
+    return DEFAULT_LOCALE;
+  }
+  try {
+    const tag = String(activityLocale).trim().replace(/_/g, '-');
+    return Intl.getCanonicalLocales(tag)[0] ?? 'es';
+  } catch {
+    return 'es';
+  }
+}
+
+/** Formats a number for the client that sent the activity. */
+export function formatNumber(value: number, activityLocale: unknown): string {
+  try {
+    return new Intl.NumberFormat(numberLocale(activityLocale)).format(value);
+  } catch {
+    return new Intl.NumberFormat(DEFAULT_LOCALE).format(value);
+  }
+}
+
+/**
  * Renders a message from an explicit set of dictionaries. Exported for the
  * tests that pin the fallback; production code uses `t`.
  */
@@ -216,14 +283,40 @@ export function translateWith(
     }
     template = dicts[DEFAULT_LOCALE][key];
   }
-  return template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) =>
-    String(params?.[name] ?? ''),
-  );
+  return template.replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
+    const value = params?.[name];
+    if (value === undefined || value === null) {
+      // A call-site typo must be visible, not "your balance is .": the token
+      // stays in the text and the logs name it. Never a throw: copy must not
+      // fail a turn.
+      console.warn(`i18n: missing parameter "${name}" for "${key}"`);
+      return match;
+    }
+    return String(value);
+  });
 }
 
-/** Renders bot copy in the given language, with `{{name}}` placeholders filled. */
+/**
+ * Renders bot copy for the client that sent the activity: the language comes
+ * from the tag (`es-*` is Spanish, anything else English) and every number
+ * parameter is formatted for the tag's region with `formatNumber`, so no
+ * caller formats a number with the server's locale. Pass the raw
+ * `activity.locale`; a bare `'en'` or `'es'` also works.
+ */
 export const t = (
-  locale: Locale,
+  localeTag: LocaleTag,
   key: MessageKey,
   params?: MessageParams,
-): string => translateWith(dictionaries, locale, key, params);
+): string =>
+  translateWith(
+    dictionaries,
+    resolveLocale(localeTag),
+    key,
+    params &&
+      Object.fromEntries(
+        Object.entries(params).map(([name, value]) => [
+          name,
+          typeof value === 'number' ? formatNumber(value, localeTag) : value,
+        ]),
+      ),
+  );

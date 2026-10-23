@@ -6,8 +6,9 @@ import { UserFacingError } from '../messages';
 // payment. liveBalance must be a fresh read: the
 // turn-state wallet snapshot never decrements across a multi-recipient loop.
 //
-// The errors carry message keys, not prose: the handler that catches them
-// renders the text in the user's language.
+// The errors carry message keys and raw numbers, not prose: the handler that
+// catches them renders the text in the user's language and formats the
+// numbers for the user's region (never the server's).
 
 export const MAX_ZAP_SATS = 10000;
 
@@ -20,7 +21,7 @@ export function validateZapSubmit(
   const amount = Number(rawAmount);
   if (!Number.isInteger(amount) || amount < 1 || amount > MAX_ZAP_SATS) {
     throw new UserFacingError('amountInvalid', {
-      max: MAX_ZAP_SATS.toLocaleString(),
+      max: MAX_ZAP_SATS,
       rewardName,
     });
   }

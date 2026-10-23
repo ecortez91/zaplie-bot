@@ -43,7 +43,7 @@ import {
   unrecognizedCommandGuide,
   welcomeMessage,
 } from './messages';
-import { resolveLocale, t } from './i18n';
+import { t } from './i18n';
 import { runConversationalTurn } from './services/foundryAgentService';
 import config from './config';
 import { createReadOnlyTools } from './commands/agentTools';
@@ -123,8 +123,9 @@ export class TeamsBot extends TeamsActivityHandler {
         return;
       }
 
-      // The reply language follows the Teams client that sent the message.
-      const locale = resolveLocale(context.activity.locale);
+      // The reply follows the Teams client that sent the message: the raw
+      // tag (e.g. "es-MX") decides the language and the number format.
+      const locale = context.activity.locale;
 
       try {
         let textMessage = context.activity.text || '';
@@ -469,10 +470,7 @@ export class TeamsBot extends TeamsActivityHandler {
       const membersAdded = context.activity.membersAdded ?? [];
       if (membersAdded.some(member => member.id === botId)) {
         await context.sendActivity(
-          welcomeMessage(
-            SSOCommandMap.commandNames(),
-            resolveLocale(context.activity.locale),
-          ),
+          welcomeMessage(SSOCommandMap.commandNames(), context.activity.locale),
         );
       }
       await next();
@@ -488,9 +486,7 @@ export class TeamsBot extends TeamsActivityHandler {
       await this.userState.saveChanges(context, false);
     } catch (error) {
       console.error('Error in run method:', error);
-      await context.sendActivity(
-        genericErrorMessage(resolveLocale(context.activity.locale)),
-      );
+      await context.sendActivity(genericErrorMessage(context.activity.locale));
     }
   }
 
@@ -505,7 +501,7 @@ export class TeamsBot extends TeamsActivityHandler {
       undefined,
     );
     const commandNames = SSOCommandMap.commandNames();
-    const locale = resolveLocale(context.activity.locale);
+    const locale = context.activity.locale;
     let result: Awaited<ReturnType<typeof runConversationalTurn>>;
     try {
       result = await runConversationalTurn(
@@ -552,7 +548,7 @@ export class TeamsBot extends TeamsActivityHandler {
   ) {
     if (!process.env.GRAPH_CONNECTION_NAME) return;
     const token = await getStoredGraphToken(context, query.state);
-    const locale = resolveLocale(context.activity.locale);
+    const locale = context.activity.locale;
     await context.sendActivity(
       token
         ? t(locale, 'workSignalsConnected')

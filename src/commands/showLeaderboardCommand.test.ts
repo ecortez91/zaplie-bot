@@ -137,9 +137,7 @@ describe('buildLeaderboardCard', () => {
     );
 
     const rows = cardRows(card);
-    expect(rowText(rows[0])).toBe(
-      `#1 Alice | ${(12345).toLocaleString()} Sats`,
-    );
+    expect(rowText(rows[0])).toBe('#1 Alice | 12,345 Sats');
   });
 
   test('says the leaderboard is empty instead of showing a bare title', () => {
@@ -227,8 +225,8 @@ describe('showLeaderboardCommand', () => {
 
     const card = sentCard(sendActivity);
     const rows = cardRows(card);
-    expect(rowText(rows[0])).toBe(`#1 Bob | ${(2000).toLocaleString()} Sats`);
-    expect(rowText(rows[1])).toBe(`#2 Alice | ${(1000).toLocaleString()} Sats`);
+    expect(rowText(rows[0])).toBe('#1 Bob | 2,000 Sats');
+    expect(rowText(rows[1])).toBe('#2 Alice | 1,000 Sats');
     expect(mockGetUsers).toHaveBeenCalledTimes(1);
   });
 
@@ -326,5 +324,92 @@ describe('showLeaderboardCommand', () => {
     expect(sendActivity).toHaveBeenCalledWith(LEADERBOARD_UNAVAILABLE_MESSAGE);
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+});
+
+// Ben's pre-merge point 2: the manifest describes the command in Spanish, so
+// the card it answers with must be Spanish too, with the numbers grouped the
+// way the client's region writes them.
+describe('showLeaderboardCommand in the user language', () => {
+  const originalPointsLabel = process.env.LNBITS_POINTS_LABEL;
+  const originalPortalUrl = process.env.PORTAL_URL;
+
+  const spanishContext = (locale: string) => {
+    const { context, sendActivity } = makeContext();
+    (context as unknown as { activity: unknown }).activity = { locale };
+    return { context, sendActivity };
+  };
+
+  beforeEach(() => {
+    process.env.LNBITS_POINTS_LABEL = 'Sats';
+    process.env.PORTAL_URL = 'https://portal.example.test';
+    mockGetWallets.mockResolvedValue([
+      wallet({ id: 'w1', user: 'user-1', balance_msat: 12_345_000 }),
+    ]);
+    mockGetUsers.mockResolvedValue([
+      user({ id: 'user-1', displayName: 'Alice' }),
+    ]);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    jest.restoreAllMocks();
+    if (originalPointsLabel === undefined) {
+      delete process.env.LNBITS_POINTS_LABEL;
+    } else {
+      process.env.LNBITS_POINTS_LABEL = originalPointsLabel;
+    }
+    if (originalPortalUrl === undefined) {
+      delete process.env.PORTAL_URL;
+    } else {
+      process.env.PORTAL_URL = originalPortalUrl;
+    }
+  });
+
+  test('answers an es-ES client in Spanish with Spain-style grouping', async () => {
+    const { context, sendActivity } = spanishContext('es-ES');
+
+    await new ShowLeaderboardCommand().execute(context);
+
+    const card = sentCard(sendActivity);
+    expect(card.body[0]).toMatchObject({
+      text: 'Líderes actuales (saldo de la cartera Private):',
+    });
+    expect(rowText(cardRows(card)[0])).toBe('#1 Alice | 12.345 Sats');
+    expect(card.actions?.[0].title).toBe('Ver carteras');
+    expect(JSON.stringify(card)).not.toContain(LEADERBOARD_TITLE);
+  });
+
+  test('groups an es-MX amount with a comma, as Mexico writes it', async () => {
+    const { context, sendActivity } = spanishContext('es-MX');
+
+    await new ShowLeaderboardCommand().execute(context);
+
+    expect(rowText(cardRows(sentCard(sendActivity))[0])).toBe(
+      '#1 Alice | 12,345 Sats',
+    );
+  });
+
+  test('says the board is empty in Spanish', async () => {
+    mockGetWallets.mockResolvedValue([]);
+    const { context, sendActivity } = spanishContext('es-419');
+
+    await new ShowLeaderboardCommand().execute(context);
+
+    expect(sentCard(sendActivity).body[1]).toMatchObject({
+      text: 'Todavía no hay saldos de carteras Private para clasificar. ¡Envía un zap para empezar!',
+    });
+  });
+
+  test('reports an unavailable leaderboard in Spanish', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockGetUsers.mockResolvedValue(null as never);
+    const { context, sendActivity } = spanishContext('es-ES');
+
+    await new ShowLeaderboardCommand().execute(context);
+
+    expect(sendActivity).toHaveBeenCalledWith(
+      'Lo siento, no pude cargar la clasificación en este momento. Inténtalo de nuevo en un momento.',
+    );
   });
 });

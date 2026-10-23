@@ -1,17 +1,18 @@
 import { SSOCommand } from './SSOCommandMap';
 import { TurnContext, CardFactory } from 'botbuilder';
 import { getWallets, getUsers } from '../services/lnbitsService';
+import { LocaleTag, en, formatNumber, t } from '../i18n';
 
 const adminKey = process.env.LNBITS_ADMINKEY as string;
 
 // Names what the numbers actually are. LNbits exposes a wallet balance, not a
 // received-zaps total, so a title promising "zaps received" would misreport a
-// user who has spent or withdrawn from their Private wallet.
-export const LEADERBOARD_TITLE = 'Current leaders (Private wallet balance):';
-export const LEADERBOARD_EMPTY_MESSAGE =
-  'No Private wallet balances to rank yet. Send a zap to get things started!';
-export const LEADERBOARD_UNAVAILABLE_MESSAGE =
-  'Sorry, I could not load the leaderboard just now. Please try again in a moment.';
+// user who has spent or withdrawn from their Private wallet. The copy lives in
+// src/i18n; these constants are the English renderings, kept for callers and
+// tests that compare against them.
+export const LEADERBOARD_TITLE = en.leaderboardTitle;
+export const LEADERBOARD_EMPTY_MESSAGE = en.leaderboardEmpty;
+export const LEADERBOARD_UNAVAILABLE_MESSAGE = en.leaderboardUnavailable;
 export const LEADERBOARD_LIMIT = 10;
 
 export interface LeaderboardEntry {
@@ -27,6 +28,7 @@ export function buildLeaderboardCard(
   entries: LeaderboardEntry[],
   rewardName: string,
   portalUrl?: string,
+  locale: LocaleTag = 'en',
 ) {
   const leaders = entries.slice(0, LEADERBOARD_LIMIT);
   return {
@@ -34,7 +36,7 @@ export function buildLeaderboardCard(
     body: [
       {
         type: 'TextBlock',
-        text: LEADERBOARD_TITLE,
+        text: t(locale, 'leaderboardTitle'),
         weight: 'Bolder',
         size: 'Medium',
         wrap: true,
@@ -43,7 +45,7 @@ export function buildLeaderboardCard(
         ? [
             {
               type: 'TextBlock',
-              text: LEADERBOARD_EMPTY_MESSAGE,
+              text: t(locale, 'leaderboardEmpty'),
               wrap: true,
             },
           ]
@@ -68,7 +70,7 @@ export function buildLeaderboardCard(
             items: [
               {
                 type: 'TextBlock',
-                text: `${entry.amount.toLocaleString()} ${rewardName}`,
+                text: `${formatNumber(entry.amount, locale)} ${rewardName}`,
                 weight: 'Bolder',
               },
             ],
@@ -81,7 +83,7 @@ export function buildLeaderboardCard(
           actions: [
             {
               type: 'Action.OpenUrl',
-              title: 'View Wallets',
+              title: t(locale, 'leaderboardViewWallets'),
               url: `${portalUrl.replace(/\/+$/, '')}/wallet`,
             },
           ],
@@ -95,6 +97,9 @@ export function buildLeaderboardCard(
 // New command for showing leaderboard
 export class ShowLeaderboardCommand extends SSOCommand {
   async execute(context: TurnContext): Promise<void> {
+    // The raw tag: it picks the language and groups the amounts for the
+    // client's region.
+    const locale = context.activity?.locale;
     try {
       console.log('Showing leaderboard...');
 
@@ -108,7 +113,7 @@ export class ShowLeaderboardCommand extends SSOCommand {
       // command and must be told it did not work.
       if (!users) {
         console.error('Leaderboard unavailable: LNbits returned no user list.');
-        await context.sendActivity(LEADERBOARD_UNAVAILABLE_MESSAGE);
+        await context.sendActivity(t(locale, 'leaderboardUnavailable'));
         return;
       }
 
@@ -155,6 +160,7 @@ export class ShowLeaderboardCommand extends SSOCommand {
         entries,
         globalRewardName,
         process.env.PORTAL_URL,
+        locale,
       );
 
       // Send the formatted card as an activity
@@ -163,7 +169,7 @@ export class ShowLeaderboardCommand extends SSOCommand {
       });
     } catch (error) {
       console.error('Error showing leaderboard:', error);
-      await context.sendActivity(LEADERBOARD_UNAVAILABLE_MESSAGE);
+      await context.sendActivity(t(locale, 'leaderboardUnavailable'));
     }
   }
 }
