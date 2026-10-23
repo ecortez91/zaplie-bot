@@ -7,9 +7,13 @@ import checkmarkIcon from '../images/CheckmarkCircleGreen.svg';
 import dismissIcon from '../images/DismissCircleRed.svg';
 import pasteInvoice from '../images/PasteInvoice.svg';
 import loaderGif from '../images/Loader.gif';
-import { decode } from 'light-bolt11-decoder';
 import { payInvoice } from '../services/lnbits/payments';
 import { RewardNameContext } from './RewardNameContext';
+import {
+  INVOICE_ERRORS,
+  isInvoiceErrorMessage,
+  parseInvoice,
+} from '../utils/lightningInvoice';
 
 interface SendPopupProps {
   onClose: () => void;
@@ -26,13 +30,13 @@ const SendPayment: React.FC<SendPopupProps> = ({
     useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const myLNbitDetails = currentUserLNbitDetails;
-  const [invoiceAmount, setInvoiceAmount] = useState<number | null>();
+  const [invoiceAmount, setInvoiceAmount] = useState<number | null>(null);
   const isSendDisabled = !invoice || !invoiceAmount;
   const [failureMessage, setFailureMessage] = useState('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const isMounted = useRef<boolean>(true);
-  const [invoiceMemo, setInvoiceMemo] = useState<string | null>();
-  const [isAmountReadOnly, setIsAmountReadOnly] = useState<boolean>(false);
+  const [invoiceMemo, setInvoiceMemo] = useState<string | null>(null);
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [scannerPaused, setScannerPaused] = useState(true); // Make sure scanner starts paused
   const [qrError, setQrError] = useState<string | null>(null);
 
@@ -102,37 +106,32 @@ const SendPayment: React.FC<SendPopupProps> = ({
     };
   };
 
-  const decodeAndSetInvoice = async (processedInvoice: string) => {
+  // An amountless invoice used to leave the amount box editable, but the typed
+  // value was never sent: `payInvoice` posts only `{ paymentRequest }` to the
+  // gateway, whose POST /wallets/:walletId/payments route rejects any other
+  // body key (`PAYMENT_BODY_KEYS` in tabs/backend/lnbitsRoutes.js). The wallet
+  // would be asked to pay an invoice with no amount at all, so reject it here
+  // instead of letting Send look armed.
+  const decodeAndSetInvoice = (processedInvoice: string) => {
     try {
-      const decodedInvoice = decode(processedInvoice);
-      const amountSection = decodedInvoice.sections.find(
-        (section: any) => section.name === 'amount',
-      ) as { name: string; value: string } | null;
-
-      const amountValue = amountSection ? parseInt(amountSection.value) : null;
-      const invoiceAmountInSatoshis = amountValue ? amountValue / 1000 : null;
-
-      const memoSection = decodedInvoice.sections.find(
-        (section: any) => section.name === 'description',
-      ) as { name: string; value: string } | null;
-      const memoValue = memoSection ? String(memoSection.value) : undefined;
-
-      setInvoiceAmount(
-        invoiceAmountInSatoshis !== null
-          ? parseInt(invoiceAmountInSatoshis.toString())
-          : null,
-      );
-      setInvoiceMemo(memoValue);
+      const parsed = parseInvoice(processedInvoice);
       setInvoice(processedInvoice);
-      if (invoiceAmountInSatoshis) {
-        setIsAmountReadOnly(true);
-      } else {
-        setIsAmountReadOnly(false);
-      } // Make input read-only if needed
-    } catch (err) {
-      console.error('Error decoding invoice:', err);
+      setInvoiceAmount(parsed.amountSats);
+      setInvoiceMemo(parsed.memo);
+      setInvoiceError(null);
+    } catch (error) {
+      setInvoice(processedInvoice);
       setInvoiceAmount(null);
       setInvoiceMemo(null);
+      // light-bolt11-decoder throws its own low-level text (for example
+      // 'Wrong string length: 5 (lnbc1). Expected (8..9007199254740991)').
+      // Only the messages parseInvoice raises itself are written for a user,
+      // so anything else is replaced rather than shown raw.
+      setInvoiceError(
+        error instanceof Error && isInvoiceErrorMessage(error.message)
+          ? error.message
+          : INVOICE_ERRORS.undecodable,
+      );
     }
   };
 
@@ -144,7 +143,7 @@ const SendPayment: React.FC<SendPopupProps> = ({
       const processedInvoice = data.split('lightning:').pop() || '';
 
       if (processedInvoice) {
-        await decodeAndSetInvoice(processedInvoice);
+        decodeAndSetInvoice(processedInvoice);
         setIsScanning(false);
         setScannerPaused(true);
       }
@@ -201,7 +200,7 @@ const SendPayment: React.FC<SendPopupProps> = ({
             <p className={styles.text}>Paste invoice</p>
             <textarea
               value={invoice}
-              onChange={async e => {
+              onChange={e => {
                 const inputValue = e.target.value;
                 const processedValue = inputValue
                   ? inputValue.split('lightning:').pop()
@@ -209,7 +208,14 @@ const SendPayment: React.FC<SendPopupProps> = ({
                 setInvoice(processedValue || '');
 
                 if (processedValue) {
-                  await decodeAndSetInvoice(processedValue);
+                  decodeAndSetInvoice(processedValue);
+                } else {
+                  // Clearing the box has to clear what was parsed from the old
+                  // invoice too, or the read-only amount and note stay on
+                  // screen describing an invoice that is no longer there.
+                  setInvoiceAmount(null);
+                  setInvoiceMemo(null);
+                  setInvoiceError(null);
                 }
               }}
               className={styles.textarea}
@@ -230,24 +236,24 @@ const SendPayment: React.FC<SendPopupProps> = ({
             </div>
             <div className={styles.container}>
               <div className={styles.inputRow}>
-                {isAmountReadOnly && (
+                {invoiceAmount !== null && (
                   <input
-                    type={'text'}
-                    value={`${invoiceAmount !== null ? invoiceAmount : ''} ${
-                      invoiceMemo ? ` ${rewardsName}. Note: ${invoiceMemo}` : ''
+                    type="text"
+                    aria-label="Invoice amount"
+                    // The unit belongs to the amount, not to the note, so it
+                    // is rendered whether or not the invoice carries a memo -
+                    // a bare number on a payment screen is ambiguous.
+                    value={`${invoiceAmount} ${rewardsName}${
+                      invoiceMemo ? `. Note: ${invoiceMemo}` : ''
                     }`}
-                    readOnly={isAmountReadOnly}
+                    readOnly
                     className={styles.inputField}
                   />
                 )}
-                {!isAmountReadOnly && (
-                  <input
-                    type="number"
-                    value={invoiceAmount ?? ''}
-                    onChange={e => setInvoiceAmount(parseInt(e.target.value))}
-                    className={styles.inputField}
-                    placeholder="Specify amount"
-                  />
+                {invoiceError && (
+                  <p role="alert" className={styles.errorText}>
+                    {invoiceError}
+                  </p>
                 )}
               </div>
             </div>

@@ -1,6 +1,7 @@
 import { AzureFunction, Context, HttpRequest } from "@azure/functions";
 import { createInvoice, payInvoice, getUser} from '../services/lnbitsService';
 import { getCredentials } from '../services/utils';
+import { ZapPaymentExtra, toPaymentExtraWallet } from '../services/paymentExtra';
 
 const automateZap: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
     context.log('Started Sending zap ...');
@@ -17,7 +18,7 @@ const automateZap: AzureFunction = async function (context: Context, req: HttpRe
         const { senderWalletId, receiverWalletId, zapAmount, zapMessage, tag } = req.body as ZapRequestBody;
 
         // Log the request body
-        context.log('Request Body:', req.body);
+        context.log('Request received', { senderWalletId, receiverWalletId, zapAmount, tag });
 
         // Create an invoice for the receiver
         
@@ -35,17 +36,17 @@ const automateZap: AzureFunction = async function (context: Context, req: HttpRe
 
         // Get details for the receiver
 
-        context.log('Getting Receiver details', adminKey, receiverWalletId);
+        // Users and wallets carry keys, so only ids are logged.
+        context.log('Getting receiver details', receiverWalletId);
         const receiver = await getUser(req,receiverWalletId, adminKey);
-        context.log('Receiver:', receiver);
         const receiverPrivateWallet = await filterPrivateWallet(receiver);
-        console.log('Alice Private wallet - ',receiverPrivateWallet);
-       const receiverAllowanceWallet = await filterAllowanceWallet(receiver);
-       context.log('Receiver Private Wallet:', receiverPrivateWallet);
-        context.log('Receiver Allowance Wallet:', receiverAllowanceWallet);
 
- 
-        const extra = { tag: 'zap', from: senderAllowanceWallet.inkey, to: receiverPrivateWallet.id };
+        // Same projection the bot writes: never a wallet object or a key.
+        const extra: ZapPaymentExtra = {
+            tag: 'zap',
+            from: toPaymentExtraWallet(senderAllowanceWallet, 'sender Allowance', sender.displayName),
+            to: toPaymentExtraWallet(receiverPrivateWallet, 'receiver Private', receiver.displayName),
+        };
 
         const invoice = await createInvoice(req,receiverPrivateWallet.inkey, senderAllowanceWallet.id, zapAmount, zapMessage, extra);
         context.log('Invoice created:', invoice);
@@ -72,7 +73,7 @@ const automateZap: AzureFunction = async function (context: Context, req: HttpRe
 };
 
 function filterPrivateWallet(user: any): any {
-    console.log('User Receiver:', user);
+    console.log('User Receiver:', user?.id);
     if (!user || !user.wallets) {
         console.log('No wallets found for user.');
         return null;
@@ -82,14 +83,14 @@ function filterPrivateWallet(user: any): any {
     if (!privateWallet) {
         console.log('No private wallet found for user.');
     } else {
-        console.log('Private Wallet:', privateWallet);
+        console.log('Private Wallet:', privateWallet?.id);
     }
 
     return privateWallet;
 }
 
 function filterAllowanceWallet(user: any): any {
-    console.log('User Sender:', user);
+    console.log('User Sender:', user?.id);
     return user.wallets.find((wallet: any) => wallet.name === 'Allowance');
 }
 

@@ -131,8 +131,18 @@ try {
     versionParts[2] += 1;
   }
 
-  // Join the version parts back into a string
-  const newVersion = versionParts.join('.');
+  // Teams requires a numeric major.minor.patch version. A release can pin one
+  // explicitly with APP_VERSION; otherwise the template version is used, with
+  // the patch increment above applied for Test and Prod.
+  const newVersion = envConfig.APP_VERSION || versionParts.join('.');
+  if (!/^\d+\.\d+\.\d+$/.test(newVersion)) {
+    const source = envConfig.APP_VERSION
+      ? 'APP_VERSION'
+      : 'manifest.template.json';
+    throw new Error(
+      `Version from ${source} must use numeric major.minor.patch format.`,
+    );
+  }
 
   // Update the version number in the manifest
   manifest.version = newVersion;

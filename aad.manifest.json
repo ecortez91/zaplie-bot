@@ -14,10 +14,27 @@
             "id": "a753735c-1fd6-4e7e-bd5a-66e975060a45",
             "isEnabled": true,
             "value": "Zaplie.Admin"
+        },
+        {
+            "allowedMemberTypes": [
+                "User"
+            ],
+            "description": "Can sign in to the Zaplie portal and its Teams tabs. No admin rights.",
+            "displayName": "Zaplie.User",
+            "id": "a27f71cd-3ed2-4904-94ae-da78358f5936",
+            "isEnabled": true,
+            "value": "Zaplie.User"
         }
     ],
     "optionalClaims": {
-        "idToken": [],
+        "idToken": [
+            {
+                "name": "acct",
+                "source": null,
+                "essential": false,
+                "additionalProperties": []
+            }
+        ],
         "accessToken": [
             {
                 "name": "idtyp",
@@ -115,6 +132,10 @@
         },
         {
             "url": "${{TAB_ENDPOINT}}/auth-end",
+            "type": "Spa"
+        },
+        {
+            "url": "${{TAB_ENDPOINT}}/login",
             "type": "Spa"
         }
     ]

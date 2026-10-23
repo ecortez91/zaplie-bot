@@ -15,6 +15,15 @@ import { theme } from './styles/Theme';
 import App from './App';
 import { ConfigurationError } from './services/authConfig';
 import { getMsalInstance } from './services/msalClient';
+import { getBasePath } from './services/appLocation';
+import {
+  isSilentSignInResponse,
+  relaySilentSignInResponse,
+} from './services/silentSignIn';
+import {
+  isSignOutPopupResponse,
+  relaySignOutPopupResponse,
+} from './services/signOutPopup';
 import { CacheProvider } from './utils/CacheContext';
 import { queryClient } from './query/queryClient';
 
@@ -31,7 +40,7 @@ const renderApp = (msalInstance: PublicClientApplication) => {
     <QueryClientProvider client={queryClient}>
       <MsalProvider instance={msalInstance}>
         <CacheProvider>
-          <Router>
+          <Router basename={getBasePath()}>
             <ThemeProvider theme={theme}>
               <App pca={msalInstance} />
             </ThemeProvider>
@@ -105,5 +114,18 @@ export const initializeApp = async () => {
   renderApp(msalInstance);
 };
 
-// Exported so the startup sequence can be awaited in tests.
-export const startupComplete = initializeApp();
+// Exported so the startup sequence can be awaited in tests. The hidden iframe
+// of a silent Teams sign-in and the Teams sign-out popup only hand their
+// response back to the tab (the popup then closes); neither starts a second
+// copy of the app.
+const startup = (): Promise<void> => {
+  if (isSilentSignInResponse()) {
+    return relaySilentSignInResponse();
+  }
+  if (isSignOutPopupResponse()) {
+    return relaySignOutPopupResponse();
+  }
+  return initializeApp();
+};
+
+export const startupComplete = startup();

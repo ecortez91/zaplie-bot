@@ -2,7 +2,8 @@ import React from 'react';
 import { useTeamsAuth } from '../hooks/useTeamsAuth';
 
 export const SignOutButton = () => {
-  const { handleLogout, isLoggingOut } = useTeamsAuth();
+  const { handleLogout, isLoggingOut, isTeamsInitializing } = useTeamsAuth();
+  const disabled = isLoggingOut || isTeamsInitializing;
 
   const onClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
@@ -12,7 +13,7 @@ export const SignOutButton = () => {
   return (
     <button
       onClick={onClick}
-      disabled={isLoggingOut}
+      disabled={disabled}
       style={{
         background: 'none',
         border: 'none',
@@ -20,11 +21,11 @@ export const SignOutButton = () => {
         color: 'inherit',
         font: 'inherit',
         textDecoration: 'none',
-        cursor: isLoggingOut ? 'not-allowed' : 'pointer',
-        opacity: isLoggingOut ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.6 : 1,
       }}
       onMouseEnter={e => {
-        if (!isLoggingOut) {
+        if (!disabled) {
           (e.target as HTMLElement).style.textDecoration = 'underline';
         }
       }}

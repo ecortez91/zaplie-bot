@@ -10,6 +10,7 @@ import {
   MessageFactory,
 } from 'botbuilder';
 import { SSOCommandMap } from './commands/SSOCommandMap';
+import { SEND_ZAP_COMMAND } from './commands/commandNames';
 import {
   SendZapCommand,
   SendZap,
@@ -22,7 +23,9 @@ import {
   normalizeRecipientIds,
   processZapRecipient,
   validateSelfZap,
+  type ZapRecipient,
 } from './commands/zapRecipient';
+import { notifyZapRecipients } from './services/recipientNotifier';
 import { validateZapSubmit } from './commands/zapBudget';
 import { ShowMyBalanceCommand } from './commands/showMyBalanceCommand';
 import { ShowLeaderboardCommand } from './commands/showLeaderboardCommand';
@@ -34,16 +37,35 @@ import {
 import {
   GENERIC_ERROR_MESSAGE,
   UserFacingError,
+  assistantUnavailableGuide,
+  greetingGuide,
+  isGreeting,
   unrecognizedCommandGuide,
   welcomeMessage,
 } from './messages';
 import { runConversationalTurn } from './services/foundryAgentService';
+import config from './config';
 import { createReadOnlyTools } from './commands/agentTools';
 import { getUser, getWalletBalance } from './services/lnbitsService';
+import {
+  commandSubject,
+  recordActivity,
+  recordZapOutcome,
+} from './services/pulse';
 
 const UNRECOGNIZED_COMMAND_MESSAGE =
   "D'oh! I'm sorry, but I didn't recognize that command. But don't worry, I'm always getting better!";
 const ZAP_SUBMIT_ACTION = 'submitZaps';
+
+// The conversational assistant needs a Foundry project and model. Without
+// them, free text gets the command list instead of an error.
+const assistantConfigured = (): boolean =>
+  Boolean(config.foundryProjectEndpoint && config.foundryModel);
+
+// The Teams message id is the upstream id of a reply; a synthetic activity
+// without one falls back to its conversation, which is still stable.
+const upstreamIdOf = (context: TurnContext): string =>
+  context.activity.id ?? `${context.activity.conversation?.id}:no-id`;
 
 //Reward Name Constants
 
@@ -77,7 +99,7 @@ export class TeamsBot extends TeamsActivityHandler {
     >('foundryConversationId');
 
     // Register commands
-    SSOCommandMap.register('send zap', new SendZapCommand());
+    SSOCommandMap.register(SEND_ZAP_COMMAND, new SendZapCommand());
     SSOCommandMap.register('show my balance', new ShowMyBalanceCommand());
     // "withdraw my zaps" is deliberately not registered (or listed in the
     // app manifests) until withdrawals actually work — see issue #293. The
@@ -227,6 +249,9 @@ export class TeamsBot extends TeamsActivityHandler {
 
           const successfulRecipients: string[] = [];
           const alreadyHandled: string[] = [];
+          // Filled once the ledger records each payment; told after the
+          // receipt below.
+          const paidReceivers: ZapRecipient[] = [];
 
           for (const recId of pendingReceiverIds) {
             const outcome = await processZapRecipient({
@@ -246,8 +271,14 @@ export class TeamsBot extends TeamsActivityHandler {
                   false,
                   globalRewardName,
                 ),
+              onPaid: async receiver => {
+                paidReceivers.push(receiver);
+              },
             });
 
+            if (outcome.status !== 'skipped') {
+              recordZapOutcome(outcome.status, keyFor(recId), amount);
+            }
             if (outcome.status === 'skipped') {
               alreadyHandled.push(recId);
             } else if (outcome.status === 'paid') {
@@ -333,32 +364,93 @@ export class TeamsBot extends TeamsActivityHandler {
           await context.sendActivity(
             `Awesome! You sent ${amount} ${globalRewardName} to your colleague with a zap!`,
           );
+
+          // Last, so a slow or refused Teams call never delays the receipt
+          // above, and after markPaid by construction. Best effort: a few
+          // recipients at a time, each bounded by a timeout, each with its
+          // own outcome; nothing here throws.
+          await notifyZapRecipients(
+            context,
+            paidReceivers.map(receiver => ({
+              recipient: receiver,
+              senderName: currentUser.displayName,
+              amount,
+              rewardName: globalRewardName,
+              message: zapMessage,
+            })),
+          );
         }
 
         // Trigger command by IM text. Matching is tolerant: whitespace is
         // collapsed and a message that starts with a known command (e.g.
         // "send zap to bob") runs that command.
         if (textMessage) {
-          const command = SSOCommandMap.match(textMessage);
-          if (command) {
+          const commandName = SSOCommandMap.matchName(textMessage);
+          const command =
+            commandName === undefined
+              ? undefined
+              : SSOCommandMap.get(commandName);
+          if (commandName !== undefined && command) {
             await command.execute(context);
+            recordActivity({
+              activityType: 'chat.answered',
+              title: `Answered command · ${commandSubject(commandName)}`,
+              level: 'success',
+              subject: commandSubject(commandName),
+              channel: 'teams',
+              upstreamId: upstreamIdOf(context),
+            });
           } else if (
-            context.activity.conversation.conversationType === 'personal'
+            context.activity.conversation.conversationType === 'personal' &&
+            assistantConfigured()
           ) {
             // Free text with no command match falls back to the
             // conversational agent, but only in 1:1 chats: ConversationState
             // (and therefore the Foundry conversation) is keyed per
             // conversation, so a team or groupchat would otherwise share one
-            // agent thread across unrelated teammates.
-            await this.replyConversationally(context, textMessage);
+            // agent thread across unrelated teammates. A deployment without
+            // the assistant gets the command guide below instead. A failed
+            // assistant turn sends the guide itself and records chat.failed.
+            if (await this.replyConversationally(context, textMessage)) {
+              recordActivity({
+                activityType: 'chat.answered',
+                title: 'Answered question · assistant',
+                level: 'success',
+                subject: 'assistant',
+                channel: 'teams',
+                upstreamId: upstreamIdOf(context),
+              });
+            }
           } else {
+            const commandNames = SSOCommandMap.commandNames();
             await context.sendActivity(
-              unrecognizedCommandGuide(SSOCommandMap.commandNames()),
+              isGreeting(textMessage)
+                ? greetingGuide(commandNames)
+                : unrecognizedCommandGuide(commandNames),
             );
+            recordActivity({
+              activityType: 'chat.answered',
+              title: 'Answered question · command-guide',
+              level: 'info',
+              subject: 'command-guide',
+              channel: 'teams',
+              upstreamId: upstreamIdOf(context),
+            });
           }
         }
       } catch (error) {
         console.error('Error in onMessage handler:', error);
+        const userFacing = error instanceof UserFacingError;
+        recordActivity({
+          activityType: 'chat.failed',
+          title: userFacing
+            ? 'Turned down a request · teams'
+            : 'Failed to handle a message · teams',
+          level: userFacing ? 'warning' : 'error',
+          subject: userFacing ? 'user-facing' : 'internal',
+          channel: 'teams',
+          upstreamId: upstreamIdOf(context),
+        });
         await context.sendActivity(
           error instanceof UserFacingError
             ? `D'oh! ${error.message}`
@@ -396,35 +488,55 @@ export class TeamsBot extends TeamsActivityHandler {
     }
   }
 
+  // Returns true when the assistant answered, false when it failed and the
+  // user was sent the command guide instead.
   private async replyConversationally(
     context: TurnContext,
     textMessage: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const existingConversationId = await this.foundryConversationIdAccessor.get(
       context,
       undefined,
     );
+    const commandNames = SSOCommandMap.commandNames();
+    let result: Awaited<ReturnType<typeof runConversationalTurn>>;
     try {
-      const result = await runConversationalTurn(
+      result = await runConversationalTurn(
         textMessage,
         existingConversationId,
         createReadOnlyTools(),
         context,
-      );
-      await this.foundryConversationIdAccessor.set(
-        context,
-        result.foundryConversationId,
-      );
-      await context.sendActivity(
-        result.replyText || UNRECOGNIZED_COMMAND_MESSAGE,
+        commandNames,
       );
     } catch (error) {
-      // A failed turn can leave a dangling/invalid Foundry conversation id; clear
-      // it so the next message starts fresh. Then rethrow — a broken agent must
-      // surface as a real error, not be disguised as "unrecognized command".
+      // A failed turn can leave a dangling/invalid Foundry conversation id;
+      // clear it so the next message starts fresh. The failure is still logged
+      // and recorded as a warning, but the commands do not need the
+      // assistant, so the user gets them rather than a generic error.
       await this.foundryConversationIdAccessor.set(context, undefined);
-      throw error;
+      console.error(
+        'The assistant failed; sending the command guide instead:',
+        error,
+      );
+      recordActivity({
+        activityType: 'chat.failed',
+        title: 'Assistant unavailable · sent the command guide',
+        level: 'warning',
+        subject: 'assistant-unavailable',
+        channel: 'teams',
+        upstreamId: upstreamIdOf(context),
+      });
+      await context.sendActivity(assistantUnavailableGuide(commandNames));
+      return false;
     }
+    await this.foundryConversationIdAccessor.set(
+      context,
+      result.foundryConversationId,
+    );
+    await context.sendActivity(
+      result.replyText || UNRECOGNIZED_COMMAND_MESSAGE,
+    );
+    return true;
   }
 
   async handleTeamsSigninVerifyState(

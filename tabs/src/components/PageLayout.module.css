@@ -16,6 +16,14 @@
   padding: var(--space-6) var(--space-4) var(--space-8);
 }
 
+/* Pages that draw their own full-screen background (the sign-in page). */
+.fullBleed {
+  flex: 1;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
 @media (max-width: 480px) {
   .contentWrap {
     padding-left: var(--space-3);

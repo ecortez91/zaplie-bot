@@ -11,6 +11,10 @@ import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
 import { useCache } from '../utils/CacheContext';
 import { RewardNameContext } from './RewardNameContext';
+import {
+  isFunded,
+  selectWalletByName,
+} from '../services/lnbits/walletSelection';
 
 // The wallet lookup is one request per user. Browsers cap concurrent requests
 // per host, so an unbounded fan-out leaves the surplus queued in the browser
@@ -39,6 +43,22 @@ const mapWithConcurrency = async <TIn, TOut>(
 
   return results;
 };
+
+// Fail closed on the *value*, not on the row: a substring match
+// ("Private archive") or a wallet owned by somebody else is refused outright,
+// but a duplicate name resolves to the oldest wallet rather than blanking the
+// row, and a balance the gateway could not read renders as "Unavailable"
+// instead of a plausible-looking zero.
+export const selectOwnedWallet = (
+  wallets: Wallet[],
+  userId: string,
+  name: string,
+): Wallet | null => selectWalletByName(wallets, userId, name).wallet;
+
+const formatBalance = (wallet: Wallet | null, unit: string): string =>
+  wallet && isFunded(wallet)
+    ? `${Math.floor(wallet.balance_msat / 1000).toLocaleString()} ${unit}`
+    : 'Unavailable';
 
 const UserListComponent: FunctionComponent = () => {
   const [loading, setLoading] = useState(true);
@@ -73,28 +93,17 @@ const UserListComponent: FunctionComponent = () => {
           try {
             const wallets = await getUserWallets(user.id);
 
-            if (wallets && wallets.length > 0) {
-              const privateWallet = wallets.find(w =>
-                w.name.toLowerCase().includes('private'),
-              );
-              const allowanceWallet = wallets.find(w =>
-                w.name.toLowerCase().includes('allowance'),
-              );
-
-              return {
-                ...user,
-                privateWallet: privateWallet || null,
-                allowanceWallet: allowanceWallet || null,
-              };
-            }
-
-            return user;
+            return {
+              ...user,
+              privateWallet: selectOwnedWallet(wallets, user.id, 'private'),
+              allowanceWallet: selectOwnedWallet(wallets, user.id, 'allowance'),
+            };
           } catch (err) {
             console.error(
               `[UserList] Error fetching wallets for user ${user.displayName}:`,
               err,
             );
-            return user;
+            return { ...user, privateWallet: null, allowanceWallet: null };
           }
         },
       );
@@ -114,109 +123,127 @@ const UserListComponent: FunctionComponent = () => {
       fetchUsers();
     }
   }, [fetchUsers]);
-  const rewardNameContext = useContext(RewardNameContext);
-  if (!rewardNameContext) {
-    return null; // or handle the case where the context is not available
-  }
-  const rewardsName = rewardNameContext.rewardNameLabel;
+
+  const { rewardNameLabel } = useContext(RewardNameContext);
+
   if (loading) {
-    return <div>Loading...</div>;
+    return (
+      <div className={styles.stateMessage} role="status">
+        Loading...
+      </div>
+    );
   }
 
   if (error) {
-    return <div>{error}</div>;
+    return (
+      <div className={styles.stateError} role="alert">
+        <span>{error}</span>
+        <button type="button" onClick={() => void fetchUsers()}>
+          Try again
+        </button>
+      </div>
+    );
   }
 
   return (
-    <div className={styles.userslist}>
-      <b className={styles.users}>Users</b>
+    <section className={styles.userslist}>
+      <h2 className={styles.users}>Users</h2>
       <div className={styles.tabs}>
-        <div className={styles.tab}>
-          <div className={styles.base}>
-            <div className={styles.stringBadgeIconStack}>
-              <b className={styles.stringTabTitle}>All</b>
-            </div>
-            <div className={styles.borderPaddingStack}>
-              <div className={styles.borderBottom} />
-            </div>
-          </div>
+        <div
+          className={`${styles.tab} ${styles.tabActive}`}
+          aria-current="true"
+        >
+          All
         </div>
         <div className={styles.tab} style={{ display: 'none' }}>
-          <div className={styles.base1}>
-            <div className={styles.stringBadgeIconStack}>
-              <div className={styles.stringTabTitle}>Teammates</div>
-            </div>
-          </div>
+          Teammates
         </div>
         <div className={styles.tab} style={{ display: 'none' }}>
-          <div className={styles.base1}>
-            <div className={styles.stringBadgeIconStack}>
-              <div className={styles.stringTabTitle}>Copilots</div>
-            </div>
-          </div>
+          Copilots
         </div>
       </div>
-      <div className={styles.list}>
-        <div className={styles.headercell}>
-          <div className={styles.headerContents}>
-            <div className={styles.stringParent}>
-              <b className={styles.string}>User</b>
-              <b className={styles.string1}>User type</b>
-              <b className={styles.string2}>Balance</b>
-              <b className={styles.string3}>Allowance remaining</b>
-            </div>
+      <div className={styles.tableScroll}>
+        <div className={styles.list} role="table" aria-label="Users">
+          <div className={styles.headerRow} role="row">
+            <span role="columnheader" className={styles.colUser}>
+              User
+            </span>
+            <span role="columnheader" className={styles.colType}>
+              User type
+            </span>
+            <span role="columnheader" className={styles.colBalance}>
+              Balance
+            </span>
+            <span role="columnheader" className={styles.colAllowance}>
+              Allowance remaining
+            </span>
           </div>
+          {users.length === 0
+            ? null
+            : [...users]
+                .sort((a, b) => a.displayName.localeCompare(b.displayName))
+                .map(user => (
+                  <div key={user.id} className={styles.bodyRow} role="row">
+                    <span role="cell" className={styles.colUser}>
+                      <img
+                        className={styles.avatarIcon}
+                        alt=""
+                        src={user.profileImg ? user.profileImg : 'profile.png'}
+                      />
+                      <span className={styles.userName}>
+                        {user.displayName &&
+                        !user.displayName.match(/^[a-f0-9]{32}$/)
+                          ? user.displayName
+                          : user.email || 'Unknown'}
+                      </span>
+                    </span>
+                    <span
+                      role="cell"
+                      className={styles.colType}
+                      data-label="User type"
+                    >
+                      {user.type || 'Not specified'}
+                    </span>
+                    <span
+                      role="cell"
+                      data-label="Balance"
+                      className={`${styles.colBalance} ${
+                        user.privateWallet && isFunded(user.privateWallet)
+                          ? styles.amount
+                          : styles.amountMuted
+                      }`}
+                    >
+                      {formatBalance(user.privateWallet, rewardNameLabel)}
+                    </span>
+                    <span
+                      role="cell"
+                      data-label="Allowance remaining"
+                      className={`${styles.colAllowance} ${
+                        user.allowanceWallet && isFunded(user.allowanceWallet)
+                          ? styles.amount
+                          : styles.amountMuted
+                      }`}
+                    >
+                      {formatBalance(user.allowanceWallet, rewardNameLabel)}
+                    </span>
+                  </div>
+                ))}
         </div>
-        {users
-          ?.sort((a, b) => a.displayName.localeCompare(b.displayName))
-          .map(user => (
-            <div key={user.id} className={styles.bodycell}>
-              <div className={styles.bodyContents}>
-                <div className={styles.mainContentStack}>
-                  <div className={styles.personDetails}>
-                    <img
-                      className={styles.avatarIcon}
-                      alt=""
-                      src={user.profileImg ? user.profileImg : 'profile.png'}
-                    />
-                    <div className={styles.userName}>
-                      {/* Show displayName if it's not a UUID-like ID, otherwise show email or 'Unknown' */}
-                      {user.displayName &&
-                      !user.displayName.match(/^[a-f0-9]{32}$/)
-                        ? user.displayName
-                        : user.email || 'Unknown'}
-                    </div>
-                  </div>
-                  <div className={styles.totalBalance}>
-                    {user.type ? user.type : 'Teammate'}
-                  </div>
-                  <b className={styles.totalBalance1}>
-                    {user.privateWallet
-                      ? `${Math.floor(
-                          user.privateWallet.balance_msat / 1000,
-                        )} ${rewardsName}`
-                      : 'N/A'}
-                  </b>
-                  <b className={styles.totalBalance2}>
-                    {user.allowanceWallet
-                      ? `${Math.floor(
-                          user.allowanceWallet.balance_msat / 1000,
-                        )} ${rewardsName}`
-                      : 'N/A'}
-                  </b>
-                </div>
-                <div className={styles.actions} />
-              </div>
-            </div>
-          ))}
       </div>
+      {users.length === 0 && (
+        /* Outside the table: role="status" is not a valid child of a table,
+           and the message must be announced when loading finishes empty. */
+        <p className={styles.stateMessage} role="status">
+          No users found.
+        </p>
+      )}
       <div className={styles.poweredby}>
         <div className={styles.poweredBy}>
           <b className={styles.poweredBy1}>Powered by</b>
           <img className={styles.logo1Icon} alt="" src="LNbits.png" />
         </div>
       </div>
-    </div>
+    </section>
   );
 };
 

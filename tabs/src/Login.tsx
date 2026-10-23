@@ -7,6 +7,7 @@ import {
 import { Image, IRawStyle, Text } from '@fluentui/react';
 import SignInSignOutButton from './components/SignInSignOutButton';
 import { useNavigate } from 'react-router-dom';
+import { useTeamsSilentSignIn } from './hooks/useTeamsSilentSignIn';
 import './styles/Home.css';
 import KnowAllLogo from './images/KnowAllAI_Logo.png';
 
@@ -26,6 +27,9 @@ const centeredImageStyle: IRawStyle = {
 export function Login() {
   const { accounts } = useMsal();
   const navigate = useNavigate();
+  // Inside Teams, try once to sign in without a click. A success adds the
+  // account, and the effect below then opens the feed.
+  const { attempting } = useTeamsSilentSignIn();
 
   useEffect(() => {
     if (accounts.length > 0) {
@@ -39,9 +43,19 @@ export function Login() {
       <div className="content">
         <Image
           src={KnowAllLogo}
-          styles={{ root: centeredImageStyle }}
+          // A fixed logo height, not a share of the width: sized by width,
+          // the logo grew taller than its box in a wide tab and the box
+          // clipped off its wordmark.
+          styles={{
+            root: centeredImageStyle,
+            image: {
+              display: 'block',
+              height: '42px',
+              width: 'auto',
+              margin: '0 auto',
+            },
+          }}
           alt="KnowAll AI"
-          width="10%"
         />
         <AuthenticatedTemplate>
           <Text styles={{ root: { color: 'white' } }}>Opening your feed…</Text>
@@ -51,7 +65,7 @@ export function Login() {
             styles={{
               root: {
                 color: '#84cc16',
-                fontSize: '4vw',
+                fontSize: 'clamp(32px, 4vw, 64px)',
                 fontWeight: 'bold',
                 lineHeight: '64px',
               },
@@ -83,7 +97,13 @@ export function Login() {
             <p>Log in now to power up your workplace!</p>
             <br></br>
           </Text>
-          <SignInSignOutButton />
+          {attempting ? (
+            <Text role="status" styles={{ root: { color: 'white' } }}>
+              Signing you in…
+            </Text>
+          ) : (
+            <SignInSignOutButton />
+          )}
         </UnauthenticatedTemplate>
       </div>
     </div>
