@@ -22,9 +22,13 @@ export const en = {
     "D'oh! Something went wrong on my end, so that didn't complete. Please try again in a moment.",
   userFacingError: "D'oh! {{message}}",
   unrecognizedCommand:
-    "D'oh! I didn't recognize that command. Here's what I can help with:\n{{commands}}\nJust type one of those to get started!",
+    "D'oh! I didn't recognize that command. Here's what I can help with:\n{{commands}}Just type one of those to get started!",
   welcome:
-    "Hi, I'm Zaplie! I help you send zaps to your colleagues. Here are the commands I understand:\n{{commands}}\nType one of those to get started!",
+    "Hi, I'm Zaplie! I help you send zaps to your colleagues. Here are the commands I understand:\n{{commands}}Type one of those to get started!",
+  greeting:
+    "Hi! I'm Zaplie. Here's what I can help with:\n{{commands}}Just type one of those to get started!",
+  assistantUnavailable:
+    "I can't chat right now, but I can still help with:\n{{commands}}Type one of those, or ask me again in a few minutes.",
   agentNoReply:
     "D'oh! I'm sorry, but I didn't recognize that command. But don't worry, I'm always getting better!",
   zapCardUnidentified:
@@ -95,9 +99,13 @@ export const es: Record<MessageKey, string> = {
     '¡Ups! Algo salió mal de mi lado y no se completó. Inténtalo de nuevo en un momento.',
   userFacingError: '¡Ups! {{message}}',
   unrecognizedCommand:
-    '¡Ups! No reconocí ese comando. Esto es lo que puedo hacer:\n{{commands}}\nEscribe uno de esos para empezar.',
+    '¡Ups! No reconocí ese comando. Esto es lo que puedo hacer:\n{{commands}}Escribe uno de esos para empezar.',
   welcome:
-    '¡Hola! Soy Zaplie y te ayudo a enviar zaps a tus colegas. Estos son los comandos que entiendo:\n{{commands}}\nEscribe uno de esos para empezar.',
+    '¡Hola! Soy Zaplie y te ayudo a enviar zaps a tus colegas. Estos son los comandos que entiendo:\n{{commands}}Escribe uno de esos para empezar.',
+  greeting:
+    '¡Hola! Soy Zaplie. Esto es lo que puedo hacer:\n{{commands}}Escribe uno de esos para empezar.',
+  assistantUnavailable:
+    'Ahora mismo no puedo conversar, pero todavía puedo ayudarte con:\n{{commands}}Escribe uno de esos o vuelve a preguntarme en unos minutos.',
   agentNoReply:
     '¡Ups! Lo siento, no reconocí ese comando. Pero tranquilo, cada vez aprendo más.',
   zapCardUnidentified:

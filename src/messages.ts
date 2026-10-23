@@ -32,8 +32,10 @@ export class UserFacingError extends Error {
   }
 }
 
+// The blank line after the list ends it: with a single newline, Teams
+// renders the closing sentence as part of the last bullet.
 const commandBullets = (commandNames: string[]): string =>
-  commandNames.map(name => `- **${name}**`).join('\n');
+  `${commandNames.map(name => `- **${name}**`).join('\n')}\n\n`;
 
 // Channel fallback when a message matches no command: keep the D'oh tone,
 // but tell people what the bot actually understands.
@@ -43,8 +45,54 @@ export const unrecognizedCommandGuide = (
 ): string =>
   t(locale, 'unrecognizedCommand', { commands: commandBullets(commandNames) });
 
+// "Hi", "Hello Zaplie!", "good morning": a greeting, not a failed command.
+const GREETING =
+  /^(hi|hello|hey|hiya|howdy|morning|good (morning|afternoon|evening))( there)?( zaplie)?[\s!.,👋]*$/iu;
+
+export const isGreeting = (text: string): boolean => GREETING.test(text.trim());
+
+// The fallback for a greeting: say hello back, then the same commands.
+export const greetingGuide = (
+  commandNames: string[],
+  locale: Locale = 'en',
+): string => t(locale, 'greeting', { commands: commandBullets(commandNames) });
+
+// The fallback when the conversational assistant fails (for example Azure AI
+// Foundry returns a server error after the SDK's retries): the commands do
+// not need the assistant, so offer them instead of a generic error.
+export const assistantUnavailableGuide = (
+  commandNames: string[],
+  locale: Locale = 'en',
+): string =>
+  t(locale, 'assistantUnavailable', { commands: commandBullets(commandNames) });
+
 // Sent once when the bot is installed or added to a conversation.
 export const welcomeMessage = (
   commandNames: string[],
   locale: Locale = 'en',
 ): string => t(locale, 'welcome', { commands: commandBullets(commandNames) });
+
+// The recipient sees the sender's words as one line of at most this many
+// characters: the card's own length limit is client-side and forgeable, and
+// a notice is not the place for an essay.
+export const ZAP_MEMO_PREVIEW_MAX = 200;
+
+// Whitespace runs (newlines included) become one space; anything past the
+// limit is cut at a code point boundary and marked with an ellipsis.
+export const zapMemoPreview = (message: string): string => {
+  const oneLine = message.replace(/\s+/g, ' ').trim();
+  const chars = Array.from(oneLine);
+  return chars.length > ZAP_MEMO_PREVIEW_MAX
+    ? `${chars.slice(0, ZAP_MEMO_PREVIEW_MAX - 1).join('')}…`
+    : oneLine;
+};
+
+// Sent to the recipient's personal chat once a zap to them has settled. The
+// reward name comes from LNBITS_POINTS_LABEL, like every other amount line.
+export const zapReceivedMessage = (zap: {
+  senderName: string;
+  amount: number;
+  rewardName: string;
+  message: string;
+}): string =>
+  `⚡ ${zap.senderName || 'A colleague'} zapped you ${zap.amount.toLocaleString()} ${zap.rewardName}: "${zapMemoPreview(zap.message)}"`;

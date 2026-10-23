@@ -16,7 +16,13 @@ import { toast } from 'react-toastify';
 import { createQueryClient } from '../query/queryClient';
 import { clearApiCache } from '../services/lnbits/cache';
 import { teamsContextQueryKey } from '../services/teamsContextService';
+import {
+  SILENT_SIGN_IN_GUARD_KEY,
+  clearSilentSignInGuard,
+  hasAttemptedSilentSignIn,
+} from '../services/silentSignIn';
 import { useTeamsAuth } from './useTeamsAuth';
+import { SignOutButton } from '../components/SignOutButton';
 
 jest.mock('@microsoft/teams-js', () => ({
   app: {
@@ -43,6 +49,7 @@ const mockGetContext = jest.mocked(microsoftTeams.app.getContext);
 const mockIsInitialized = jest.mocked(microsoftTeams.app.isInitialized);
 const mockUseMsal = jest.mocked(useMsal);
 const mockLogoutPopup = jest.fn(async () => undefined);
+const mockLogoutRedirect = jest.fn(async () => undefined);
 const mockClearApiCache = jest.mocked(clearApiCache);
 const mockToastError = jest.mocked(toast.error);
 const mockTeamsContext = {} as Awaited<
@@ -74,11 +81,15 @@ describe('useTeamsAuth', () => {
     mockGetContext.mockReset();
     mockIsInitialized.mockReset();
     mockLogoutPopup.mockReset();
+    mockLogoutRedirect.mockReset();
     mockClearApiCache.mockReset();
     mockToastError.mockReset();
     mockUseMsal.mockReset();
     mockUseMsal.mockReturnValue({
-      instance: { logoutPopup: mockLogoutPopup },
+      instance: {
+        logoutPopup: mockLogoutPopup,
+        logoutRedirect: mockLogoutRedirect,
+      },
       accounts: [],
       inProgress: InteractionStatus.None,
     } as unknown as ReturnType<typeof useMsal>);
@@ -158,17 +169,76 @@ describe('useTeamsAuth', () => {
     expect(client.getQueryData(teamsContextQueryKey)).toBe(true);
   });
 
-  test('preserves logout cache clearing and MSAL logout', async () => {
-    mockIsInitialized.mockReturnValue(false);
-    mockInitialize.mockRejectedValue(new Error('Not running inside Teams'));
-    mockLogoutPopup.mockResolvedValue(undefined);
-    const client = createQueryClient();
+  // Renders one consumer in a browser or in Teams and returns its button.
+  const mountHost = async (host: 'web' | 'teams') => {
+    if (host === 'teams') {
+      mockIsInitialized.mockReturnValue(true);
+      mockGetContext.mockResolvedValue(mockTeamsContext);
+    } else {
+      mockIsInitialized.mockReturnValue(false);
+      mockInitialize.mockRejectedValue(new Error('Not running inside Teams'));
+    }
+    await renderConsumers(createQueryClient(), 1);
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-consumer="consumer-0"]',
+    );
+    expect(button?.textContent).toBe(host);
+    return button as HTMLButtonElement;
+  };
 
-    await renderConsumers(client, 1);
-    const button = container.querySelector('button');
+  test('a browser signs out with a full-page redirect to the sign-in page', async () => {
+    const button = await mountHost('web');
 
     await act(async () => {
-      button?.click();
+      button.click();
+    });
+
+    expect(mockClearApiCache).toHaveBeenCalledTimes(1);
+    expect(mockLogoutRedirect).toHaveBeenCalledTimes(1);
+    expect(mockLogoutRedirect).toHaveBeenCalledWith({
+      postLogoutRedirectUri: `${window.location.origin}/login`,
+      account: null,
+    });
+    expect(mockLogoutPopup).not.toHaveBeenCalled();
+  });
+
+  test('the browser sign-out lands on /portal/login under the portal base path', async () => {
+    const publicUrl = process.env.PUBLIC_URL;
+    process.env.PUBLIC_URL = '/portal';
+    try {
+      const account = { homeAccountId: 'person' };
+      mockUseMsal.mockReturnValue({
+        instance: {
+          logoutPopup: mockLogoutPopup,
+          logoutRedirect: mockLogoutRedirect,
+        },
+        accounts: [account],
+        inProgress: InteractionStatus.None,
+      } as unknown as ReturnType<typeof useMsal>);
+      const button = await mountHost('web');
+
+      await act(async () => {
+        button.click();
+      });
+
+      expect(mockLogoutRedirect).toHaveBeenCalledWith({
+        postLogoutRedirectUri: `${window.location.origin}/portal/login`,
+        account,
+      });
+    } finally {
+      if (publicUrl === undefined) {
+        delete process.env.PUBLIC_URL;
+      } else {
+        process.env.PUBLIC_URL = publicUrl;
+      }
+    }
+  });
+
+  test('Teams signs out in a popup, because the tab is an iframe', async () => {
+    const button = await mountHost('teams');
+
+    await act(async () => {
+      button.click();
     });
 
     expect(mockClearApiCache).toHaveBeenCalledTimes(1);
@@ -176,5 +246,113 @@ describe('useTeamsAuth', () => {
       postLogoutRedirectUri: `${window.location.origin}/login`,
       account: null,
     });
+    expect(mockLogoutRedirect).not.toHaveBeenCalled();
+  });
+
+  test.each(['web', 'teams'] as const)(
+    'logout in %s blocks a silent sign-in for the rest of the tab session',
+    async host => {
+      clearSilentSignInGuard();
+      const button = await mountHost(host);
+
+      await act(async () => {
+        button.click();
+      });
+
+      expect(sessionStorage.getItem(SILENT_SIGN_IN_GUARD_KEY)).not.toBeNull();
+      expect(hasAttemptedSilentSignIn()).toBe(true);
+    },
+  );
+
+  test('does nothing while MSAL has another interaction in progress', async () => {
+    mockUseMsal.mockReturnValue({
+      instance: {
+        logoutPopup: mockLogoutPopup,
+        logoutRedirect: mockLogoutRedirect,
+      },
+      accounts: [],
+      inProgress: InteractionStatus.Logout,
+    } as unknown as ReturnType<typeof useMsal>);
+    const button = await mountHost('web');
+
+    await act(async () => {
+      button.click();
+    });
+
+    expect(mockClearApiCache).not.toHaveBeenCalled();
+    expect(mockLogoutRedirect).not.toHaveBeenCalled();
+    expect(mockLogoutPopup).not.toHaveBeenCalled();
+  });
+
+  test('does not sign out while the host is still being detected', async () => {
+    // Until detection settles isInTeams is only a default, so the hook would
+    // pick the browser redirect inside a Teams iframe.
+    mockIsInitialized.mockReturnValue(false);
+    mockInitialize.mockReturnValue(new Promise(() => undefined));
+    await renderConsumers(createQueryClient(), 1);
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-consumer="consumer-0"]',
+    ) as HTMLButtonElement;
+    expect(button.textContent).toBe('loading');
+
+    await act(async () => {
+      button.click();
+    });
+
+    expect(mockLogoutRedirect).not.toHaveBeenCalled();
+    expect(mockLogoutPopup).not.toHaveBeenCalled();
+    expect(mockClearApiCache).not.toHaveBeenCalled();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test('SignOutButton is disabled while the host is still being detected', async () => {
+    mockIsInitialized.mockReturnValue(false);
+    mockInitialize.mockReturnValue(new Promise(() => undefined));
+    // eslint-disable-next-line testing-library/no-unnecessary-act
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={createQueryClient()}>
+          <SignOutButton />
+        </QueryClientProvider>,
+      );
+    });
+
+    const button = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Sign Out"]',
+    );
+    expect(button?.disabled).toBe(true);
+    expect(button?.textContent).toBe('Sign Out');
+  });
+
+  test('a second click while signing out starts no second sign-out', async () => {
+    // A redirect only settles once the page has gone.
+    mockLogoutRedirect.mockImplementation(() => new Promise(() => undefined));
+    const button = await mountHost('web');
+
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+
+    expect(mockLogoutRedirect).toHaveBeenCalledTimes(1);
+  });
+
+  test('a failed sign-out shows a toast and can be tried again', async () => {
+    mockLogoutRedirect.mockRejectedValueOnce(new Error('redirect_in_iframe'));
+    const button = await mountHost('web');
+
+    await act(async () => {
+      button.click();
+    });
+
+    expect(mockToastError).toHaveBeenCalledWith(
+      'Failed to sign out. Please try again.',
+    );
+
+    await act(async () => {
+      button.click();
+    });
+
+    expect(mockLogoutRedirect).toHaveBeenCalledTimes(2);
   });
 });

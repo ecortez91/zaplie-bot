@@ -39,8 +39,9 @@ deployable components in one repository:
   U+2028/U+2029 line separators, no forged `--- BEGIN/END PERSONA ---` line) —
   two copies because the packages are separate, kept identical on purpose. The
   fetch fails open to the built-in persona — a portal outage never fails a turn.
-- **Middleware** (`src/services/fetchUserMiddleware.ts`): every turn resolves
-  the Teams member and calls `UserService.ensureUserSetup()`, which creates the
+- **Middleware** (`src/services/fetchUserMiddleware.ts`): every turn that has
+  a sender (the synthetic event of a proactive send has none) resolves the
+  Teams member and calls `UserService.ensureUserSetup()`, which creates the
   LNbits user (keyed by AAD object id) and ensures each user has an
   **Allowance** wallet (spending budget) and a **Private** wallet (received
   Zaps).
@@ -50,6 +51,11 @@ deployable components in one repository:
   there, never as a literal in a handler, and throw `UserFacingError(key,
   params)` so the catch can render it in the user's language. Command words,
   wallet names, display names and the reward label are not translated.
+- **Recipient notifications** (`src/services/recipientNotifier.ts`): after the
+  ledger records a zap as paid and the sender's receipt is updated, the bot
+  opens the recipient's personal chat on demand (`createConversationAsync`,
+  by AAD object id) and sends a one-line notice. Best effort by contract: it
+  returns an outcome and never throws into the payment path.
 - **LNbits integration**: `src/services/lnbitsService.ts` (bot),
   `tabs/src/services/lnbits/` (browser: `auth`, `cache`, `users`, `wallets`,
   `payments`, `rewards`), and
@@ -63,7 +69,11 @@ deployable components in one repository:
   the automation reward's `from` is `{ displayName }` only, because the bot
   holds the treasury wallet's admin key, not its wallet object.
 - **Tabs app**: routes `/feed`, `/users`, `/rewards`, `/wallet`, `/settings`
-  (MSAL-guarded via `RequireAuth`), plus `/login`, `/auth-start`, `/auth-end`.
+  (MSAL-guarded via `RequireAuth`, which also provisions the signed-in
+  person's LNbits user and wallets through `POST /api/lnbits/users/me` on
+  first use outside Teams), plus `/login`, `/auth-start`, `/auth-end`. A
+  second build of the same source serves `https://getzapl.ie/portal/`
+  (`PUBLIC_URL=/portal`).
   `tabs/backend/server.js` is a tiny Express API that persists the renamable
   reward label ("Sats") to `tabs/backend/data.json` and serves the production
   build.
@@ -144,10 +154,15 @@ table):
 
 - **Bot**: `BOT_ID`, `BOT_PASSWORD`, `BOT_DOMAIN`, `AAD_APP_CLIENT_ID`,
   `AAD_APP_TENANT_ID`, `LNBITS_NODE_URL`, `LNBITS_USERNAME`,
-  `LNBITS_PASSWORD`, `LNBITS_ADMINKEY`, `LNBITS_INITIAL_ALLOWANCE`
+  `LNBITS_PASSWORD`, `LNBITS_ADMINKEY`, `LNBITS_INITIAL_ALLOWANCE`, plus
+  `APPLICATIONINSIGHTS_CONNECTION_STRING` and `AGENT_ID` for the Agents Portal
+  telemetry (`src/services/pulse.ts`; titles and subjects are fixed strings,
+  never names or zap messages)
 - **Tabs**: `REACT_APP_LNBITS_NODE_URL`, `REACT_APP_AAD_CLIENT_ID`,
   `REACT_APP_TENANT_ID`, and related `REACT_APP_LNBITS_*` keys
-  (`tabs/.env.development`)
+  (`tabs/.env.development`). For the browser portal on getzapl.ie the build
+  also takes `PUBLIC_URL=/portal` and `REACT_APP_API_BASE_URL` (see
+  `tabs/src/services/appLocation.ts` and `docs/DEPLOYMENT.adoc`)
 - Environments live in `env/` (`.env.local`, `.env.dev`); `dotenv-flow` loads
   them. `scripts/writeEnv.js` and `build.js` generate derived files
   (`.localConfigs`, `appPackage/manifest.json` — both gitignored).
@@ -159,10 +174,16 @@ table):
 - The reward-name API uses a placeholder shared secret (`your-secret-token`)
   across `tabs/src/apiService.tsx`, `tabs/backend/authMiddleware.js`, and
   `src/services/fetchRewardsName.ts`.
-- Bot conversation state uses `MemoryStorage`, and the zap-card ledger
-  (`src/services/zapLedger.ts`) is an in-process `Map` whose entries never
-  expire: both are lost on restart and not multi-instance safe, and an LNbits
-  call that never settles leaves that card locked until the bot restarts.
+- Bot conversation state uses `MemoryStorage`: it is lost on restart and not
+  multi-instance safe.
+- The zap-card ledger (`src/services/zapLedger.ts`) and the automation reward
+  ledger (`src/services/rewardLedger.ts`) are JSON files under
+  `ZAPLIE_DATA_DIR` that share the lock and atomic-write code in
+  `src/services/ledgerFile.ts`. A record left `processing`, `unknown` or
+  `uncertain` blocks that payment until an operator reconciles it with LNbits
+  (`docs/DEPLOYMENT.adoc`); never clear one just to let a retry through.
+  `POST /api/v1/rewards` (`src/rewardsRoute.ts`) requires an
+  `Idempotency-Key` header and replays the first result for a repeat.
 - The GitHub Actions workflows (`.github/workflows/`) build only `tabs/` and
   deploy to the `zappie-dev` App Service (slot per PR / `testing`); the bot is
   deployed via `teamsapp deploy`, not CI.
@@ -185,3 +206,10 @@ production credentials at all times. Never serialise a `Wallet` object into
 LNbits payment `extra`, logs or Teams messages; project it with
 `toPaymentExtraWallet` from `src/services/paymentExtra.ts`. Vulnerability
 reports: see `SECURITY.md`.
+
+Any id that reaches an LNbits URL (user, wallet, invoice) goes through
+`encodeURIComponent`, and ids from a Teams card or other client input are
+checked against the plain-id pattern first (`normalizeRecipientIds` in
+`src/commands/zapRecipient.ts`, `USER_ID_PATTERN` in the portal gateway).
+Those calls carry the LNbits admin token, so a raw `../` would let a client
+steer them to any LNbits endpoint.
