@@ -6,6 +6,7 @@ import {
 } from '@azure/msal-react';
 import { Image, IRawStyle, Text } from '@fluentui/react';
 import SignInSignOutButton from './components/SignInSignOutButton';
+import SiteLink from './components/SiteLink';
 import { useNavigate } from 'react-router-dom';
 import { useTeamsSilentSignIn } from './hooks/useTeamsSilentSignIn';
 import './styles/Home.css';
@@ -41,6 +42,8 @@ export function Login() {
     <div className="home-container">
       <div className="overlay"></div>
       <div className="content">
+        {/* Hidden inside Teams; in a browser, the way back to getzapl.ie. */}
+        <SiteLink variant="onDark" />
         <Image
           src={KnowAllLogo}
           // A fixed logo height, not a share of the width: sized by width,

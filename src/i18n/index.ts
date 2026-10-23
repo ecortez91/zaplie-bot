@@ -90,9 +90,15 @@ export const en = {
   receiptAmount: 'Amount ({{rewardName}}):',
   receiptTotal: 'Total Sent ({{rewardName}}):',
   receiptRemaining: 'Remaining Amount ({{rewardName}}):',
-  leaderboardTitle: 'Current leaders (Private wallet balance):',
-  leaderboardEmpty:
-    'No Private wallet balances to rank yet. Send a zap to get things started!',
+  leaderboardTitle: 'Top zappers ({{rewardName}} sent, {{window}}):',
+  leaderboardWindowOneDay: 'last day',
+  leaderboardWindowDays: 'last {{days}} days',
+  leaderboardEmptyOneDay:
+    'No zaps sent in the last day yet. Send a zap to get things started!',
+  leaderboardEmptyDays:
+    'No zaps sent in the last {{days}} days yet. Send a zap to get things started!',
+  leaderboardPartial:
+    'Some wallets could not be read just now, so this ranking may be incomplete.',
   leaderboardUnavailable:
     'Sorry, I could not load the leaderboard just now. Please try again in a moment.',
   leaderboardViewWallets: 'View Wallets',
@@ -186,9 +192,15 @@ export const es: Record<MessageKey, string> = {
   receiptAmount: 'Cantidad ({{rewardName}}):',
   receiptTotal: 'Total enviado ({{rewardName}}):',
   receiptRemaining: 'Saldo restante ({{rewardName}}):',
-  leaderboardTitle: 'Líderes actuales (saldo de la cartera Private):',
-  leaderboardEmpty:
-    'Todavía no hay saldos de carteras Private para clasificar. ¡Envía un zap para empezar!',
+  leaderboardTitle: 'Quienes más zapean ({{rewardName}} enviados, {{window}}):',
+  leaderboardWindowOneDay: 'último día',
+  leaderboardWindowDays: 'últimos {{days}} días',
+  leaderboardEmptyOneDay:
+    'Todavía no se ha enviado ningún zap en el último día. ¡Envía un zap para empezar!',
+  leaderboardEmptyDays:
+    'Todavía no se ha enviado ningún zap en los últimos {{days}} días. ¡Envía un zap para empezar!',
+  leaderboardPartial:
+    'No se pudieron leer algunas carteras en este momento, así que esta clasificación puede estar incompleta.',
   leaderboardUnavailable:
     'Lo siento, no pude cargar la clasificación en este momento. Inténtalo de nuevo en un momento.',
   leaderboardViewWallets: 'Ver carteras',

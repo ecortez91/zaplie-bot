@@ -160,7 +160,10 @@ table):
 
 - **Bot**: `BOT_ID`, `BOT_PASSWORD`, `BOT_DOMAIN`, `AAD_APP_CLIENT_ID`,
   `AAD_APP_TENANT_ID`, `LNBITS_NODE_URL`, `LNBITS_USERNAME`,
-  `LNBITS_PASSWORD`, `LNBITS_ADMINKEY`, `LNBITS_INITIAL_ALLOWANCE`, plus
+  `LNBITS_PASSWORD`, `LNBITS_ADMINKEY`, `LNBITS_INITIAL_ALLOWANCE`,
+  `LEADERBOARD_WINDOW_DAYS` (1 to 365; also the assistant's default window),
+  `LEADERBOARD_TOP_N` (1 to 100; values outside either range fail closed),
+  plus
   `APPLICATIONINSIGHTS_CONNECTION_STRING` and `AGENT_ID` for the Agents Portal
   telemetry (`src/services/pulse.ts`; titles and subjects are fixed strings,
   never names or zap messages)
@@ -193,6 +196,11 @@ table):
 - The GitHub Actions workflows (`.github/workflows/`) build only `tabs/` and
   deploy to the `zappie-dev` App Service (slot per PR / `testing`); the bot is
   deployed via `teamsapp deploy`, not CI.
+- `getUsers` pages the LNbits Users API (`sortby=id`, 100 per request, until
+  `total` is reached or a page comes back empty). LNbits 1.6 returns ten
+  accounts per request by default, orders nothing unless `sortby` is set, and
+  reports `total: 0` once `offset` is past the end, so do not assume the
+  default response contains the complete list.
 
 ## Documentation
 

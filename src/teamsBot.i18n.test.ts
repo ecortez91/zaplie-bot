@@ -26,10 +26,13 @@ import {
 } from './services/lnbitsService';
 import { en, es as esCopy } from './i18n';
 import {
-  LEADERBOARD_EMPTY_MESSAGE,
-  LEADERBOARD_TITLE,
+  DEFAULT_LEADERBOARD_WINDOW_DAYS,
+  LEADERBOARD_PARTIAL_MESSAGE,
   LEADERBOARD_UNAVAILABLE_MESSAGE,
+  leaderboardEmptyMessage,
+  leaderboardTitle,
 } from './commands/showLeaderboardCommand';
+import { getZapLeaderboard } from './services/zapHistoryService';
 
 jest.mock('./services/lnbitsService');
 jest.mock('./services/foundryAgentService');
@@ -188,10 +191,15 @@ describe('TeamsBot answers a Spanish client in Spanish everywhere', () => {
   // placeholders into fragments long enough to be unambiguous.
   const englishFragments = (): string[] => {
     const fragments = new Set<string>([
-      LEADERBOARD_TITLE,
-      LEADERBOARD_EMPTY_MESSAGE,
+      leaderboardTitle(DEFAULT_LEADERBOARD_WINDOW_DAYS, 'Sats'),
+      leaderboardTitle(1, 'Sats'),
+      leaderboardEmptyMessage(DEFAULT_LEADERBOARD_WINDOW_DAYS),
+      leaderboardEmptyMessage(1),
+      LEADERBOARD_PARTIAL_MESSAGE,
       LEADERBOARD_UNAVAILABLE_MESSAGE,
       'View Wallets',
+      'last day',
+      'days):',
     ]);
     for (const key of Object.keys(en) as (keyof typeof en)[]) {
       if (en[key] === esCopy[key]) continue;
@@ -230,6 +238,20 @@ describe('TeamsBot answers a Spanish client in Spanish everywhere', () => {
       .mockResolvedValue([
         { id: 'w-1', name: 'Allowance', balance_msat: 21_000_000 } as never,
       ]);
+    // A ranked, partial read, so the leaderboard card's title, rows and
+    // incomplete-read note are all swept, not just its error path.
+    jest.mocked(getZapLeaderboard).mockResolvedValue({
+      entries: [
+        {
+          user: { id: 'user-2', displayName: 'Bob' } as never,
+          zappedSats: 12_345,
+        },
+      ],
+      partial: true,
+      skippedUsers: 0,
+      skippedWallets: 1,
+      truncated: false,
+    });
   });
 
   afterEach(() => {
@@ -271,6 +293,27 @@ describe('TeamsBot answers a Spanish client in Spanish everywhere', () => {
         }).toEqual({ commandName, english: false });
       }
     }
+  });
+
+  test('show leaderboard sends an es-MX client the Spanish ranked card', async () => {
+    const bot = new TeamsBot();
+    const { context, sendActivity } = makeContext({
+      text: 'show leaderboard',
+      locale: 'es-MX',
+    });
+    (context.turnState as Map<unknown, unknown>).set('user', zapSubmitter);
+
+    await bot.run(context);
+
+    const text = payloadText(sendActivity);
+    expect(text).toContain(
+      'Quienes más zapean (Sats enviados, últimos 7 días):',
+    );
+    expect(text).toContain('#1 Bob');
+    expect(text).toContain('12,345 Sats');
+    expect(text).toContain(
+      'No se pudieron leer algunas carteras en este momento',
+    );
   });
 
   test('an out-of-range amount names the ceiling in the es-ES format', async () => {
