@@ -149,7 +149,9 @@ table):
 - **Bot**: `BOT_ID`, `BOT_PASSWORD`, `BOT_DOMAIN`, `AAD_APP_CLIENT_ID`,
   `AAD_APP_TENANT_ID`, `LNBITS_NODE_URL`, `LNBITS_USERNAME`,
   `LNBITS_PASSWORD`, `LNBITS_ADMINKEY`, `LNBITS_INITIAL_ALLOWANCE`,
-  `LEADERBOARD_WINDOW_DAYS`, `LEADERBOARD_TOP_N`, plus
+  `LEADERBOARD_WINDOW_DAYS` (1 to 365; also the assistant's default window),
+  `LEADERBOARD_TOP_N` (1 to 100; values outside either range fail closed),
+  plus
   `APPLICATIONINSIGHTS_CONNECTION_STRING` and `AGENT_ID` for the Agents Portal
   telemetry (`src/services/pulse.ts`; titles and subjects are fixed strings,
   never names or zap messages)

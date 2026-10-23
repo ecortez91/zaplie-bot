@@ -15,6 +15,14 @@ export const LEADERBOARD_TOP_N_VAR = 'LEADERBOARD_TOP_N';
 export const DEFAULT_LEADERBOARD_WINDOW_DAYS = 7;
 export const DEFAULT_LEADERBOARD_TOP_N = 10;
 
+// Ceilings. The window is shared with the assistant's get_leaderboard tool,
+// which rejects a larger `days` too, so the card and the assistant accept the
+// same range. A year keeps the cut-off a real timestamp (a huge window used to
+// go negative, count every zap ever made and still say "last N days"), and 100
+// rows keeps the Teams card well inside its size limit.
+export const MAX_LEADERBOARD_WINDOW_DAYS = 365;
+export const MAX_LEADERBOARD_TOP_N = 100;
+
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 export interface LeaderboardSettings {
@@ -22,21 +30,50 @@ export interface LeaderboardSettings {
   topN: number;
 }
 
+// Above the ceiling is rejected, not clamped: a clamped value would rank a
+// window or a row count nobody configured while the operator believes theirs
+// was applied. The message names the variable, like a malformed value's does.
+function boundedPositiveIntFromEnv(
+  name: string,
+  fallback: number,
+  max: number,
+): number {
+  const value = positiveIntFromEnv(name, fallback);
+  if (value > max) {
+    throw new Error(`${name} must be a whole number from 1 to ${max}`);
+  }
+  return value;
+}
+
+/**
+ * Reads the leaderboard window (in days) at call time. Shared with the
+ * assistant's get_leaderboard tool, which uses it when the model omits `days`,
+ * so the card and the assistant measure the same window by default.
+ */
+export function readLeaderboardWindowDays(): number {
+  return boundedPositiveIntFromEnv(
+    LEADERBOARD_WINDOW_DAYS_VAR,
+    DEFAULT_LEADERBOARD_WINDOW_DAYS,
+    MAX_LEADERBOARD_WINDOW_DAYS,
+  );
+}
+
 /**
  * Reads the leaderboard settings at call time, so tests can vary them per case.
  * A deployed change takes effect on the next process start, because the env
- * files are loaded once at import. Invalid values throw — the command then
- * fails closed rather than ranking with a silently corrected number — and
- * `positiveIntFromEnv` names the offending variable in the message it throws,
- * which is what reaches the operator's log.
+ * files are loaded once at import. Invalid or out-of-range values throw — the
+ * command then fails closed rather than ranking with a silently corrected
+ * number — and the thrown message names the offending variable, which is what
+ * reaches the operator's log.
  */
 export function readLeaderboardSettings(): LeaderboardSettings {
   return {
-    windowDays: positiveIntFromEnv(
-      LEADERBOARD_WINDOW_DAYS_VAR,
-      DEFAULT_LEADERBOARD_WINDOW_DAYS,
+    windowDays: readLeaderboardWindowDays(),
+    topN: boundedPositiveIntFromEnv(
+      LEADERBOARD_TOP_N_VAR,
+      DEFAULT_LEADERBOARD_TOP_N,
+      MAX_LEADERBOARD_TOP_N,
     ),
-    topN: positiveIntFromEnv(LEADERBOARD_TOP_N_VAR, DEFAULT_LEADERBOARD_TOP_N),
   };
 }
 
@@ -49,7 +86,7 @@ export function windowStartSeconds(
 }
 
 export function leaderboardWindowLabel(windowDays: number): string {
-  return `last ${windowDays} days`;
+  return windowDays === 1 ? 'last day' : `last ${windowDays} days`;
 }
 
 export function leaderboardTitle(

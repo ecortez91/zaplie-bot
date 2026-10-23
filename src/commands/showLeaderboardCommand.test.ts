@@ -7,10 +7,17 @@
 // against the very same fixtures to prove the two agree.
 
 import {
+  DEFAULT_LEADERBOARD_WINDOW_DAYS,
   LEADERBOARD_PARTIAL_MESSAGE,
   LEADERBOARD_UNAVAILABLE_MESSAGE,
+  MAX_LEADERBOARD_TOP_N,
+  MAX_LEADERBOARD_WINDOW_DAYS,
   ShowLeaderboardCommand,
   buildLeaderboardCard,
+  leaderboardEmptyMessage,
+  leaderboardTitle,
+  leaderboardWindowLabel,
+  windowStartSeconds,
 } from './showLeaderboardCommand';
 import { createReadOnlyTools } from './agentTools';
 import {
@@ -171,6 +178,41 @@ const rowText = (row: CardElement): string =>
 
 const rows = (sendActivity: jest.Mock): string[] =>
   sentCard(sendActivity).body.slice(1).map(rowText);
+
+describe('leaderboard copy', () => {
+  test('says "last day" for a one-day window, not "last 1 days"', () => {
+    expect(leaderboardWindowLabel(1)).toBe('last day');
+    expect(leaderboardTitle(1, 'Sats')).toBe(
+      'Top zappers (Sats sent, last day):',
+    );
+    expect(leaderboardEmptyMessage(1)).toBe(
+      'No zaps sent in the last day yet. Send a zap to get things started!',
+    );
+  });
+
+  test('keeps the plural for longer windows', () => {
+    expect(leaderboardWindowLabel(7)).toBe('last 7 days');
+    expect(leaderboardTitle(30, 'Sats')).toBe(
+      'Top zappers (Sats sent, last 30 days):',
+    );
+  });
+});
+
+describe('windowStartSeconds', () => {
+  test('stays a real, positive cut-off at the longest accepted window', () => {
+    // A negative cut-off is truthy, so getZapLeaderboard would apply it and
+    // count every zap ever made while the card still named the window. The
+    // ceiling keeps the cut-off positive for any clock after early 1971.
+    const early1971 = Date.UTC(1971, 0, 2);
+    expect(MAX_LEADERBOARD_WINDOW_DAYS).toBe(365);
+    expect(
+      windowStartSeconds(MAX_LEADERBOARD_WINDOW_DAYS, early1971),
+    ).toBeGreaterThan(0);
+    expect(
+      windowStartSeconds(MAX_LEADERBOARD_WINDOW_DAYS, NOW_SECONDS * 1000),
+    ).toBe(NOW_SECONDS - MAX_LEADERBOARD_WINDOW_DAYS * DAY);
+  });
+});
 
 describe('buildLeaderboardCard', () => {
   const options = { title: 'Top zappers:', emptyMessage: 'Nothing yet.' };
@@ -377,8 +419,9 @@ describe('showLeaderboardCommand', () => {
   });
 
   test('rejects a zero window instead of ranking an unbounded history', async () => {
-    // LNbits returns at most 100 payments per wallet, so "all time" would
-    // silently undercount; the setting fails closed until paging exists.
+    // The window has no "all time" value: an unbounded read of a team's whole
+    // history is the slowest read the bot can make, so 0 fails closed rather
+    // than meaning "everything".
     process.env.LEADERBOARD_WINDOW_DAYS = '0';
     const consoleError = jest
       .spyOn(console, 'error')
@@ -467,8 +510,11 @@ describe('showLeaderboardCommand', () => {
     await new ShowLeaderboardCommand().execute(context);
 
     expect(sentCard(sendActivity).body[1]).toMatchObject({
-      text: 'No zaps sent in the last 7 days yet. Send a zap to get things started!',
+      text: leaderboardEmptyMessage(DEFAULT_LEADERBOARD_WINDOW_DAYS),
     });
+    expect(sentCard(sendActivity).body[1].text).toContain(
+      `last ${DEFAULT_LEADERBOARD_WINDOW_DAYS} days`,
+    );
   });
 
   test('links the View Wallets button to the configured portal', async () => {
@@ -501,6 +547,57 @@ describe('showLeaderboardCommand', () => {
     );
     expect(mockGetUsers).not.toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+
+  // Above the ceiling the setting fails closed exactly like a malformed value.
+  // Before the ceiling, a huge window produced a negative cut-off, every zap
+  // ever made was counted, and the card still said "last 100000 days".
+  test.each([
+    ['LEADERBOARD_WINDOW_DAYS', '366'],
+    ['LEADERBOARD_WINDOW_DAYS', '100000'],
+    ['LEADERBOARD_TOP_N', '101'],
+  ])(
+    'fails closed when %s=%s is above its ceiling and logs the variable name',
+    async (name, value) => {
+      process.env[name] = value;
+      const consoleError = jest
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+      zap('z1', alice, bob, 10);
+      const { context, sendActivity } = makeContext();
+
+      try {
+        await new ShowLeaderboardCommand().execute(context);
+
+        expect(sendActivity).toHaveBeenCalledTimes(1);
+        expect(sendActivity).toHaveBeenCalledWith(
+          LEADERBOARD_UNAVAILABLE_MESSAGE,
+        );
+        expect(consoleError).toHaveBeenCalledWith(
+          'Error showing leaderboard:',
+          expect.objectContaining({
+            message: expect.stringContaining(name),
+          }),
+        );
+        expect(mockGetUsers).not.toHaveBeenCalled();
+      } finally {
+        consoleError.mockRestore();
+      }
+    },
+  );
+
+  test('accepts both settings at their ceilings', async () => {
+    process.env.LEADERBOARD_WINDOW_DAYS = String(MAX_LEADERBOARD_WINDOW_DAYS);
+    process.env.LEADERBOARD_TOP_N = String(MAX_LEADERBOARD_TOP_N);
+    zap('z1', alice, bob, 10, NOW_SECONDS - 364 * DAY);
+    const { context, sendActivity } = makeContext();
+
+    await new ShowLeaderboardCommand().execute(context);
+
+    expect(sentCard(sendActivity).body[0].text).toBe(
+      'Top zappers (Sats sent, last 365 days):',
+    );
+    expect(rows(sendActivity)).toEqual(['#1 Alice | 10 Sats']);
   });
 
   test('says so on the card when some wallets could not be read', async () => {
@@ -587,6 +684,39 @@ describe('showLeaderboardCommand', () => {
       { displayName: 'Bob', zappedSats: 150 },
       { displayName: 'Carol', zappedSats: 150 },
     ]);
+  });
+
+  // When the assistant is asked "who is top of the leaderboard" it usually
+  // omits days. It must then measure the same window as the card, or the two
+  // quote different numbers for the same question.
+  test('agrees with get_leaderboard when the assistant omits days', async () => {
+    process.env.LEADERBOARD_WINDOW_DAYS = '30';
+    zap('z1', alice, bob, 100);
+    zap('z2', carol, bob, 40);
+    zap('old', carol, alice, 5000, NOW_SECONDS - 40 * DAY);
+    const { context, sendActivity } = makeContext();
+
+    await new ShowLeaderboardCommand().execute(context);
+
+    const tool = createReadOnlyTools().find(
+      candidate => candidate.name === 'get_leaderboard',
+    )!;
+    const result = (await tool.handler({}, context)) as {
+      periodDays: number;
+      leaderboard: { displayName: string; zappedSats: number }[];
+    };
+
+    expect(result.periodDays).toBe(30);
+    expect(rows(sendActivity)).toEqual([
+      '#1 Alice | 100 Sats',
+      '#2 Carol | 40 Sats',
+    ]);
+    expect(rows(sendActivity)).toEqual(
+      result.leaderboard.map(
+        (entry, index) =>
+          `#${index + 1} ${entry.displayName} | ${entry.zappedSats.toLocaleString()} Sats`,
+      ),
+    );
   });
 
   test('tells the user when LNbits is unavailable', async () => {

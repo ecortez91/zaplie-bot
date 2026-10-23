@@ -17,6 +17,11 @@ import {
   getStoredGraphToken,
 } from './connectCalendarCommand';
 import { isRecord } from '../utils/typeGuards';
+import {
+  MAX_LEADERBOARD_WINDOW_DAYS,
+  readLeaderboardWindowDays,
+  windowStartSeconds,
+} from './showLeaderboardCommand';
 
 const adminKey = process.env.LNBITS_ADMINKEY as string;
 const rewardLabel = process.env.LNBITS_POINTS_LABEL as string;
@@ -28,18 +33,22 @@ const toSats = (balanceMsat: number): number => Math.floor(balanceMsat / 1000);
 const isBalanceWallet = (wallet: Wallet): boolean =>
   isAllowanceWallet(wallet.name) || isPrivateWallet(wallet.name);
 
-const SECONDS_PER_DAY = 86400;
+// One ceiling for the card's LEADERBOARD_WINDOW_DAYS and this tool's `days`,
+// so the two accept the same range.
+const MAX_LEADERBOARD_DAYS = MAX_LEADERBOARD_WINDOW_DAYS;
 
-const MAX_LEADERBOARD_DAYS = 365;
-
-// The leaderboard's window is open-ended by default (all-time), unlike the
-// calendar tools' rolling week, so it gets its own parameter rather than
-// reusing DAYS_PARAMETER's "defaults to 7" contract.
+// When `days` is omitted the tool measures the same window as the
+// `show leaderboard` card (LEADERBOARD_WINDOW_DAYS), so the assistant and the
+// card quote the same numbers for "who is top?". It gets its own parameter
+// rather than reusing DAYS_PARAMETER, whose default and cap belong to the
+// calendar tools.
 const LEADERBOARD_DAYS_PARAMETER = {
   type: 'number',
   description:
     'Only count zaps sent in the last N days (e.g. 7 for "this week"). ' +
-    `A whole number from 1 to ${MAX_LEADERBOARD_DAYS}. Omit for all-time totals.`,
+    `A whole number from 1 to ${MAX_LEADERBOARD_DAYS}. Omit to use the same ` +
+    'window as the team leaderboard card; the reply says which window that is ' +
+    '(periodDays).',
 };
 
 // The model composes these arguments itself, and the runner hands them to the
@@ -98,13 +107,13 @@ const leaderboardArgsError = (
   if (typeof days !== 'number' || !Number.isInteger(days)) {
     return (
       `"days" must be a whole number, got ${JSON.stringify(days)}. ` +
-      `Use 1 to ${MAX_LEADERBOARD_DAYS}, or omit it for all-time totals.`
+      `Use 1 to ${MAX_LEADERBOARD_DAYS}, or omit it for the leaderboard card's window.`
     );
   }
   if (days < 1 || days > MAX_LEADERBOARD_DAYS) {
     return (
       `"days" must be between 1 and ${MAX_LEADERBOARD_DAYS}, got ${days}. ` +
-      'Omit it for all-time totals.'
+      "Omit it for the leaderboard card's window."
     );
   }
   return undefined;
@@ -185,14 +194,33 @@ const getLeaderboardTool: ToolDefinition = {
     const error = leaderboardArgsError(options);
     if (error) return { error };
 
+    // Without `days`, use the card's configured window. A bad setting fails
+    // closed here too: an error the assistant can relay, and a log line naming
+    // the variable, rather than an all-time ranking nobody asked for.
+    let periodDays: number;
+    if (typeof options.days === 'number') {
+      periodDays = options.days;
+    } else {
+      try {
+        periodDays = readLeaderboardWindowDays();
+      } catch (settingError) {
+        console.error(
+          'get_leaderboard: invalid leaderboard setting:',
+          settingError,
+        );
+        return {
+          error:
+            'The leaderboard is not available right now because its configured ' +
+            'window is invalid. Ask an administrator to check the bot settings.',
+        };
+      }
+    }
+
     // One validated value drives both the query and the reported window, so the
     // period the assistant quotes is always the period that was measured.
-    const periodDays = (options.days as number | undefined) ?? null;
-    const sinceTimestamp =
-      periodDays === null
-        ? undefined
-        : Math.floor(Date.now() / 1000) - periodDays * SECONDS_PER_DAY;
-    const leaderboard = await getZapLeaderboard({ sinceTimestamp });
+    const leaderboard = await getZapLeaderboard({
+      sinceTimestamp: windowStartSeconds(periodDays),
+    });
     return {
       rewardLabel,
       periodDays,
