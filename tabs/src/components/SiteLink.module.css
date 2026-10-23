@@ -1,0 +1,34 @@
+.siteLink {
+  font-size: var(--font-size-sm);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.2s ease;
+}
+
+.siteLink:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Beside the wordmark in the header, set off by a divider. */
+.header {
+  color: var(--text-muted);
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border);
+}
+
+.header:hover {
+  color: var(--text-primary);
+}
+
+/* Above the logo on the sign-in page's dark background. */
+.onDark {
+  display: inline-block;
+  margin-bottom: var(--space-6);
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.onDark:hover {
+  color: #ffffff;
+}

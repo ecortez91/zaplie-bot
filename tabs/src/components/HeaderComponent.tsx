@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import styles from './HeaderComponent.module.css';
 import { useTeamsAuth } from '../hooks/useTeamsAuth';
 import NavigationLinks from './NavigationLinks';
+import SiteLink from './SiteLink';
 
 const HeaderComponent: React.FC = () => {
   const { accounts, inProgress } = useMsal();
@@ -125,6 +126,7 @@ const HeaderComponent: React.FC = () => {
             <Link to="/feed" className={styles.logoLink}>
               <span className={styles.appName}>Zaplie</span>
             </Link>
+            <SiteLink />
           </div>
           <nav className={styles.navigation} aria-hidden="true">
             <div className={styles.navLinkSkeleton} />
@@ -156,6 +158,7 @@ const HeaderComponent: React.FC = () => {
             <Link to="/feed" className={styles.logoLink}>
               <span className={styles.appName}>Zaplie</span>
             </Link>
+            <SiteLink />
           </div>
         </div>
       </header>
@@ -169,6 +172,7 @@ const HeaderComponent: React.FC = () => {
           <Link to="/feed" className={styles.logoLink}>
             <span className={styles.appName}>Zaplie</span>
           </Link>
+          <SiteLink />
         </div>
 
         <nav className={styles.navigation} aria-label="Primary navigation">

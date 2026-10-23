@@ -57,6 +57,9 @@ const mockSsoSilent = jest.fn<Promise<unknown>, [unknown]>();
 const signInButton = (container: HTMLElement) =>
   container.querySelector<HTMLButtonElement>('[data-testid="sign-in-button"]');
 
+const siteLink = (container: HTMLElement) =>
+  container.querySelector<HTMLAnchorElement>('a[href="https://getzapl.ie"]');
+
 describe('Login in a Teams tab', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -145,5 +148,34 @@ describe('Login in a Teams tab', () => {
 
     expect(mockSsoSilent).not.toHaveBeenCalled();
     expect(signInButton(container)?.textContent).toBe('Sign In');
+  });
+
+  test('outside Teams shows a link back to the website above the logo', async () => {
+    mockUseTeamsAuth.mockReturnValue({
+      isInTeams: false,
+      isTeamsInitializing: false,
+      handleLogout: jest.fn(async () => undefined),
+      isLoggingOut: false,
+    });
+
+    await renderLogin();
+
+    const link = siteLink(container);
+    const logo = container.querySelector('img[alt="KnowAll AI"]');
+    expect(link?.textContent).toContain('Back to getzapl.ie');
+    expect(logo).not.toBeNull();
+    // The link comes before the logo in the page.
+    expect(
+      (link?.compareDocumentPosition(logo as Node) ?? 0) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  test('inside Teams shows no link back to the website', async () => {
+    mockSsoSilent.mockRejectedValue(new Error('login_required'));
+
+    await renderLogin();
+
+    expect(siteLink(container)).toBeNull();
   });
 });

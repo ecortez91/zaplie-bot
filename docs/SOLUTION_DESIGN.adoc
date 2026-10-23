@@ -350,6 +350,8 @@ basename, so one build cannot serve both.
 router basename and the MSAL redirect URIs, and `REACT_APP_API_BASE_URL` into
 the prefix of every `/api` call. In a browser the header and footer are shown;
 inside Teams (`useTeamsAuth` → `teams-js` context) they stay hidden.
+In a browser the header and the sign-in page carry a link back to
+`https://getzapl.ie` (`components/SiteLink.tsx`), hidden inside Teams.
 
 Sign-out (`useTeamsAuth.handleLogout`) clears the API cache and marks the
 silent sign-in as attempted for the tab session, so the sign-in page does not
