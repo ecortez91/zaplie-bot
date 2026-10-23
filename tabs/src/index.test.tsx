@@ -31,6 +31,30 @@ jest.mock('./services/msalClient', () => ({
   getMsalInstance: require('@jest/globals').jest.fn(),
 }));
 
+const mockBroadcast = jest.fn(async () => undefined);
+
+// A package "exports" subpath that CRA's Jest cannot resolve.
+jest.mock(
+  '@azure/msal-browser/redirect-bridge',
+  () => ({
+    broadcastResponseToMainFrame: () => mockBroadcast(),
+  }),
+  { virtual: true },
+);
+
+// An MSAL state value (standard, padded base64 JSON of { id, meta }), as
+// msal-common setRequestState builds it with msal-browser's base64Encode, and
+// URL-encoded as the query parameter it arrives in.
+const msalState = (interactionType: string): string =>
+  encodeURIComponent(
+    btoa(
+      JSON.stringify({
+        id: '019a1c3e-1b2c-7d4e-8f90-abcdef123456',
+        meta: { interactionType },
+      }),
+    ),
+  );
+
 const getMsalInstance = () =>
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   jest.mocked(require('./services/msalClient').getMsalInstance);
@@ -71,6 +95,9 @@ describe('index startup sequence', () => {
   afterEach(() => {
     console.error = originalConsoleError;
     root.remove();
+    window.history.replaceState(null, '', '/');
+    mockBroadcast.mockClear();
+    jest.restoreAllMocks();
   });
 
   const bootstrap = async () => {
@@ -148,5 +175,50 @@ describe('index startup sequence', () => {
       'Zaplie could not complete the sign-in redirect',
       expect.any(Error),
     );
+  });
+
+  test('the Teams sign-out popup relays its response and closes without starting the app', async () => {
+    const close = jest.spyOn(window, 'close').mockImplementation(() => {});
+    window.history.replaceState(null, '', `/login?state=${msalState('popup')}`);
+    getMsalInstance().mockReturnValue(makeInstance());
+
+    await bootstrap();
+
+    expect(mockBroadcast).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalled();
+    expect(getMsalInstance()).not.toHaveBeenCalled();
+    expect(root.textContent).not.toContain('Zaplie');
+  });
+
+  test('a full-page sign-out landing on /login?state=... starts the app and ends the sign-out', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      `/login?state=${msalState('redirect')}`,
+    );
+    const instance = makeInstance();
+    getMsalInstance().mockReturnValue(instance);
+
+    await bootstrap();
+
+    expect(mockBroadcast).not.toHaveBeenCalled();
+    expect(instance.handleRedirectPromise).toHaveBeenCalledTimes(1);
+    expect(root.textContent).toContain('Zaplie');
+  });
+
+  test('the silent sign-in iframe still only relays its response', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      `/#code=abc&state=${msalState('silent')}`,
+    );
+    jest.spyOn(window, 'parent', 'get').mockReturnValue({} as Window);
+    getMsalInstance().mockReturnValue(makeInstance());
+
+    await bootstrap();
+
+    expect(mockBroadcast).toHaveBeenCalledTimes(1);
+    expect(getMsalInstance()).not.toHaveBeenCalled();
+    expect(root.textContent).not.toContain('Zaplie');
   });
 });
