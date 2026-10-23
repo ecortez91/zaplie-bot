@@ -157,7 +157,8 @@ export const SPANISH_REPLY_HINT =
 export const ENGLISH_REPLY_HINT =
   "The user's Microsoft Teams client is not set to Spanish. Reply in the language the user writes in, English by default. " +
   'Any earlier instruction in this conversation to reply in Spanish no longer applies. ' +
-  'Keep the command words exactly as listed, in English (for example "send zap").';
+  'Keep the command words exactly as listed, in English (for example "send zap"), ' +
+  'and keep wallet names, display names, amounts and the reward label unchanged.';
 
 const replyLanguageHint = (turnContext: TurnContext): string =>
   resolveLocale(turnContext.activity?.locale) === 'es'

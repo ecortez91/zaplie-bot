@@ -76,6 +76,7 @@ import {
   ENGLISH_REPLY_HINT,
   howZaplieWorks,
   runConversationalTurn,
+  SPANISH_REPLY_HINT,
   ToolDefinition,
 } from './foundryAgentService';
 
@@ -716,4 +717,18 @@ describe('foundryAgentService.runConversationalTurn language', () => {
     expect(mockAgentsUpdate).not.toHaveBeenCalled();
     mockResponsesCreate.mockReset();
   });
+});
+
+describe('reply-language hints', () => {
+  test.each([
+    ['Spanish', SPANISH_REPLY_HINT],
+    ['English', ENGLISH_REPLY_HINT],
+  ])(
+    'the %s hint keeps names, amounts and the reward label unchanged',
+    (_language, hint) => {
+      expect(hint).toMatch(
+        /keep wallet names, display names, amounts and the reward label unchanged/,
+      );
+    },
+  );
 });
