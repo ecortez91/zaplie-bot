@@ -1,7 +1,7 @@
 // typeGuards.test.ts
 
 import { expect, describe, test } from '@jest/globals';
-import { isRecord } from './typeGuards';
+import { isOptionalString, isRecord } from './typeGuards';
 
 describe('isRecord', () => {
   test.each<[string, unknown]>([
@@ -40,5 +40,27 @@ describe('isRecord', () => {
     } else {
       throw new Error('Expected isRecord to narrow the object.');
     }
+  });
+});
+
+describe('isOptionalString', () => {
+  test.each<[string, unknown]>([
+    ['a string', 'hello'],
+    ['an empty string', ''],
+    ['null', null],
+    ['undefined', undefined],
+  ])('returns true for %s', (_name, value) => {
+    expect(isOptionalString(value)).toBe(true);
+  });
+
+  test.each<[string, unknown]>([
+    ['a number', 42],
+    ['zero', 0],
+    ['a boolean', false],
+    ['an object', { a: 'b' }],
+    ['an array', ['a']],
+    ['a String object', new String('boxed')],
+  ])('returns false for %s', (_name, value) => {
+    expect(isOptionalString(value)).toBe(false);
   });
 });
