@@ -30,6 +30,12 @@ const useGithubReturnStatus = () => {
       toast.success('GitHub connected.');
     } else if (status === 'repos_connected') {
       toast.success('Repositories connected.');
+    } else if (status === 'repos_updated') {
+      toast.success('Repository access updated on GitHub.');
+    } else if (status === 'install_requested') {
+      toast.success(
+        'Install requested. An owner of the GitHub organisation must approve it.',
+      );
     } else if (status === 'conflict') {
       toast.error('That GitHub account is already linked to another person.');
     } else if (status === 'install_error') {
@@ -83,8 +89,7 @@ const ConnectionsSetting: FunctionComponent = () => {
         return;
       }
       setIdentities(mine);
-    } catch (error) {
-      console.error('Error fetching connections:', error);
+    } catch {
       if (requestId !== latestRequestRef.current) {
         return;
       }
@@ -113,8 +118,7 @@ const ConnectionsSetting: FunctionComponent = () => {
       });
       const authorizeUrl = await getGithubAuthorizeUrl(tokenResponse.idToken);
       window.location.href = authorizeUrl;
-    } catch (error) {
-      console.error('Error starting GitHub connect:', error);
+    } catch {
       toast.error('Could not start the GitHub connection.');
       setConnecting(false);
     }
@@ -151,7 +155,39 @@ const ConnectionsSetting: FunctionComponent = () => {
           </span>
 
           <div className={connectionStyles.providerCopy}>
-            <h3 className={connectionStyles.providerName}>GitHub</h3>
+            <div className={connectionStyles.providerTitleRow}>
+              <h3 className={connectionStyles.providerName}>GitHub</h3>
+              {loading ? (
+                <span
+                  className={`${connectionStyles.badge} ${connectionStyles.badgeNeutral}`}
+                >
+                  Checking…
+                </span>
+              ) : loadError ? (
+                <span
+                  className={`${connectionStyles.badge} ${connectionStyles.badgeDanger}`}
+                >
+                  Unavailable
+                </span>
+              ) : githubIdentity ? (
+                <span
+                  className={`${connectionStyles.badge} ${connectionStyles.badgeConnected}`}
+                >
+                  <img
+                    src={CheckmarkIcon}
+                    alt=""
+                    className={connectionStyles.badgeIcon}
+                  />
+                  Connected
+                </span>
+              ) : (
+                <span
+                  className={`${connectionStyles.badge} ${connectionStyles.badgeNeutral}`}
+                >
+                  Not connected
+                </span>
+              )}
+            </div>
             {loading ? (
               <div className={connectionStyles.loadingLines} aria-hidden="true">
                 <span className={connectionStyles.loadingLine} />
@@ -176,11 +212,18 @@ const ConnectionsSetting: FunctionComponent = () => {
                 automations.
               </p>
             )}
-            {loading ? (
-              <span className={connectionStyles.visuallyHidden} role="status">
-                Loading GitHub connection…
-              </span>
-            ) : null}
+            {/* One persistent polite live region: it is always rendered, so a
+                screen reader hears the settled state as well as the loading
+                announcement it replaces. */}
+            <span className={connectionStyles.visuallyHidden} role="status">
+              {loading
+                ? 'Loading GitHub connection…'
+                : loadError
+                  ? 'GitHub connection unavailable.'
+                  : githubIdentity
+                    ? `GitHub connected as @${githubIdentity.providerHandle}.`
+                    : 'GitHub not connected.'}
+            </span>
           </div>
         </div>
 
@@ -198,16 +241,7 @@ const ConnectionsSetting: FunctionComponent = () => {
             >
               Retry
             </button>
-          ) : githubIdentity ? (
-            <span className={connectionStyles.connectedBadge}>
-              <img
-                src={CheckmarkIcon}
-                alt=""
-                className={connectionStyles.connectedIcon}
-              />
-              Connected
-            </span>
-          ) : (
+          ) : githubIdentity ? null : (
             <button
               type="button"
               onClick={handleConnect}

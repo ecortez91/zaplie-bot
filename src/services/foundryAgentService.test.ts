@@ -28,8 +28,27 @@ jest.mock('../config', () => ({
   },
 }));
 
+interface MockAgentDefinition {
+  kind: string;
+  model: string;
+  instructions: string;
+  tools: unknown[];
+}
+
+interface MockFoundryResponse {
+  output: unknown[];
+  output_text: string;
+}
+
+type MockResponsesCreate = (
+  request: { input: unknown; conversation: string },
+  options: {
+    body: { agent_reference: { name: string; type: 'agent_reference' } };
+  },
+) => Promise<MockFoundryResponse>;
+
 const mockAgentsUpdate = jest
-  .fn<() => Promise<any>>()
+  .fn<(name: string, definition: MockAgentDefinition) => Promise<void>>()
   .mockResolvedValue(undefined);
 const mockGetBotPersona = jest
   .fn<() => Promise<string>>()
@@ -39,8 +58,8 @@ jest.mock('./fetchBotPersona', () => ({
   getBotPersona: mockGetBotPersona,
 }));
 
-const mockConversationsCreate = jest.fn<() => Promise<any>>();
-const mockResponsesCreate = jest.fn<(...args: any[]) => Promise<any>>();
+const mockConversationsCreate = jest.fn<() => Promise<{ id: string }>>();
+const mockResponsesCreate = jest.fn<MockResponsesCreate>();
 
 jest.mock('@azure/ai-projects', () => ({
   AIProjectClient: jest.fn().mockImplementation(() => ({
@@ -53,9 +72,30 @@ jest.mock('@azure/ai-projects', () => ({
   })),
 }));
 
-import { runConversationalTurn, ToolDefinition } from './foundryAgentService';
+import {
+  howZaplieWorks,
+  runConversationalTurn,
+  ToolDefinition,
+} from './foundryAgentService';
 
 const makeTurnContext = (): TurnContext => ({}) as TurnContext;
+
+// Most turns don't exercise the command list; an empty one omits the section.
+const NO_COMMANDS: string[] = [];
+
+// The handler contract is `unknown`, so a test tool narrows its own arguments
+// exactly as a real one does.
+const readTextArgument = (args: unknown): string => {
+  if (
+    typeof args !== 'object' ||
+    args === null ||
+    !('text' in args) ||
+    typeof args.text !== 'string'
+  ) {
+    throw new Error('Expected a string text argument.');
+  }
+  return args.text;
+};
 
 const noopTool: ToolDefinition = {
   name: 'noop_tool',
@@ -80,6 +120,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       undefined,
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     expect(result.replyText).toBe('Hi there!');
@@ -111,6 +152,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     expect(result.foundryConversationId).toBe('conv_existing');
@@ -122,7 +164,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       name: 'echo',
       description: 'echoes the input',
       parameters: { type: 'object', properties: { text: { type: 'string' } } },
-      handler: async (args: { text: string }) => ({ echoed: args.text }),
+      handler: async args => ({ echoed: readTextArgument(args) }),
     };
 
     mockResponsesCreate
@@ -144,6 +186,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [echoTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     expect(result.replyText).toBe('You said hi');
@@ -177,10 +220,11 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
     expect(mockAgentsUpdate).toHaveBeenCalledTimes(1);
-    const { instructions } = (mockAgentsUpdate.mock.calls[0] as any[])[1];
+    const { instructions } = mockAgentsUpdate.mock.calls[0][1];
     // The rails come first and are restated last; the persona is fenced in
     // between and framed as configuration, not as instructions.
     expect(instructions).toMatch(
@@ -198,6 +242,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
     expect(mockAgentsUpdate).not.toHaveBeenCalled();
 
@@ -212,9 +257,10 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
     expect(mockAgentsUpdate).toHaveBeenCalledTimes(1);
-    expect((mockAgentsUpdate.mock.calls[0] as any[])[1].instructions).toContain(
+    expect(mockAgentsUpdate.mock.calls[0][1].instructions).toContain(
       'Be terse and formal.',
     );
   });
@@ -232,9 +278,10 @@ describe('foundryAgentService.runConversationalTurn', () => {
       'conv_existing',
       [noopTool],
       makeTurnContext(),
+      NO_COMMANDS,
     );
 
-    const { instructions } = (mockAgentsUpdate.mock.calls[0] as any[])[1];
+    const { instructions } = mockAgentsUpdate.mock.calls[0][1];
     expect(instructions).toContain(
       'Keep replies concise and friendly, suited for a Teams chat.',
     );
@@ -243,6 +290,47 @@ describe('foundryAgentService.runConversationalTurn', () => {
     // withdrawing reaches the agent — so the rails say so rather than letting
     // it improvise a payout route.
     expect(instructions).toContain('withdrawals are not available yet');
+    // It speaks as Zaplie itself, not as a helper beside the tool.
+    expect(instructions).toMatch(/^You are Zaplie, a bot in Microsoft Teams\./);
+    expect(instructions).not.toContain("Zaplie's assistant");
+    // A stated scope, so the model doesn't answer one Bitcoin question and
+    // refuse the next: general Bitcoin/Lightning questions yes, advice no.
+    expect(instructions).toContain('what is a Lightning channel?');
+    expect(instructions).toContain(
+      'Do not give investment, price, trading or tax advice',
+    );
+    expect(instructions).toContain('Politely decline questions unrelated');
+  });
+
+  test('tells the agent the real commands and that zapping is "send zap"', async () => {
+    mockGetBotPersona.mockResolvedValue('');
+    mockAgentsUpdate.mockClear();
+    mockResponsesCreate.mockResolvedValueOnce({
+      output: [],
+      output_text: 'ok',
+    });
+
+    await runConversationalTurn(
+      'how do I send a zap?',
+      'conv_existing',
+      [noopTool],
+      makeTurnContext(),
+      ['send zap', 'show my balance', 'show leaderboard'],
+    );
+
+    // A new command list changes the composed instructions, so the agent is
+    // updated rather than left with the old ones.
+    expect(mockAgentsUpdate).toHaveBeenCalledTimes(1);
+    const { instructions } = mockAgentsUpdate.mock.calls[0][1];
+    expect(instructions).toContain('- "send zap"');
+    expect(instructions).toContain('- "show my balance"');
+    expect(instructions).toContain('- "show leaderboard"');
+    expect(instructions).toContain('tell them to type "send zap"');
+    expect(instructions).toContain('never invent buttons, menus, tabs, apps');
+    // The persona still comes last, so the fixed rules wrap it.
+    expect(instructions.indexOf('- "send zap"')).toBeLessThan(
+      instructions.indexOf('--- BEGIN PERSONA ---'),
+    );
   });
 
   test('names the unregistered tool and the registered ones when the agent drifts', async () => {
@@ -264,6 +352,7 @@ describe('foundryAgentService.runConversationalTurn', () => {
         'conv_existing',
         [noopTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(
       /unregistered tool "not_a_real_tool"[\s\S]*Registered tools: /,
@@ -289,14 +378,124 @@ describe('foundryAgentService.runConversationalTurn', () => {
         'conv_existing',
         [noopTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(
       /could not parse the arguments for tool "noop_tool"[\s\S]*\{not json/,
     );
   });
 
-  test('rejects a handler that returns undefined instead of sending a non-string output', async () => {
-    const undefinedTool = { ...noopTool, handler: async () => undefined };
+  // A model sending "null" or "[]" for a no-argument tool is a mistake it can
+  // fix on the next round. Killing the turn over it would also clear the
+  // conversation id, so the fix is to hand the mistake back as tool output.
+  test.each([
+    ['null', 'null'],
+    ['a JSON array', '[]'],
+    ['a JSON string', '"bob"'],
+  ])(
+    'hands %s arguments back as a tool error instead of ending the turn',
+    async (_label, argumentsJson) => {
+      const handler = jest.fn<ToolDefinition['handler']>();
+      mockResponsesCreate
+        .mockResolvedValueOnce({
+          output: [
+            {
+              type: 'function_call',
+              name: noopTool.name,
+              call_id: 'call_not_an_object',
+              arguments: argumentsJson,
+            },
+          ],
+          output_text: '',
+        })
+        .mockResolvedValueOnce({ output: [], output_text: 'Let me retry.' });
+
+      const result = await runConversationalTurn(
+        'do something',
+        'conv_existing',
+        [{ ...noopTool, handler }],
+        makeTurnContext(),
+        NO_COMMANDS,
+      );
+
+      expect(result.replyText).toBe('Let me retry.');
+      // The handler never sees a non-object, which is what the guard is for.
+      expect(handler).not.toHaveBeenCalled();
+
+      const fedBack =
+        mockResponsesCreate.mock.calls[
+          mockResponsesCreate.mock.calls.length - 1
+        ][0].input;
+      expect(fedBack).toEqual([
+        {
+          type: 'function_call_output',
+          call_id: 'call_not_an_object',
+          output: expect.stringContaining('must be a JSON object'),
+        },
+      ]);
+    },
+  );
+
+  test('rejects a malformed function_call item from Foundry', async () => {
+    mockResponsesCreate.mockResolvedValueOnce({
+      output: [
+        { type: 'function_call', name: noopTool.name, call_id: 'call_invalid' },
+      ],
+      output_text: '',
+    });
+
+    await expect(
+      runConversationalTurn(
+        'do something',
+        'conv_existing',
+        [noopTool],
+        makeTurnContext(),
+        NO_COMMANDS,
+      ),
+    ).rejects.toThrow(/invalid function_call payload/);
+  });
+
+  test('rejects a top-level response payload that is missing output or output_text', async () => {
+    mockResponsesCreate.mockResolvedValueOnce({
+      output: 'not-an-array',
+      output_text: 'hi',
+    } as unknown as MockFoundryResponse);
+
+    await expect(
+      runConversationalTurn(
+        'do something',
+        'conv_existing',
+        [noopTool],
+        makeTurnContext(),
+        NO_COMMANDS,
+      ),
+    ).rejects.toThrow(
+      'foundryAgentService: Foundry returned an invalid response payload.',
+    );
+  });
+
+  test('ignores non-function-call items in the output array instead of rejecting them', async () => {
+    mockResponsesCreate.mockResolvedValueOnce({
+      output: [{ type: 'message', content: 'thinking out loud' }],
+      output_text: 'All done, no tools needed.',
+    });
+
+    const result = await runConversationalTurn(
+      'hello',
+      'conv_existing',
+      [noopTool],
+      makeTurnContext(),
+      NO_COMMANDS,
+    );
+
+    expect(result.replyText).toBe('All done, no tools needed.');
+  });
+
+  test('rejects a handler that returns undefined, which cannot be sent as function_call_output', async () => {
+    const undefinedTool: ToolDefinition = {
+      ...noopTool,
+      handler: async () => undefined,
+    };
     mockResponsesCreate.mockResolvedValueOnce({
       output: [
         {
@@ -313,8 +512,9 @@ describe('foundryAgentService.runConversationalTurn', () => {
       runConversationalTurn(
         'do something',
         'conv_existing',
-        [undefinedTool as any],
+        [undefinedTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(/returned undefined/);
   });
@@ -339,7 +539,25 @@ describe('foundryAgentService.runConversationalTurn', () => {
         'conv_existing',
         [noopTool],
         makeTurnContext(),
+        NO_COMMANDS,
       ),
     ).rejects.toThrow(/exceeded/i);
+  });
+});
+
+describe('howZaplieWorks', () => {
+  test('lists exactly the commands it is given', () => {
+    const text = howZaplieWorks(['send zap', 'connect calendar']);
+    expect(text).toContain('- "send zap"\n- "connect calendar"');
+    expect(text).not.toContain('show leaderboard');
+  });
+
+  test('says how to zap only when "send zap" is registered', () => {
+    expect(howZaplieWorks(['show leaderboard'])).not.toContain('card opens');
+    expect(howZaplieWorks(['send zap'])).toContain('type "send zap"');
+  });
+
+  test('is empty when there are no commands', () => {
+    expect(howZaplieWorks([])).toBe('');
   });
 });

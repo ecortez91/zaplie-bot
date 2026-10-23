@@ -126,7 +126,7 @@ const setupUsersAndWallets = () => {
     async (inKey: string, _limit?: number, offset = 0) =>
       // One short page: the fixtures are far smaller than a page, so paging
       // stops after the first read.
-      (offset === 0 ? walletsByInkey[inKey] || [] : []) as any,
+      offset === 0 ? walletsByInkey[inKey] || [] : [],
   );
   // Default to the primary path — one paginated read of every payment.
   mockGetAllPaymentsPage.mockImplementation(async (_limit, offset) =>
@@ -663,7 +663,7 @@ describe('incomplete reads are reported, never scored as zero', () => {
       if (inKey === bobAllowance.inkey) {
         throw new Error('429 Too Many Requests');
       }
-      return (walletsByInkey[inKey] || []) as any;
+      return walletsByInkey[inKey] || [];
     });
 
     const result = await getZapLeaderboard();

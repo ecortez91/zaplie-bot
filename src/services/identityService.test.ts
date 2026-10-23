@@ -1,5 +1,5 @@
 import { resolveRewardRecipientByGithubId } from './identityService';
-import { payReward } from './rewardsService';
+import { payReward, RewardPaymentUncertainError } from './rewardsService';
 import {
   getUserWalletsByUserId,
   createInvoice,
@@ -174,7 +174,12 @@ describe('payReward recipientId resolution', () => {
     expect(JSON.stringify(extra)).not.toContain('inkey');
     expect(extra).toEqual(
       expect.objectContaining({
-        to: expect.objectContaining({ displayName: 'octocat' }),
+        to: {
+          id: 'wallet-1',
+          name: 'Private',
+          user: 'lnbits-user-1',
+          displayName: 'octocat',
+        },
       }),
     );
   });
@@ -259,14 +264,14 @@ describe('payReward recipientId resolution', () => {
     expect(mockedPayInvoice).not.toHaveBeenCalled();
   });
 
-  test('throws when payInvoice returns no payment hash', async () => {
+  test('throws an uncertain outcome when payInvoice returns no payment hash', async () => {
     linkResolves();
     mockedGetUserWallets.mockResolvedValue([privateWallet]);
     mockedCreateInvoice.mockResolvedValue('lnbc-payment-request');
     mockedPayInvoice.mockResolvedValue({ detail: 'insufficient balance' });
 
     await expect(payReward(rewardWithRecipientId)).rejects.toThrow(
-      'paying reward invoice failed',
+      RewardPaymentUncertainError,
     );
   });
 });

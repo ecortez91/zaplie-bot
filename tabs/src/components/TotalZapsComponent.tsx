@@ -35,9 +35,9 @@ const TotalZapsComponent: FunctionComponent<TotalZapsComponentProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [error] = useState<string | null>(null);
 
-  const { rewardName } = useContext(RewardNameContext);
+  const { rewardNameLabel } = useContext(RewardNameContext);
 
-  const rewardsName = rewardName;
+  const rewardsName = rewardNameLabel;
 
   const zapsSent: ZapSent = {
     totalZaps: totalZaps,

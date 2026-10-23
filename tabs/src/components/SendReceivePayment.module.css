@@ -585,3 +585,12 @@ input[type='number'] {
   width: 100px;
   height: 100px;
 }
+
+.errorText {
+  margin: 0;
+  max-width: 302px;
+  color: #f87171;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+}

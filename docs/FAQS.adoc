@@ -24,8 +24,10 @@ name is used by both the web tabs and the bot's replies.
 === How do I send a Zap?
 
 Message the bot `send zap` in Teams, pick one or more recipients, add a
-message and an amount (1–10,000), and submit. The card updates in place with
-the result and your remaining balance.
+message and an amount (1 up to your Allowance balance, at most 10,000; the
+card refuses more before you can submit; with several recipients the total
+is checked when you submit), and submit. The card updates in place with the
+result and your remaining balance.
 
 === Why did sending to a colleague fail?
 

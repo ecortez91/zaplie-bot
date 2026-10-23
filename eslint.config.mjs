@@ -37,7 +37,11 @@ export default [
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
-      '@typescript-eslint/no-explicit-any': 'warn',
+      // Fixes #207. An `any` in src/ is an unchecked claim about a wallet
+      // balance, an LNbits payload or a model-composed tool argument — the
+      // three places this codebase cannot afford one. tabs/ and functions/
+      // keep their own ESLint setups and stay out of scope.
+      '@typescript-eslint/no-explicit-any': 'error',
       'no-console': 'off',
       'max-lines': [
         'error',

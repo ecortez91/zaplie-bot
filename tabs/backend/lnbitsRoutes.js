@@ -4,24 +4,22 @@ const {
   extractBearerToken: defaultExtractBearerToken,
   verifyMsalPayload: defaultVerifyMsalPayload,
 } = require('./msalValidator');
+const { tokenMemberVerdict } = require('./memberGate');
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const INVOICE_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
 const BOLT11_PATTERN = /^ln[a-z0-9]+$/i;
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~-]{16,128}$/;
 
 const validId = (value) => typeof value === 'string' && ID_PATTERN.test(value);
 
 // Only a real JSON number is an amount. `Number()` would turn `true` into 1 and
 // `['5']` into 5, which are not integer amount inputs.
-const parseAmount = (value) => {
+const parseAmount = (value, maxSats) => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
     return null;
   }
-  const configuredMax = Number(process.env.REWARDS_MAX_AMOUNT_SATS);
-  const max = Number.isSafeInteger(configuredMax) && configuredMax > 0
-    ? configuredMax
-    : 1_000_000;
-  return value > 0 && value <= max ? value : null;
+  return value > 0 && value <= maxSats ? value : null;
 };
 
 // Pagination is validated, never clamped: a caller-supplied `10.5` or `1e3` is a
@@ -40,6 +38,21 @@ const parseBoundedInt = (value, { fallback, min, max }) => {
     ? parsed
     : null;
 };
+
+// A body key the route does not read is a key the caller believed it could set.
+// `aadObjectId` is the one that matters: authorization is derived from the
+// verified token and never from the body, and refusing the key says so out loud
+// instead of accepting the request and quietly ignoring it. The portal client
+// sends exactly these fields.
+const INVOICE_BODY_KEYS = new Set(['amount', 'memo']);
+const PAYMENT_BODY_KEYS = new Set(['paymentRequest']);
+const ZAP_BODY_KEYS = new Set(['recipientUserId', 'amount', 'memo']);
+
+const hasOnlyKeys = (body, allowed) =>
+  typeof body === 'object' &&
+  body !== null &&
+  !Array.isArray(body) &&
+  Object.keys(body).every((key) => allowed.has(key));
 
 const parseMemo = (value) =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 500
@@ -64,11 +77,72 @@ const createLnbitsRouter = ({
       if (!claims || typeof claims.oid !== 'string' || claims.oid.length === 0) {
         throw new Error('token is missing the oid claim');
       }
-      req.auth = { oid: claims.oid, roles: claims.roles || [] };
+      req.auth = {
+        oid: claims.oid,
+        roles: claims.roles || [],
+        // Profile claims from the same verified token, used only to label a
+        // newly provisioned LNbits user; authorization never reads them.
+        name: typeof claims.name === 'string' ? claims.name : undefined,
+        email:
+          typeof claims.preferred_username === 'string'
+            ? claims.preferred_username
+            : typeof claims.email === 'string'
+              ? claims.email
+              : undefined,
+        // Membership facts for the provisioning gate (memberGate.js): the
+        // tenant, the acct optional claim (0 member, 1 guest) and the sign-in
+        // name. Kept as issued; the gate decides what they mean. `email`
+        // above is a label only and never reaches the gate.
+        tid: typeof claims.tid === 'string' ? claims.tid : undefined,
+        acct: claims.acct,
+        preferredUsername:
+          typeof claims.preferred_username === 'string'
+            ? claims.preferred_username
+            : undefined,
+      };
       next();
     } catch (error) {
       console.error('LNbits gateway token validation failed:', error.message);
       res.status(401).json({ error: 'invalid token' });
+    }
+  });
+
+  // Registered before assertCaller on purpose: this is how a signed-in
+  // person who has no LNbits user yet (nobody outside Teams had one) gets
+  // one. It only ever acts on the verified token's own oid, creates nothing
+  // that already exists and moves no sats.
+  //
+  // It serves the same people the bot serves (src/services/memberGate.ts,
+  // mirrored in memberGate.js): members of this tenant, and guests listed in
+  // ZAPLIE_GUEST_ALLOWLIST. A verified token alone is not enough, as the
+  // tenant's guests can obtain one too. Anyone the gate cannot place is
+  // refused and nothing is created.
+  router.post('/users/me', async (req, res, next) => {
+    if (req.body !== undefined && !hasOnlyKeys(req.body, new Set())) {
+      res.status(400).json({ error: 'invalid setup request' });
+      return;
+    }
+    const verdict = tokenMemberVerdict({
+      oid: req.auth.oid,
+      tid: req.auth.tid,
+      acct: req.auth.acct,
+      preferred_username: req.auth.preferredUsername,
+    });
+    if (!verdict.allowed) {
+      console.warn(`LNbits provisioning refused (${verdict.reason}) for ${req.auth.oid}`);
+      res.status(403).json({ error: 'not a member of this organisation' });
+      return;
+    }
+    try {
+      res.json(
+        await service.ensureCaller({
+          aadObjectId: req.auth.oid,
+          displayName: req.auth.name,
+          email: req.auth.email,
+        }),
+      );
+    } catch (error) {
+      next(error);
     }
   });
 
@@ -166,24 +240,30 @@ const createLnbitsRouter = ({
   }));
 
   router.post('/wallets/:walletId/invoices', asyncRoute(async (req, res) => {
-    const amount = parseAmount(req.body?.amount);
+    const amount = parseAmount(req.body?.amount, service.maxZapAmountSats());
     const memo = parseMemo(req.body?.memo);
-    if (!validId(req.params.walletId) || amount === null || memo === null) {
+    if (
+      !hasOnlyKeys(req.body, INVOICE_BODY_KEYS) ||
+      !validId(req.params.walletId) ||
+      amount === null ||
+      memo === null
+    ) {
       res.status(400).json({ error: 'invalid invoice request' });
       return;
     }
-    const paymentRequest = await service.createOwnedInvoice({
+    const invoice = await service.createOwnedInvoice({
       walletId: req.params.walletId,
       amount,
       memo,
       aadObjectId: req.auth.oid,
     });
-    res.status(201).json({ paymentRequest });
+    res.status(201).json(invoice);
   }));
 
   router.post('/wallets/:walletId/payments', asyncRoute(async (req, res) => {
     const paymentRequest = req.body?.paymentRequest;
     if (
+      !hasOnlyKeys(req.body, PAYMENT_BODY_KEYS) ||
       !validId(req.params.walletId) ||
       typeof paymentRequest !== 'string' ||
       paymentRequest.length > 4096 ||
@@ -202,9 +282,16 @@ const createLnbitsRouter = ({
   }));
 
   router.post('/zaps', asyncRoute(async (req, res) => {
-    const amount = parseAmount(req.body?.amount);
+    const amount = parseAmount(req.body?.amount, service.maxZapAmountSats());
     const memo = parseMemo(req.body?.memo);
-    if (!validId(req.body?.recipientUserId) || amount === null || memo === null) {
+    const idempotencyKey = req.get('Idempotency-Key');
+    if (
+      !hasOnlyKeys(req.body, ZAP_BODY_KEYS) ||
+      !validId(req.body?.recipientUserId) ||
+      amount === null ||
+      memo === null ||
+      !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey || '')
+    ) {
       res.status(400).json({ error: 'invalid zap request' });
       return;
     }
@@ -214,6 +301,7 @@ const createLnbitsRouter = ({
         amount,
         memo,
         aadObjectId: req.auth.oid,
+        idempotencyKey,
       }),
     );
   }));
@@ -251,11 +339,19 @@ const createLnbitsRouter = ({
     );
   }));
 
-  router.use((error, _req, res, _next) => {
+  router.use((error, req, res, _next) => {
     const status = Number.isInteger(error.status) ? error.status : 502;
-    console.error('LNbits gateway request failed:', error.message);
+    // Name the route that failed, so a 502 in the log can be tied to a request
+    // without the masked body. The query string is dropped rather than logged.
+    // The path is request-controlled, so it is passed as an argument and never
+    // as the format string, which console would expand %s/%j from.
+    const route = `${req.method} ${String(req.originalUrl || req.url || '').split('?')[0]}`;
+    console.error('LNbits gateway request failed:', route, error.message);
     res.status(status).json({
-      error: status >= 500 ? 'LNbits service is unavailable' : error.message,
+      error:
+        status >= 500 && !error.expose
+          ? 'LNbits service is unavailable'
+          : error.message,
     });
   });
 

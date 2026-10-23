@@ -1,8 +1,15 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useContext,
+  useRef,
+} from 'react';
 import styles from './SendZapsPopup.module.css';
 import { RewardNameContext } from './RewardNameContext';
+import { isFunded } from '../services/lnbits/walletSelection';
 import { useCache } from '../utils/CacheContext';
-import { sendZap } from '../services/lnbits/payments';
+import { sendZap, newIdempotencyKey } from '../services/lnbits/payments';
 import { getUsers } from '../services/lnbits/users';
 import { getUserWallets } from '../services/lnbits/wallets';
 import { useMsal } from '@azure/msal-react';
@@ -22,6 +29,32 @@ const PRESET_AMOUNTS = [5000, 10000, 25000];
 
 const MAX_ZAP_AMOUNT = 1000000;
 
+// Three gateway answers mean this key can never succeed again, and none of
+// them means "definitely not paid" (see lnbitsGatewayService.js):
+//
+//   - outcome_unknown - the zap was paid but the success could not be recorded
+//   - failed - the payment was attempted and threw, so the key is poisoned
+//     deliberately; that is fail-closed, not proof the money stayed put
+//   - the key is already bound to a different zap
+//
+// Retrying any of them with the same key 409s forever, and minting a fresh key
+// would risk a second payment for the first two, so the popup closes instead.
+// "Zap request is already in progress" is deliberately absent: retrying that
+// one replays the in-flight attempt's result once it settles, which is safe.
+const TERMINAL_ZAP_ERRORS = [
+  /contact support/i,
+  /cannot be retried safely/i,
+  /already used for another zap/i,
+];
+
+export const BALANCE_UNAVAILABLE_ERROR =
+  'Your allowance balance is unavailable, so zaps cannot be sent right now.';
+
+const isDoNotRetryError = (message: string | null) =>
+  Boolean(
+    message && TERMINAL_ZAP_ERRORS.some(pattern => pattern.test(message)),
+  );
+
 const parseZapAmount = (value: string): number | null => {
   if (!/^\d+$/.test(value.trim())) {
     return null;
@@ -36,6 +69,17 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const [selectedUser, setSelectedUser] = useState<string>('');
   const [amount, setAmount] = useState<string>('');
   const [memo, setMemo] = useState<string>('');
+  // One key per zap attempt, deliberately outside React state so a re-render
+  // cannot change it mid-flight. The gateway can time the browser out while it
+  // is still paying, so pressing Send again has to replay the same key or it
+  // pays a second time.
+  //
+  // It is keyed on the request actually sent, not on the raw form fields: an
+  // empty memo goes out as "Zap payment", so typing that into the memo box
+  // between attempts changes the field without changing the request, and
+  // minting a new key there would pay twice. Cleared on success, because the
+  // next Send is a new zap.
+  const zapKeyRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,10 +87,11 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const [users, setUsers] = useState<UserWithWallet[]>([]);
   const [currentUserWallets, setCurrentUserWallets] = useState<{
     allowance: Wallet | null;
-    balance: number;
+    /** null when the gateway could not read the allowance balance. */
+    balance: number | null;
   }>({
     allowance: null,
-    balance: 0,
+    balance: null,
   });
   const [sendAnonymously, setSendAnonymously] = useState(false);
   const [selectedValue, setSelectedValue] = useState<string>('');
@@ -55,74 +100,78 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   const { cache, setCache } = useCache();
   const { accounts } = useMsal();
   const rewardNameContext = useContext(RewardNameContext);
-  const rewardsName = rewardNameContext?.rewardName ?? 'Sats';
+  const rewardsName = rewardNameContext.rewardNameLabel;
 
-  useEffect(() => {
-    const loadUsers = async () => {
-      setIsLoadingUsers(true);
-      try {
-        const account = accounts[0];
-        if (!account?.localAccountId) {
+  const loadUsers = useCallback(async () => {
+    setIsLoadingUsers(true);
+    try {
+      const account = accounts[0];
+      if (!account?.localAccountId) {
+        setIsLoadingUsers(false);
+        return;
+      }
+
+      // Get users from cache or fetch them
+      let allUsers = cache['allUsers'] as User[];
+      if (!allUsers || allUsers.length === 0) {
+        const fetchedUsers = await getUsers({});
+        if (fetchedUsers && fetchedUsers.length > 0) {
+          allUsers = fetchedUsers;
+          setCache('allUsers', fetchedUsers);
+        } else {
           setIsLoadingUsers(false);
           return;
         }
-
-        // Get users from cache or fetch them
-        let allUsers = cache['allUsers'] as User[];
-        if (!allUsers || allUsers.length === 0) {
-          const fetchedUsers = await getUsers({});
-          if (fetchedUsers && fetchedUsers.length > 0) {
-            allUsers = fetchedUsers;
-            setCache('allUsers', fetchedUsers);
-          } else {
-            setIsLoadingUsers(false);
-            return;
-          }
-        }
-
-        // Fetch current user's wallet
-        const currentUserData = allUsers.find(
-          u => u.aadObjectId === account.localAccountId,
-        );
-
-        if (currentUserData) {
-          // Always fetch fresh wallet data to get accurate balance
-          const wallets = await getUserWallets(currentUserData.id);
-          const allowanceWallet = wallets?.find(w =>
-            w.name.toLowerCase().includes('allowance'),
-          );
-          const currentBalance = allowanceWallet
-            ? allowanceWallet.balance_msat / 1000
-            : 0;
-
-          setCurrentUserWallets({
-            allowance: allowanceWallet || null,
-            balance: currentBalance,
-          });
-        }
-
-        // Filter out current user - wallet fetching happens on user selection
-        const otherUsers = allUsers.filter(
-          u => u.aadObjectId !== account.localAccountId,
-        );
-
-        // Initialize users without wallet data - will fetch on selection
-        const usersWithoutWallets: UserWithWallet[] = otherUsers.map(user => ({
-          ...user,
-          privateWallet: null,
-        }));
-
-        setUsers(usersWithoutWallets);
-      } catch (err) {
-        setError('Failed to load users');
-      } finally {
-        setIsLoadingUsers(false);
       }
-    };
 
-    loadUsers();
+      // Fetch current user's wallet
+      const currentUserData = allUsers.find(
+        u => u.aadObjectId === account.localAccountId,
+      );
+
+      if (currentUserData) {
+        // Always fetch fresh wallet data to get accurate balance
+        const wallets = await getUserWallets(currentUserData.id);
+        const allowanceWallet = wallets?.find(w =>
+          w.name.toLowerCase().includes('allowance'),
+        );
+        // A balance the gateway could not read is null, not 0. Treating it
+        // as 0 here would block zaps while claiming the wallet is empty, so
+        // it stays null and the UI says the balance is unavailable.
+        const currentBalance =
+          allowanceWallet && isFunded(allowanceWallet)
+            ? allowanceWallet.balance_msat / 1000
+            : null;
+
+        setCurrentUserWallets({
+          allowance: allowanceWallet || null,
+          balance: currentBalance,
+        });
+      }
+
+      // Filter out current user - wallet fetching happens on user selection
+      const otherUsers = allUsers.filter(
+        u => u.aadObjectId !== account.localAccountId,
+      );
+
+      // Initialize users without wallet data - will fetch on selection
+      const usersWithoutWallets: UserWithWallet[] = otherUsers.map(user => ({
+        ...user,
+        privateWallet: null,
+      }));
+
+      setUsers(usersWithoutWallets);
+    } catch (err) {
+      setError('Failed to load users');
+    } finally {
+      setIsLoadingUsers(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts]); // cache and setCache are from context and are stable, intentionally excluded
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
 
   // Fetch wallet for selected user on demand
   const handleUserSelect = async (userId: string) => {
@@ -191,6 +240,10 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
     }
 
     // Balance validation
+    if (currentUserWallets.balance === null) {
+      setError(BALANCE_UNAVAILABLE_ERROR);
+      return;
+    }
     if (zapAmount > currentUserWallets.balance) {
       setError(
         `Insufficient balance. You have ${currentUserWallets.balance} ${rewardsName} available.`,
@@ -222,14 +275,34 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
         paymentMemo = `[Anonymous] ${paymentMemo}`;
       }
 
-      const result = await sendZap(recipient.id, zapAmount, paymentMemo);
+      // A genuinely different zap gets its own key; an identical retry does
+      // not. Reusing a key for changed details would be refused with a 409.
+      const fingerprint = JSON.stringify([
+        recipient.id,
+        zapAmount,
+        paymentMemo,
+      ]);
+      if (zapKeyRef.current?.fingerprint !== fingerprint) {
+        zapKeyRef.current = { fingerprint, key: newIdempotencyKey() };
+      }
+      const result = await sendZap(
+        recipient.id,
+        zapAmount,
+        paymentMemo,
+        zapKeyRef.current.key,
+      );
 
       if (result && result.payment_hash) {
+        // Settled: the next Send is a different zap and needs its own key.
+        zapKeyRef.current = null;
         setPaymentHash(result.payment_hash);
         setSuccess(true);
         // Optimistic update for immediate UI feedback
         // Fresh balance will be fetched from API when popup reopens
-        const updatedBalance = currentUserWallets.balance - zapAmount;
+        const updatedBalance =
+          currentUserWallets.balance === null
+            ? null
+            : currentUserWallets.balance - zapAmount;
         setCurrentUserWallets(prev => ({ ...prev, balance: updatedBalance }));
       } else {
         throw new Error('Payment failed');
@@ -243,6 +316,7 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
   };
 
   const handleClose = () => {
+    zapKeyRef.current = null;
     setSuccess(false);
     setError(null);
     onClose();
@@ -411,7 +485,10 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
 
             {/* Balance Info */}
             <p className={styles.balanceText}>
-              Available balance: {currentUserWallets.balance.toLocaleString()}{' '}
+              Available balance:{' '}
+              {currentUserWallets.balance === null
+                ? 'unavailable'
+                : currentUserWallets.balance.toLocaleString()}{' '}
               {rewardsName}
             </p>
 
@@ -498,9 +575,22 @@ const SendZapsPopup: React.FC<SendZapsPopupProps> = ({ onClose }) => {
             <div className={styles.errorMessage}>{error}</div>
             <button
               className={styles.closeButton}
-              onClick={() => setError(null)}
+              onClick={
+                isDoNotRetryError(error)
+                  ? handleClose
+                  : () => {
+                      setError(null);
+                      // For a stale balance, clearing the message is not
+                      // enough — the next Send would fail identically on the
+                      // same null. Every other error keeps its composed zap,
+                      // because reloading would discard it.
+                      if (error === BALANCE_UNAVAILABLE_ERROR) {
+                        void loadUsers();
+                      }
+                    }
+              }
             >
-              Try Again
+              {isDoNotRetryError(error) ? 'Close' : 'Try Again'}
             </button>
           </div>
         </div>

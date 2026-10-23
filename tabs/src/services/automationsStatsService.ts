@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { isFiniteNumber } from './validators';
+import { apiUrl } from './appLocation';
 
 export type AutomationAudience = 'teammates' | 'copilots' | 'customers';
 
@@ -27,9 +29,6 @@ export interface AutomationsStats {
   engagementByAudience: Record<AutomationAudience, AutomationRecipient[]>;
   recentPayments: AutomationHistoryItem[];
 }
-
-const isFiniteNumber = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isFinite(value);
 
 const isNullableString = (value: unknown): value is string | null =>
   value === null || typeof value === 'string';
@@ -119,7 +118,7 @@ export const parseAutomationsStats = (value: unknown): AutomationsStats => {
 export const getAutomationsStats = async (
   idToken: string,
 ): Promise<AutomationsStats> => {
-  const response = await axios.get('/api/automations-stats', {
+  const response = await axios.get(apiUrl('/api/automations-stats'), {
     headers: { Authorization: `Bearer ${idToken}` },
   });
   return parseAutomationsStats(response.data);

@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { isFiniteNumber } from './validators';
+import { apiUrl } from './appLocation';
 
 export interface ReportsData {
   weeks: number;
@@ -9,9 +11,6 @@ export interface ReportsData {
   totalAutomatedSats: number;
   totalAutomatedCount: number;
 }
-
-const isFiniteNumber = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isFinite(value);
 
 export const parseReportsData = (value: unknown): ReportsData => {
   if (!value || typeof value !== 'object') {
@@ -42,7 +41,7 @@ export const parseReportsData = (value: unknown): ReportsData => {
 // idToken (not the Graph access token): its audience is this app's own AAD
 // client id, which is what the tab backend validates against the Entra JWKS.
 export const getReports = async (idToken: string): Promise<ReportsData> => {
-  const response = await axios.get('/api/reports', {
+  const response = await axios.get(apiUrl('/api/reports'), {
     headers: { Authorization: `Bearer ${idToken}` },
   });
   return parseReportsData(response.data);
