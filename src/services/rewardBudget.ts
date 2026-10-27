@@ -153,8 +153,9 @@ export const resolveRewardBudgetStorePath = (
  * Same storage contract as the reward ledger (one JSON file under
  * ZAPLIE_DATA_DIR, an exclusive lock, atomic replacement).
  *
- * A reservation is kept for paid, pending and uncertain rewards. It is only
- * released for a failure known to be before the payment left the bot.
+ * A reservation is kept for paid and uncertain rewards. It is released for a
+ * reward held as pending (nothing pays pending yet), and for a failure known
+ * to be before the payment left the bot.
  */
 export class RewardBudgetLedger {
   readonly storePath: string;
@@ -231,7 +232,8 @@ export class RewardBudgetLedger {
 
   /**
    * Removes a reservation. Only for a reward known not to have paid: a
-   * failure before the payment or pending-reward request left the bot.
+   * failure before the payment or pending-reward request left the bot, or a
+   * reward held as pending.
    */
   async release(periodKey: string, ledgerKey: string): Promise<void> {
     this.validate(periodKey, ledgerKey);

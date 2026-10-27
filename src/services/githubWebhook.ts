@@ -104,6 +104,9 @@ export const MAX_MERGE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
  * merged themselves (anyone with write access could otherwise pay themselves
  * a reward per trivial pull request). Auto-merge counts as the person who
  * enabled it, so an author enabling it on their own pull request is refused.
+ * A merge queue merges as `github-merge-queue[bot]`, so who queued it is not
+ * in this event: there the guard cannot apply, and required reviews in
+ * branch protection must stand in for it.
  */
 export const githubPullRequestReward = (
   event: unknown,
@@ -140,6 +143,15 @@ export const githubPullRequestReward = (
     (typeof user.login === 'string' && user.login.endsWith('[bot]'))
   ) {
     return { kind: 'not-rewarded', reason: 'author is a bot' };
+  }
+  // Checked here, not only by parseRewardRequest, so the self-merge
+  // comparison below is always number against number.
+  if (
+    typeof user.id !== 'number' ||
+    !Number.isSafeInteger(user.id) ||
+    user.id <= 0
+  ) {
+    return { kind: 'invalid', error: 'pull_request.user.id is missing' };
   }
   // GitHub sets merged_by on every merged pull request; without it nobody
   // can tell a self-merge apart, so the merge is refused.

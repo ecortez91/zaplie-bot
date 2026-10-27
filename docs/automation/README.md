@@ -127,7 +127,10 @@ Two merges earn nothing and answer 200 `{"status":"not-rewarded"}`:
 - **Self-merges**: the person who merged the pull request (`merged_by`, by
   GitHub numeric id) is its author. Auto-merge counts as the person who
   enabled it, so an author turning on auto-merge for their own pull request is
-  a self-merge. Someone else must merge it, or a merge queue.
+  a self-merge. On a repository with a merge queue the merge is attributed to
+  `github-merge-queue[bot]`, so the bot cannot tell who queued it: the
+  self-merge guard does not apply there, and required reviews in branch
+  protection must stand in for it.
 
 Labels must be on the pull request **before** it merges. A label added later
 changes nothing: the reward for that pull request has already been decided,
@@ -202,6 +205,10 @@ curl -s -X POST https://<bot-domain>/api/v1/rewards \
 `amountSats` is refused: the amount always comes from the settings. Each new
 `Idempotency-Key` is a new reward and counts against the budget. Sending the
 same key twice replays the first answer with `Idempotency-Replayed: true`.
+
+This path has no bot-author or self-merge guard: its body carries neither the
+author's type nor `merged_by`, so the caller must apply them. It is being
+retired for the signed webhook.
 
 ## Legacy: the Logic App template
 

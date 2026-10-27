@@ -121,6 +121,10 @@ describe('githubPullRequestReward', () => {
 
   test.each([
     ['type Bot', { login: 'dependabot[bot]', id: 49699333, type: 'Bot' }],
+    [
+      'type Bot without a [bot] login',
+      { login: 'some-app', id: 1, type: 'Bot' },
+    ],
     ['a [bot] login without a type', { login: 'renovate[bot]', id: 29139614 }],
   ])('a merge authored by a bot (%s) is not rewarded', (_label, user) => {
     expect(githubPullRequestReward(merged({ user }), now)).toEqual({
@@ -150,7 +154,17 @@ describe('githubPullRequestReward', () => {
     ).toMatchObject({ kind: 'not-rewarded' });
   });
 
-  test('a merge by a bot (merge queue) for a person is rewarded', () => {
+  test.each([
+    ['missing', undefined],
+    ['a string', '583231'],
+    ['zero', 0],
+  ])('a merge whose author id is %s is invalid', (_label, id) => {
+    expect(
+      githubPullRequestReward(merged({ user: { login: 'octocat', id } }), now),
+    ).toEqual({ kind: 'invalid', error: 'pull_request.user.id is missing' });
+  });
+
+  test('a merge-queue merge is rewarded: the guard knowingly cannot see who queued it', () => {
     expect(
       githubPullRequestReward(
         merged({
