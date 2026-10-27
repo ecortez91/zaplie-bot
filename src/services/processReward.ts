@@ -11,6 +11,12 @@ import {
 import { recordRewardOutcome } from './pulse';
 import { ResolvedRewardRecipient } from './identityService';
 import {
+  BudgetReservation,
+  getRewardBudget,
+  RewardBudgetLedger,
+} from './rewardBudget';
+import { rewardPeriodKey } from './rewardPeriod';
+import {
   PaidRewardResponse,
   PendingRewardResponse,
   RewardEntry,
@@ -32,6 +38,10 @@ export interface ProcessRewardDeps {
     | 'markUncertain'
     | 'releaseIfProcessing'
   >;
+  // Required: no budget ledger, no payment.
+  budgetLedger: Pick<RewardBudgetLedger, 'reserve' | 'release'>;
+  getRewardBudget?: typeof getRewardBudget;
+  now?: () => number;
   parseRewardRequest?: typeof parseRewardRequest;
   assertRepoConnected?: typeof assertRepoConnected;
   resolveRewardRecipient?: typeof resolveRewardRecipient;
@@ -106,6 +116,9 @@ export const processReward = async (
     resolveAmountSats: resolveAmount = resolveAmountSats,
     payReward: pay = payReward,
     recordRewardOutcome: record = recordRewardOutcome,
+    budgetLedger,
+    getRewardBudget: getBudget = getRewardBudget,
+    now = Date.now,
   } = deps;
 
   const ledgerKey = rewardKey(idempotencyKey);
@@ -177,6 +190,8 @@ export const processReward = async (
   let amountSats: number;
   let recipient: ResolvedRewardRecipient | null;
   let amount: RewardAmount;
+  let periodKey: string;
+  let budgetOutcome: BudgetReservation;
   try {
     // Restricted to GitHub. Generic flow identities need a separate
     // provider-aware contract before they can pay.
@@ -186,10 +201,42 @@ export const processReward = async (
     recipient = await resolveRecipient(request);
     amount = await resolveAmount(request, recipient);
     amountSats = amount.amountSats;
+    // The aggregate cap, checked and claimed under one lock before paying.
+    // No budget configured is a 503 here, with nothing paid.
+    const budget = await getBudget();
+    periodKey = rewardPeriodKey(now(), budget.period, budget.timezone);
+    budgetOutcome = await budgetLedger.reserve(
+      periodKey,
+      ledgerKey,
+      amountSats,
+      budget.capSats,
+    );
   } catch (error) {
     await release();
     return fail(error);
   }
+  if (budgetOutcome === 'exceeded') {
+    // Nothing was paid, so the key is released: a manual redelivery in a
+    // later period (a human decision) can still pay it.
+    await release();
+    record({ status: 'failed', requestKey: ledgerKey });
+    return {
+      status: 402,
+      body: { error: 'reward budget exhausted for this period' },
+    };
+  }
+  // Only for failures known to be before the payment left the bot. A
+  // failure here keeps the reservation: it over-counts, never over-pays.
+  const releaseBudget = async (): Promise<void> => {
+    try {
+      await budgetLedger.release(periodKey, ledgerKey);
+    } catch (error) {
+      console.error(
+        'reward budget could not release an unpaid reward; it stays counted:',
+        error,
+      );
+    }
+  };
 
   let result;
   try {
@@ -219,6 +266,7 @@ export const processReward = async (
     }
     // Anything else failed before the payment or pending-reward request
     // took effect, so a retry may pay.
+    await releaseBudget();
     await release();
     return fail(error);
   }

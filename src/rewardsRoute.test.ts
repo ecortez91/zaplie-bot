@@ -20,6 +20,8 @@ import {
 } from './rewardsRoute';
 import { getWebhookKeyHashes } from './services/fetchWebhookKeys';
 import { RewardLedger, rewardKey } from './services/rewardLedger';
+import { RewardBudgetLedger } from './services/rewardBudget';
+import { RewardBudget } from './services/fetchRewardPolicy';
 import { RewardAmount, RewardError } from './services/rewardsService';
 import {
   createInvoice,
@@ -85,11 +87,13 @@ const tempDirectories: string[] = [];
 const servers: http.Server[] = [];
 let storePath: string;
 let ledger: RewardLedger;
+let budgetLedger: RewardBudgetLedger;
 let deps: {
   isAuthorizedRewardKey: jest.Mock<(key: string) => Promise<boolean>>;
   assertRepoConnected: jest.Mock<(repo: string) => Promise<void>>;
   resolveAmountSats: jest.Mock<() => Promise<RewardAmount>>;
   recordRewardOutcome: jest.Mock<(outcome: unknown) => void>;
+  getRewardBudget: jest.Mock<() => Promise<RewardBudget>>;
 };
 const savedTreasuryKey = process.env.REWARDS_TREASURY_ADMINKEY;
 
@@ -101,6 +105,7 @@ const startServer = async (
   app.use(
     createRewardsRouter({
       ledger,
+      budgetLedger,
       ...(deps as unknown as Partial<RewardsRouteDeps>),
       ...overrides,
     }),
@@ -151,11 +156,22 @@ beforeEach(() => {
   tempDirectories.push(directory);
   storePath = path.join(directory, 'bot-reward-ledger.json');
   ledger = new RewardLedger({ storePath, lockRetryMs: 1 });
+  budgetLedger = new RewardBudgetLedger({
+    storePath: path.join(directory, 'bot-reward-budget.json'),
+    lockRetryMs: 1,
+  });
   deps = {
     isAuthorizedRewardKey: jest.fn(async (key: string) => key === API_KEY),
     assertRepoConnected: jest.fn(async () => undefined),
     resolveAmountSats: jest.fn(async () => AMOUNT_21),
     recordRewardOutcome: jest.fn(),
+    // A budget far above anything these tests pay; the budget suite tests
+    // the cap itself.
+    getRewardBudget: jest.fn(async () => ({
+      period: 'week' as const,
+      capSats: 1_000_000,
+      timezone: 'Europe/London',
+    })),
   };
   process.env.REWARDS_TREASURY_ADMINKEY = 'treasury-admin-key';
   mockedResolveRecipient.mockResolvedValue({ lnbitsUserId: 'user-1' });
@@ -552,5 +568,155 @@ describe('isAuthorizedRewardKey', () => {
     expect(JSON.parse(response.text)).toEqual({
       error: 'rewards endpoint unavailable',
     });
+  });
+});
+
+describe('POST /api/v1/rewards: budget cap', () => {
+  const budget = (capSats: number) => ({
+    period: 'week' as const,
+    capSats,
+    timezone: 'Europe/London',
+  });
+  const amount = (sats: number): RewardAmount => ({
+    amountSats: sats,
+    baseSats: sats,
+    bonusSats: 0,
+    level: null,
+  });
+  const WEEK_44 = Date.parse('2026-10-29T12:00:00Z');
+  const WEEK_45 = Date.parse('2026-11-02T00:00:00Z');
+
+  test('cap 1000: the first 600 pays, the second is a 402 with nothing paid', async () => {
+    deps.getRewardBudget.mockResolvedValue(budget(1000));
+    deps.resolveAmountSats.mockResolvedValue(amount(600));
+    const url = await startServer({ now: () => WEEK_44 });
+
+    const first = await post(url, { idempotencyKey: 'delivery-1' });
+    const second = await post(url, { idempotencyKey: 'delivery-2' });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(402);
+    expect(JSON.parse(second.text)).toEqual({
+      error: 'reward budget exhausted for this period',
+    });
+    expect(mockedPayInvoice).toHaveBeenCalledTimes(1);
+    expect(deps.recordRewardOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'failed' }),
+    );
+    // The refused reward's key was released, so nothing blocks it later.
+    await expect(ledger.get(rewardKey('delivery-2'))).resolves.toBeUndefined();
+    await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(600);
+  });
+
+  test('the refused reward pays once the week rolls over (a manual redelivery)', async () => {
+    deps.getRewardBudget.mockResolvedValue(budget(1000));
+    deps.resolveAmountSats.mockResolvedValue(amount(600));
+    let now = WEEK_44;
+    const url = await startServer({ now: () => now });
+
+    await post(url, { idempotencyKey: 'delivery-1' });
+    const refused = await post(url, { idempotencyKey: 'delivery-2' });
+    now = WEEK_45;
+    const redelivered = await post(url, { idempotencyKey: 'delivery-2' });
+
+    expect(refused.status).toBe(402);
+    expect(redelivered.status).toBe(200);
+    expect(mockedPayInvoice).toHaveBeenCalledTimes(2);
+    await expect(budgetLedger.spent('week:2026-W45')).resolves.toBe(600);
+  });
+
+  test('a replay never reserves the budget twice', async () => {
+    deps.getRewardBudget.mockResolvedValue(budget(1000));
+    deps.resolveAmountSats.mockResolvedValue(amount(600));
+    const url = await startServer({ now: () => WEEK_44 });
+
+    await post(url);
+    const replayed = await post(url);
+
+    expect(replayed.replayed).toBe('true');
+    await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(600);
+  });
+
+  test('no budget configured is a 503 before any reservation, nothing paid', async () => {
+    deps.getRewardBudget.mockRejectedValue(
+      new RewardError('reward budget not configured', 503),
+    );
+    const reserve = jest.spyOn(budgetLedger, 'reserve');
+    const url = await startServer({ now: () => WEEK_44 });
+
+    const response = await post(url);
+
+    expect(response.status).toBe(503);
+    expect(JSON.parse(response.text)).toEqual({
+      error: 'reward budget not configured',
+    });
+    expect(reserve).not.toHaveBeenCalled();
+    expect(mockedPayInvoice).not.toHaveBeenCalled();
+    await expect(ledger.get(rewardKey('delivery-1'))).resolves.toBeUndefined();
+  });
+
+  test('a failure known to be before payment releases the reservation', async () => {
+    deps.getRewardBudget.mockResolvedValue(budget(1000));
+    deps.resolveAmountSats.mockResolvedValue(amount(600));
+    mockedCreateInvoice.mockResolvedValueOnce(new Error('LNbits down'));
+    const url = await startServer({ now: () => WEEK_44 });
+
+    const failed = await post(url);
+
+    expect(failed.status).toBe(500);
+    await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(0);
+  });
+
+  test('an uncertain payment keeps its reservation', async () => {
+    deps.getRewardBudget.mockResolvedValue(budget(1000));
+    deps.resolveAmountSats.mockResolvedValue(amount(600));
+    mockedPayInvoice.mockRejectedValueOnce(new Error('socket hang up'));
+    const url = await startServer({ now: () => WEEK_44 });
+
+    const failed = await post(url);
+
+    expect(failed.status).toBe(500);
+    await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(600);
+  });
+
+  test('a pending reward counts against the budget', async () => {
+    deps.getRewardBudget.mockResolvedValue(budget(1000));
+    deps.resolveAmountSats.mockResolvedValue(amount(600));
+    mockedResolveRecipient.mockResolvedValue(null);
+    const url = await startServer({ now: () => WEEK_44 });
+
+    const response = await post(url);
+
+    expect(response.status).toBe(202);
+    await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(600);
+  });
+
+  test('a budget ledger failure is a 500 with the key released and nothing paid', async () => {
+    jest
+      .spyOn(budgetLedger, 'reserve')
+      .mockRejectedValueOnce(new Error('lock timed out'));
+    const url = await startServer({ now: () => WEEK_44 });
+
+    const response = await post(url);
+
+    expect(response.status).toBe(500);
+    expect(mockedPayInvoice).not.toHaveBeenCalled();
+    await expect(ledger.get(rewardKey('delivery-1'))).resolves.toBeUndefined();
+  });
+
+  test('two concurrent rewards cannot both pass the cap', async () => {
+    deps.getRewardBudget.mockResolvedValue(budget(1000));
+    deps.resolveAmountSats.mockResolvedValue(amount(600));
+    const url = await startServer({ now: () => WEEK_44 });
+
+    const responses = await Promise.all([
+      post(url, { idempotencyKey: 'delivery-a' }),
+      post(url, { idempotencyKey: 'delivery-b' }),
+    ]);
+
+    expect(responses.map(response => response.status).sort()).toEqual([
+      200, 402,
+    ]);
+    expect(mockedPayInvoice).toHaveBeenCalledTimes(1);
   });
 });

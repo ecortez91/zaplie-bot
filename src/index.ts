@@ -22,6 +22,7 @@ import { resolveBotCredentials } from './services/botCredentials';
 import { UserService } from './services/userService';
 import { FetchUserMiddleware } from './services/fetchUserMiddleware';
 import { RewardLedger } from './services/rewardLedger';
+import { RewardBudgetLedger } from './services/rewardBudget';
 import { createRewardsRouter } from './rewardsRoute';
 import { createGithubWebhookRouter } from './githubWebhookRoute';
 
@@ -72,6 +73,9 @@ const bot = new TeamsBot();
 // ZAPLIE_DATA_DIR or an unreadable store stops the bot here instead of
 // failing the first reward payment.
 const rewardLedger = new RewardLedger();
+// Same for the aggregate budget ledger: every reward needs it.
+const rewardBudgetLedger = new RewardBudgetLedger();
+const rewardDeps = { ledger: rewardLedger, budgetLedger: rewardBudgetLedger };
 
 // Create HTTP server. Express instead of restify: restify still requires
 // spdy, whose native http_parser binding no longer exists on Node >= 21.
@@ -79,7 +83,7 @@ const server = express();
 server.disable('x-powered-by');
 // Before express.json(): the GitHub signature covers the raw body bytes, so
 // this route reads them itself. Disabled (503) until GITHUB_WEBHOOK_SECRET is set.
-server.use(createGithubWebhookRouter({ ledger: rewardLedger }));
+server.use(createGithubWebhookRouter(rewardDeps));
 if (!process.env.GITHUB_WEBHOOK_SECRET) {
   console.warn(
     'GITHUB_WEBHOOK_SECRET is not set: POST /api/v1/github/webhook answers 503.',
@@ -108,7 +112,7 @@ server.post('/api/messages', async (req, res) => {
     });
 });
 
-server.use(createRewardsRouter({ ledger: rewardLedger }));
+server.use(createRewardsRouter(rewardDeps));
 
 const authStartPage = fs.readFileSync(
   path.join(__dirname, '../public/auth-start.html'),
