@@ -10,7 +10,6 @@ const { writeJsonSecure } = require('./secureJsonStore');
 const identityRoutes = require('./identityRoutes');
 const pendingRewardsStore = require('./pendingRewardsStore');
 const {
-  DEFAULT_REWARD_AMOUNTS,
   migrateRewardAmounts,
   validateRewardAmountPatch,
 } = require('./rewardAmounts');
@@ -72,8 +71,6 @@ app.use('/api/setup', require('./setupRoutes'));
 
 const { requireAdmin } = require('./adminAuth');
 const { requireSignedInOrBot } = require('./readAuth');
-
-const defaultRewardAmounts = DEFAULT_REWARD_AMOUNTS;
 
 // Mutable state must survive a clean deploy, so in production it lives
 // outside the deployment tree: ZAPLIE_DATA_DIR points at a durable directory
@@ -285,15 +282,18 @@ app.get('/api/bot-persona', requireSignedInOrBot, (req, res) => {
   res.send({ botPersona: readStoredBotPersona(data.botPersona) });
 });
 
-// Endpoint to get automation reward amounts
+// Endpoint to get automation reward amounts. Only what an admin saved, no
+// defaults merged: an unset event is not configured and pays nothing, the
+// same fail-closed rule as /api/reward-policy and the bot.
 app.get('/api/reward-amounts', requireSignedInOrBot, (req, res) => {
   const data = readData();
   try {
-    const storedRewardAmounts = migrateRewardAmounts(data.rewardAmounts);
-    const rewardAmounts = { ...defaultRewardAmounts, ...storedRewardAmounts };
-    const validation = validateRewardAmountPatch(rewardAmounts);
-    if (!validation.valid) {
-      throw new Error(validation.message);
+    const rewardAmounts = migrateRewardAmounts(data.rewardAmounts);
+    if (Object.keys(rewardAmounts).length > 0) {
+      const validation = validateRewardAmountPatch(rewardAmounts);
+      if (!validation.valid) {
+        throw new Error(validation.message);
+      }
     }
     res.send({ rewardAmounts });
   } catch (error) {
