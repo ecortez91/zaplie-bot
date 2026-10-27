@@ -1,5 +1,9 @@
 import { resolveRewardRecipientByGithubId } from './identityService';
-import { payReward, RewardPaymentUncertainError } from './rewardsService';
+import {
+  payReward,
+  resolveRewardRecipient,
+  RewardPaymentUncertainError,
+} from './rewardsService';
 import {
   getUserWalletsByUserId,
   createInvoice,
@@ -119,6 +123,12 @@ describe('resolveRewardRecipientByGithubId', () => {
   });
 });
 
+// The pipeline resolves the recipient first, then pays with the result.
+const payResolved = async (
+  reward: Parameters<typeof payReward>[0],
+): ReturnType<typeof payReward> =>
+  payReward(reward, await resolveRewardRecipient(reward));
+
 describe('payReward recipientId resolution', () => {
   const rewardWithRecipientId = {
     recipient: 'octocat',
@@ -154,7 +164,7 @@ describe('payReward recipientId resolution', () => {
     mockedCreateInvoice.mockResolvedValue('lnbc-payment-request');
     mockedPayInvoice.mockResolvedValue({ payment_hash: 'hash-1' });
 
-    const result = await payReward(rewardWithRecipientId);
+    const result = await payResolved(rewardWithRecipientId);
 
     expect(result).toEqual({ paymentHash: 'hash-1' });
     expect(mockedGetUserWallets).toHaveBeenCalledWith('lnbits-user-1');
@@ -167,7 +177,7 @@ describe('payReward recipientId resolution', () => {
     mockedCreateInvoice.mockResolvedValue('lnbc-payment-request');
     mockedPayInvoice.mockResolvedValue({ payment_hash: 'hash-1' });
 
-    await payReward(rewardWithRecipientId);
+    await payResolved(rewardWithRecipientId);
 
     const extra = mockedCreateInvoice.mock.calls[0][4];
     expect(JSON.stringify(extra)).not.toContain('adminkey');
@@ -188,7 +198,7 @@ describe('payReward recipientId resolution', () => {
     linkMissing();
     mockedCreatePendingReward.mockResolvedValue(undefined);
 
-    const result = await payReward(rewardWithRecipientId);
+    const result = await payResolved(rewardWithRecipientId);
 
     expect(result).toEqual({ pending: true });
     expect(mockedCreatePendingReward).toHaveBeenCalledWith({
@@ -210,7 +220,7 @@ describe('payReward recipientId resolution', () => {
       json: async () => ({ error: 'LNbits unavailable' }),
     } as Response);
 
-    await expect(payReward(rewardWithRecipientId)).rejects.toThrow(
+    await expect(payResolved(rewardWithRecipientId)).rejects.toThrow(
       'identity resolve failed: 502',
     );
     expect(mockedCreatePendingReward).not.toHaveBeenCalled();
@@ -224,7 +234,7 @@ describe('payReward recipientId resolution', () => {
       json: async () => ({ personAad: 'aad-1' }),
     } as Response);
 
-    await expect(payReward(rewardWithRecipientId)).rejects.toThrow(
+    await expect(payResolved(rewardWithRecipientId)).rejects.toThrow(
       'identity resolve returned an invalid recipient',
     );
     expect(mockedPayInvoice).not.toHaveBeenCalled();
@@ -233,7 +243,7 @@ describe('payReward recipientId resolution', () => {
   test('rejects a reward with no recipientId with a 400', async () => {
     const { recipientId: _omit, ...withoutId } = rewardWithRecipientId;
 
-    await expect(payReward(withoutId)).rejects.toHaveProperty(
+    await expect(payResolved(withoutId)).rejects.toHaveProperty(
       'statusCode',
       400,
     );
@@ -247,7 +257,7 @@ describe('payReward recipientId resolution', () => {
       { ...privateWallet, name: 'Allowance' },
     ]);
 
-    await expect(payReward(rewardWithRecipientId)).rejects.toThrow(
+    await expect(payResolved(rewardWithRecipientId)).rejects.toThrow(
       'has no Private wallet',
     );
     expect(mockedPayInvoice).not.toHaveBeenCalled();
@@ -258,7 +268,7 @@ describe('payReward recipientId resolution', () => {
     mockedGetUserWallets.mockResolvedValue([privateWallet]);
     mockedCreateInvoice.mockResolvedValue(new Error('lnbits down'));
 
-    await expect(payReward(rewardWithRecipientId)).rejects.toThrow(
+    await expect(payResolved(rewardWithRecipientId)).rejects.toThrow(
       'creating reward invoice failed',
     );
     expect(mockedPayInvoice).not.toHaveBeenCalled();
@@ -270,7 +280,7 @@ describe('payReward recipientId resolution', () => {
     mockedCreateInvoice.mockResolvedValue('lnbc-payment-request');
     mockedPayInvoice.mockResolvedValue({ detail: 'insufficient balance' });
 
-    await expect(payReward(rewardWithRecipientId)).rejects.toThrow(
+    await expect(payResolved(rewardWithRecipientId)).rejects.toThrow(
       RewardPaymentUncertainError,
     );
   });

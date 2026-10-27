@@ -54,6 +54,25 @@ const cleanTitle = (title: unknown): string => {
     : flat;
 };
 
+const MAX_LABELS = 50;
+const LABEL_PATTERN = /^[ -~]{1,50}$/;
+
+// Label names as they stood at merge. A name the reward request would refuse
+// (non-ASCII, too long) cannot match a configured level anyway, so it is
+// dropped here rather than failing the whole reward.
+const labelNames = (labels: unknown): string[] => {
+  if (!Array.isArray(labels)) {
+    return [];
+  }
+  return labels
+    .map(label => (isRecord(label) ? label.name : undefined))
+    .filter(
+      (name): name is string =>
+        typeof name === 'string' && LABEL_PATTERN.test(name),
+    )
+    .slice(0, MAX_LABELS);
+};
+
 export type GithubPullRequestReward =
   | { kind: 'ignored' }
   | { kind: 'invalid'; error: string }
@@ -124,6 +143,7 @@ export const githubPullRequestReward = (
         title ? ` - ${title}` : ''
       }`,
       source: 'github',
+      labels: labelNames(pullRequest.labels),
     },
   };
 };

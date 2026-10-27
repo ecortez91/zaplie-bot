@@ -71,8 +71,29 @@ describe('githubPullRequestReward', () => {
         repo: 'octo-org/octo-repo',
         reason: 'GitHub: PR #7 merged - Add the thing',
         source: 'github',
+        labels: [],
       },
     });
+  });
+
+  test('label names are carried, and names no request would accept are dropped', () => {
+    const reward = githubPullRequestReward(
+      merged({
+        labels: [
+          { name: 'reward:L2' },
+          { name: 'bug' },
+          { name: 'récompense' },
+          { name: 'x'.repeat(51) },
+          { id: 3 },
+          'not-an-object',
+        ],
+      }),
+      now,
+    );
+    expect(reward.kind === 'reward' && reward.body.labels).toEqual([
+      'reward:L2',
+      'bug',
+    ]);
   });
 
   test('the body never carries an amount', () => {

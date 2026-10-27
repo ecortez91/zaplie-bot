@@ -18,7 +18,12 @@ import {
   GithubWebhookRouteDeps,
 } from './githubWebhookRoute';
 import { RewardLedger, rewardKey } from './services/rewardLedger';
-import { RewardError } from './services/rewardsService';
+import {
+  RewardAmount,
+  RewardError,
+  resolveAmountSats,
+} from './services/rewardsService';
+import { getRewardConfig } from './services/fetchRewardPolicy';
 import {
   createInvoice,
   getUserWalletsByUserId,
@@ -37,6 +42,9 @@ jest.mock('./services/lnbitsService', () => ({
 jest.mock('./services/identityService', () => ({
   resolveRewardRecipientByGithubId: jest.fn(),
 }));
+jest.mock('./services/fetchRewardPolicy', () => ({
+  getRewardConfig: jest.fn(),
+}));
 jest.mock('./services/pendingRewardsService', () => ({
   ...jest.requireActual<object>('./services/pendingRewardsService'),
   createPendingReward: jest.fn(),
@@ -49,6 +57,7 @@ const mockedGetWallets = getUserWalletsByUserId as unknown as AsyncMock;
 const mockedResolveRecipient =
   resolveRewardRecipientByGithubId as unknown as AsyncMock;
 const mockedCreatePendingReward = createPendingReward as unknown as AsyncMock;
+const mockedGetRewardConfig = getRewardConfig as unknown as AsyncMock;
 
 const SECRET = 'test-webhook-secret';
 const NOW = Date.parse('2026-10-28T12:00:00Z');
@@ -62,10 +71,18 @@ const mergedEvent = {
     merged: true,
     merged_at: '2026-10-28T11:59:00Z',
     user: { login: 'octocat', id: 583231 },
+    labels: [{ name: 'bug' }, { name: 'reward:L2' }],
   },
   repository: { full_name: 'octo-org/octo-repo' },
 };
 const PR_KEY = 'github:pull_request:2001:merged';
+
+const AMOUNT_21: RewardAmount = {
+  amountSats: 21,
+  baseSats: 21,
+  bonusSats: 0,
+  level: null,
+};
 
 const tempDirectories: string[] = [];
 const servers: http.Server[] = [];
@@ -73,7 +90,7 @@ let storePath: string;
 let ledger: RewardLedger;
 let deps: {
   assertRepoConnected: jest.Mock<(repo: string) => Promise<void>>;
-  resolveAmountSats: jest.Mock<() => Promise<number>>;
+  resolveAmountSats: jest.Mock<() => Promise<RewardAmount>>;
   recordRewardOutcome: jest.Mock<(outcome: unknown) => void>;
 };
 let secret: string | undefined;
@@ -156,7 +173,7 @@ beforeEach(() => {
   secret = SECRET;
   deps = {
     assertRepoConnected: jest.fn(async () => undefined),
-    resolveAmountSats: jest.fn(async () => 21),
+    resolveAmountSats: jest.fn(async () => AMOUNT_21),
     recordRewardOutcome: jest.fn(),
   };
   process.env.REWARDS_TREASURY_ADMINKEY = 'treasury-admin-key';
@@ -424,6 +441,107 @@ describe('POST /api/v1/github/webhook: events', () => {
     expect(JSON.parse(redelivered.text)).toMatchObject({
       status: 'uncertain',
     });
+    expect(mockedPayInvoice).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/v1/github/webhook: reward policy', () => {
+  const OID = '11111111-2222-3333-4444-555555555555';
+
+  beforeEach(() => {
+    mockedResolveRecipient.mockResolvedValue({
+      personAad: OID,
+      lnbitsUserId: 'user-1',
+    });
+  });
+
+  test('the PR labels and the resolved recipient reach the amount', async () => {
+    const url = await startServer();
+
+    await deliver(url);
+
+    expect(deps.resolveAmountSats).toHaveBeenCalledWith(
+      expect.objectContaining({ labels: ['bug', 'reward:L2'] }),
+      { personAad: OID, lnbitsUserId: 'user-1' },
+    );
+  });
+
+  test('a person override plus the label bonus is what the invoice charges', async () => {
+    mockedGetRewardConfig.mockResolvedValue({
+      rewardAmounts: { githubPrMergedSats: 1000 },
+      rewardPolicy: {
+        version: 1,
+        levels: {
+          githubPrMerged: {
+            labelPrefix: 'reward:',
+            bonuses: { L1: 250, L2: 500 },
+          },
+        },
+        overrides: { [OID]: { githubPrMerged: { baseSats: 1500 } } },
+        budget: null,
+      },
+    });
+    const url = await startServer({ resolveAmountSats });
+
+    const response = await deliver(url);
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.text)).toMatchObject({ amountSats: 2000 });
+    expect(mockedCreateInvoice).toHaveBeenCalledWith(
+      'in',
+      'wallet-private',
+      2000,
+      'GitHub: PR #7 merged - Add the thing',
+      expect.objectContaining({ baseSats: 1500, bonusSats: 500, level: 'L2' }),
+    );
+  });
+
+  test('nothing configured in the portal pays nothing', async () => {
+    mockedGetRewardConfig.mockResolvedValue({
+      rewardAmounts: {},
+      rewardPolicy: { version: 1, levels: {}, overrides: {}, budget: null },
+    });
+    const url = await startServer({ resolveAmountSats });
+
+    const response = await deliver(url);
+
+    expect(response.status).toBe(503);
+    expect(mockedPayInvoice).not.toHaveBeenCalled();
+    await expect(ledger.get(rewardKey(PR_KEY))).resolves.toBeUndefined();
+  });
+
+  test('a relabel after merge replays the first result and never pays twice', async () => {
+    const url = await startServer();
+    const first = await deliver(url);
+
+    const relabelled = await deliver(url, {
+      body: {
+        ...mergedEvent,
+        pull_request: {
+          ...mergedEvent.pull_request,
+          labels: [{ name: 'reward:L3' }],
+        },
+      },
+    });
+
+    expect(relabelled.status).toBe(200);
+    expect(relabelled.replayed).toBe('true');
+    expect(relabelled.text).toBe(first.text);
+    expect(mockedPayInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  test('a recipient lookup failure pays nothing and releases the key', async () => {
+    mockedResolveRecipient.mockRejectedValueOnce(
+      new Error('identity resolve failed: 502'),
+    );
+    const url = await startServer();
+
+    const failed = await deliver(url);
+    const retried = await deliver(url);
+
+    expect(failed.status).toBe(500);
+    expect(deps.resolveAmountSats).toHaveBeenCalledTimes(1);
+    expect(retried.status).toBe(200);
     expect(mockedPayInvoice).toHaveBeenCalledTimes(1);
   });
 });

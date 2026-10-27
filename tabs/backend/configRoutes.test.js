@@ -245,3 +245,122 @@ test('an invalid persona is rejected before it reaches the store', async () => {
   const read = await get('/api/bot-persona', `Bearer ${USER_TOKEN}`);
   assert.equal(read.body.botPersona, '');
 });
+
+// Reward policy. Each test below starts from a known data.json so the
+// assertions do not depend on whatever an earlier run left behind.
+const OID_A = '11111111-2222-3333-4444-555555555555';
+const resetData = (data = { rewardName: 'sats' }) =>
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data));
+
+test('/api/reward-policy rejects an anonymous read and accepts the bot token', async () => {
+  resetData();
+  assert.equal((await get('/api/reward-policy')).status, 401);
+  const read = await get('/api/reward-policy', 'test-internal-token');
+  assert.equal(read.status, 200);
+  // Nothing configured means nothing to pay: no amounts, no bonus, no budget.
+  assert.deepEqual(read.body, {
+    rewardAmounts: {},
+    rewardPolicy: { version: 1, levels: {}, overrides: {}, budget: null },
+  });
+});
+
+test('saving one reward amount configures only that amount', async () => {
+  resetData();
+  const saved = await post('/api/reward-amounts', `Bearer ${ADMIN_TOKEN}`, {
+    rewardAmounts: { githubPrMergedSats: 1000 },
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.rewardAmounts, { githubPrMergedSats: 1000 });
+
+  const read = await get('/api/reward-policy', 'test-internal-token');
+  assert.deepEqual(read.body.rewardAmounts, { githubPrMergedSats: 1000 });
+});
+
+test('a non-admin cannot write the reward policy', async () => {
+  resetData();
+  const res = await post('/api/reward-policy', `Bearer ${USER_TOKEN}`, {
+    budget: { period: 'week', capSats: 50000, timezone: 'Europe/London' },
+  });
+  assert.equal(res.status, 403);
+});
+
+test('an admin writes levels, an override and a budget, and the bot reads them', async () => {
+  resetData({ rewardName: 'sats', rewardAmounts: { githubPrMergedSats: 1000 } });
+  const policy = {
+    levels: {
+      githubPrMerged: { labelPrefix: 'reward:', bonuses: { L1: 250, L2: 500, L3: 1000 } },
+    },
+    overrides: { [OID_A]: { githubPrMerged: { baseSats: 1500 } } },
+    budget: { period: 'week', capSats: 50000, timezone: 'Europe/London' },
+  };
+  const written = await post('/api/reward-policy', `Bearer ${ADMIN_TOKEN}`, policy);
+  assert.equal(written.status, 200);
+
+  const read = await get('/api/reward-policy', 'test-internal-token');
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body.rewardPolicy, { version: 1, ...policy });
+
+  // A patch replaces only the keys it names.
+  const patched = await post('/api/reward-policy', `Bearer ${ADMIN_TOKEN}`, {
+    budget: null,
+  });
+  assert.equal(patched.status, 200);
+  assert.deepEqual(patched.body.rewardPolicy.levels, policy.levels);
+  assert.equal(patched.body.rewardPolicy.budget, null);
+});
+
+test('a bonus that pushes a base over the per-reward cap is refused and not stored', async () => {
+  resetData({ rewardName: 'sats', rewardAmounts: { githubPrMergedSats: 9500 } });
+  const res = await post('/api/reward-policy', `Bearer ${ADMIN_TOKEN}`, {
+    levels: { githubPrMerged: { labelPrefix: 'reward:', bonuses: { L1: 1000 } } },
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.body.message, /exceeds the per-reward cap of 10000/);
+
+  const read = await get('/api/reward-policy', 'test-internal-token');
+  assert.deepEqual(read.body.rewardPolicy.levels, {});
+});
+
+test('raising a base past the cap with an existing bonus is refused', async () => {
+  resetData({
+    rewardName: 'sats',
+    rewardAmounts: { githubPrMergedSats: 1000 },
+    rewardPolicy: {
+      version: 1,
+      levels: { githubPrMerged: { labelPrefix: 'reward:', bonuses: { L1: 1000 } } },
+      overrides: {},
+      budget: null,
+    },
+  });
+  const res = await post('/api/reward-amounts', `Bearer ${ADMIN_TOKEN}`, {
+    rewardAmounts: { githubPrMergedSats: 9500 },
+  });
+  assert.equal(res.status, 400);
+});
+
+test('an unknown policy key is refused', async () => {
+  resetData();
+  const res = await post('/api/reward-policy', `Bearer ${ADMIN_TOKEN}`, {
+    treasuries: { timesheetLiked: 'poppie' },
+  });
+  assert.equal(res.status, 400);
+});
+
+test('a malformed stored policy is a 500 on read, so the bot pays nothing', async () => {
+  resetData({
+    rewardName: 'sats',
+    rewardPolicy: { version: 1, levels: { githubPrMerged: { labelPrefix: 'x', bonuses: { L1: -5 } } } },
+  });
+  const read = await get('/api/reward-policy', 'test-internal-token');
+  assert.equal(read.status, 500);
+});
+
+test('the people list is admin only and never reached without LNbits config', async () => {
+  const anonymous = await get('/api/identities/people');
+  assert.equal(anonymous.status, 401);
+  const user = await get('/api/identities/people', `Bearer ${USER_TOKEN}`);
+  assert.equal(user.status, 403);
+  const admin = await get('/api/identities/people', `Bearer ${ADMIN_TOKEN}`);
+  assert.equal(admin.status, 503);
+  assert.deepEqual(admin.body, { error: 'people list unavailable' });
+});

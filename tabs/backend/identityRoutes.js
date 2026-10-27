@@ -13,7 +13,11 @@ const {
 const identityStore = require('./identityStore');
 const { requireLnbitsConfig, getLnbitsToken, lnbitsGet } = require('./lnbitsAdmin');
 const { requestTimeoutSignal } = require('./httpTimeout');
-const { findUniqueUserByAadObjectId } = require('./lnbitsUserDirectory');
+const {
+  findUniqueUserByAadObjectId,
+  listPeople,
+} = require('./lnbitsUserDirectory');
+const { requireAdmin } = require('./adminAuth');
 const {
   GithubAppNotConfiguredError,
   portalUrl,
@@ -193,6 +197,22 @@ router.get('/resolve', authMiddleware, async (req, res) => {
     console.error('LNbits identity resolution failed:', error.message);
     const status = error.message.includes('must be set') ? 503 : 502;
     res.status(status).json({ error: error.message });
+  }
+});
+
+// GET /api/identities/people — admin only. Names and Entra object ids of the
+// people with an LNbits user, for the reward-override picker. Never wallets,
+// keys or balances.
+router.get('/people', requireAdmin, async (req, res) => {
+  try {
+    const config = requireLnbitsConfig();
+    const accessToken = await getLnbitsToken(config);
+    const usersBody = await lnbitsGet(`${config.nodeUrl}/users/api/v1/user`, accessToken);
+    res.json({ people: listPeople(usersBody?.data) });
+  } catch (error) {
+    console.error('Listing people failed:', error.message);
+    const status = error.message.includes('must be set') ? 503 : 502;
+    res.status(status).json({ error: 'people list unavailable' });
   }
 });
 

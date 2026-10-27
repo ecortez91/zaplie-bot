@@ -15,6 +15,13 @@ const {
   validateRewardAmountPatch,
 } = require('./rewardAmounts');
 const { validateBotPersona, readStoredBotPersona } = require('./botPersona');
+const { maxRewardSats } = require('./rewardAmounts');
+const {
+  RewardPolicyError,
+  applyRewardPolicyPatch,
+  readRewardPolicy,
+  validateRewardPolicy,
+} = require('./rewardPolicy');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -133,8 +140,10 @@ app.post('/api/reward-amounts', requireAdmin, (req, res) => {
     });
     return;
   }
+  // Only what an admin saved is stored: merging the defaults here would turn
+  // one saved amount into three configured ones, and an unconfigured event
+  // must pay nothing (the bot fails closed on it).
   const nextRewardAmounts = {
-    ...defaultRewardAmounts,
     ...storedRewardAmounts,
     ...rewardAmounts,
   };
@@ -146,6 +155,22 @@ app.post('/api/reward-amounts', requireAdmin, (req, res) => {
     return;
   }
 
+  // A new base must still leave room for the largest level bonus and every
+  // per-person override under REWARDS_MAX_AMOUNT_SATS.
+  let currentPolicy;
+  try {
+    currentPolicy = readRewardPolicy(data).rewardPolicy;
+  } catch (error) {
+    res.status(500).send({ message: `Stored reward policy is invalid: ${error.message}` });
+    return;
+  }
+  try {
+    validateRewardPolicy(currentPolicy, nextRewardAmounts, maxRewardSats());
+  } catch (error) {
+    res.status(400).send({ message: error.message });
+    return;
+  }
+
   data.rewardAmounts = nextRewardAmounts;
   if (!writeData(data)) {
     res.status(500).send({ message: 'Reward amounts could not be persisted' });
@@ -154,6 +179,44 @@ app.post('/api/reward-amounts', requireAdmin, (req, res) => {
   res.send({
     message: 'Reward amounts updated successfully',
     rewardAmounts: data.rewardAmounts,
+  });
+});
+
+// The reward policy: level bonuses, per-person base overrides and the period
+// budget. Each supplied top-level key replaces the stored one; anything else
+// in the body is refused.
+app.post('/api/reward-policy', requireAdmin, (req, res) => {
+  const data = readData();
+  let current;
+  let cap;
+  try {
+    cap = maxRewardSats();
+    current = readRewardPolicy(data);
+  } catch (error) {
+    res.status(500).send({ message: `Stored reward policy is invalid: ${error.message}` });
+    return;
+  }
+
+  let nextPolicy;
+  try {
+    nextPolicy = applyRewardPolicyPatch(current, req.body, cap);
+  } catch (error) {
+    if (error instanceof RewardPolicyError) {
+      res.status(400).send({ message: error.message });
+      return;
+    }
+    throw error;
+  }
+
+  data.rewardPolicy = nextPolicy;
+  if (!writeData(data)) {
+    res.status(500).send({ message: 'Reward policy could not be persisted' });
+    return;
+  }
+  res.send({
+    message: 'Reward policy updated successfully',
+    rewardAmounts: current.rewardAmounts,
+    rewardPolicy: nextPolicy,
   });
 });
 
@@ -236,6 +299,20 @@ app.get('/api/reward-amounts', requireSignedInOrBot, (req, res) => {
   } catch (error) {
     res.status(500).send({
       message: `Stored reward amounts are invalid: ${error.message}`,
+    });
+  }
+});
+
+// What the bot pays from, in one response: the amounts an admin saved (no
+// defaults merged, so an unconfigured event is absent) and the validated
+// policy. A malformed store is a 500, and the bot then refuses to pay.
+app.get('/api/reward-policy', requireSignedInOrBot, (req, res) => {
+  const data = readData();
+  try {
+    res.send(readRewardPolicy(data));
+  } catch (error) {
+    res.status(500).send({
+      message: `Stored reward policy is invalid: ${error.message}`,
     });
   }
 });
