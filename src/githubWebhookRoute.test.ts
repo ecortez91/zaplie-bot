@@ -19,12 +19,13 @@ import {
 } from './githubWebhookRoute';
 import { createRewardsRouter, RewardsRouteDeps } from './rewardsRoute';
 import { RewardLedger, rewardKey } from './services/rewardLedger';
+import { RewardBudgetLedger } from './services/rewardBudget';
 import {
   RewardAmount,
   RewardError,
   resolveAmountSats,
 } from './services/rewardsService';
-import { getRewardConfig } from './services/fetchRewardPolicy';
+import { getRewardConfig, RewardBudget } from './services/fetchRewardPolicy';
 import {
   createInvoice,
   getUserWalletsByUserId,
@@ -89,10 +90,12 @@ const tempDirectories: string[] = [];
 const servers: http.Server[] = [];
 let storePath: string;
 let ledger: RewardLedger;
+let budgetLedger: RewardBudgetLedger;
 let deps: {
   assertRepoConnected: jest.Mock<(repo: string) => Promise<void>>;
   resolveAmountSats: jest.Mock<() => Promise<RewardAmount>>;
   recordRewardOutcome: jest.Mock<(outcome: unknown) => void>;
+  getRewardBudget: jest.Mock<() => Promise<RewardBudget>>;
 };
 let secret: string | undefined;
 const savedTreasuryKey = process.env.REWARDS_TREASURY_ADMINKEY;
@@ -106,6 +109,7 @@ const startServer = async (
   app.use(
     createGithubWebhookRouter({
       ledger,
+      budgetLedger,
       webhookSecret: () => secret,
       now: () => NOW,
       ...(deps as unknown as Partial<GithubWebhookRouteDeps>),
@@ -171,11 +175,22 @@ beforeEach(() => {
   tempDirectories.push(directory);
   storePath = path.join(directory, 'bot-reward-ledger.json');
   ledger = new RewardLedger({ storePath, lockRetryMs: 1 });
+  budgetLedger = new RewardBudgetLedger({
+    storePath: path.join(directory, 'bot-reward-budget.json'),
+    lockRetryMs: 1,
+  });
   secret = SECRET;
   deps = {
     assertRepoConnected: jest.fn(async () => undefined),
     resolveAmountSats: jest.fn(async () => AMOUNT_21),
     recordRewardOutcome: jest.fn(),
+    // A budget far above anything these tests pay; the budget suite tests
+    // the cap itself.
+    getRewardBudget: jest.fn(async () => ({
+      period: 'week' as const,
+      capSats: 1_000_000,
+      timezone: 'Europe/London',
+    })),
   };
   process.env.REWARDS_TREASURY_ADMINKEY = 'treasury-admin-key';
   mockedResolveRecipient.mockResolvedValue({
@@ -398,6 +413,7 @@ describe('POST /api/v1/github/webhook: events', () => {
     app.use(
       createGithubWebhookRouter({
         ledger,
+        budgetLedger,
         webhookSecret: () => secret,
         now: () => NOW,
         ...(deps as unknown as Partial<GithubWebhookRouteDeps>),
@@ -407,6 +423,7 @@ describe('POST /api/v1/github/webhook: events', () => {
     app.use(
       createRewardsRouter({
         ledger,
+        budgetLedger,
         isAuthorizedRewardKey: async key => key === 'automation-key',
         ...(deps as unknown as Partial<RewardsRouteDeps>),
       }),
