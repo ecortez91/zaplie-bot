@@ -261,15 +261,20 @@ written and again when it is read.
 
 The period budget (`src/services/rewardBudget.ts`, `bot-reward-budget.json`)
 is an ISO week or calendar month in the configured time zone
-(`src/services/rewardPeriod.ts`). The amount is reserved under the reward's
-ledger key before paying, so a replay never counts twice; over the cap is a
-402 with nothing paid. The treasury wallet is funded with one period at most,
-so LNbits refusing the payment is a second, independent limit.
+(`src/services/rewardPeriod.ts`). The period is the one the bot is in when it
+processes the delivery, not the merge time: a merge late on Sunday that GitHub
+delivers, or someone redelivers, on Monday counts against Monday's week. The
+amount is reserved under the reward's ledger key before paying, so a replay
+never counts twice; over the cap is a 402 with nothing paid. The treasury
+wallet is funded with one period at most, so LNbits refusing the payment is a
+second, independent limit.
 
 The webhook keys idempotency on the signed pull request id rather than
 `X-GitHub-Delivery`, which the signature does not cover. The Logic App
 template (`docs/automation/github-rewards-logicapp.json`) is legacy: its
-trigger verifies nothing.
+trigger verifies nothing. It sends the same key,
+`github:pull_request:<pull_request.id>:merged`, so the two paths share one
+ledger entry per merge and can never both pay for it.
 
 === Reward Idempotency Ledger
 
@@ -277,7 +282,8 @@ trigger verifies nothing.
 that may deliver the same event more than once. Every request must carry an
 `Idempotency-Key` header (1 to 256 printable ASCII characters). The signed
 GitHub webhook uses `github:pull_request:<id>:merged` from the signed body
-instead, so a GitHub redelivery replays. The key is
+instead, so a GitHub redelivery replays; the legacy Logic App sends that same
+key, so a merge either path has paid replays on the other. The key is
 required rather than derived from the body because two genuine rewards can
 have identical bodies, and only the caller knows which deliveries are the
 same.

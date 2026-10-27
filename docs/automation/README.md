@@ -92,8 +92,10 @@ GitHub sends a `ping` first; the bot answers 204. Try it on a test repository
 with a small amount before connecting the real ones.
 
 If the repository still has a webhook to the legacy Logic App, **remove it in
-the same change**. The two paths use different idempotency keys, so with both
-in place one merge would be paid twice.
+the same change**. Both paths send the same idempotency key
+(`github:pull_request:<id>:merged`), so a merge one path has paid replays on
+the other and is never paid twice; but the Logic App's trigger verifies
+nothing, so it must not stay in front of a funded treasury.
 
 ## 4. How the amount is decided
 
@@ -108,7 +110,9 @@ For a merged pull request by a linked teammate:
 3. **Cap**: base plus bonus must be at most `REWARDS_MAX_AMOUNT_SATS`, or
    nothing is paid.
 4. **Budget**: the amount is reserved in the current period (ISO week, Monday
-   to Sunday, or calendar month, in the configured time zone). If it would
+   to Sunday, or calendar month, in the configured time zone). The period is
+   taken when the bot processes the delivery, not from the merge time, so a
+   late or redelivered merge counts in the period it arrives in. If it would
    take the period over the cap the answer is 402 and nothing is paid.
 
 An unlinked author gets the org base plus the bonus, held as pending. Pending
@@ -147,8 +151,9 @@ The webhook's idempotency key is the pull request's own id, from the signed
 body (`github:pull_request:<id>:merged`). It is deliberately not
 `X-GitHub-Delivery`: that header is not covered by the signature, so a
 captured request resent under a new delivery id must still replay rather than
-pay. A merge older than 30 days is refused so a replay can never outlive the
-reward ledger's 90-day record.
+pay. The legacy Logic App template sends the same key, so the two paths share
+one ledger entry per merge. A merge older than 30 days is refused so a replay
+can never outlive the reward ledger's 90-day record.
 
 The bot records each key in `bot-reward-ledger.json`, and each budget
 reservation in `bot-reward-budget.json`, both under `ZAPLIE_DATA_DIR` (see

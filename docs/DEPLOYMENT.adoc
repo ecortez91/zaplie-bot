@@ -271,9 +271,10 @@ it cannot validate rather than guessing.
 
 `bot-reward-budget.json` holds, per budget period (`week:2026-W44` or
 `month:2026-10`), one reservation in sats per reward key, using the same digest
-as the reward ledger. The bot reserves the amount before paying and refuses a
-reward that would take the period over the cap (`402`, nothing paid). Paid,
-pending and uncertain rewards keep their reservation; only a failure known to
+as the reward ledger. The period is the one current when the bot processes the
+delivery, not the merge time. The bot reserves the amount before paying and
+refuses a reward that would take the period over the cap (`402`, nothing
+paid). Paid, pending and uncertain rewards keep their reservation; only a failure known to
 be before the payment releases it. A reservation that could not be released is
 logged (`reward budget could not release an unpaid reward`) and over-counts
 the period: it never over-pays. Periods older than about 13 months are pruned.
