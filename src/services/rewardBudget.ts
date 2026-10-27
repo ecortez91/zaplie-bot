@@ -292,6 +292,7 @@ const envValue = (name: string): string | undefined => {
 /**
  * The budget in force: each `REWARDS_BUDGET_*` variable that is set wins over
  * the portal's value for that field. All three must end up set.
+ * tabs/backend/rewardBudget.js repeats this for the stats panel: change both.
  *
  * @throws RewardError 503 when no complete budget is configured anywhere
  * @throws Error when an environment value is malformed (a config error)
