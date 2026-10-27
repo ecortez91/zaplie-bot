@@ -275,6 +275,25 @@ test('saving one reward amount configures only that amount', async () => {
 
   const read = await get('/api/reward-policy', 'test-internal-token');
   assert.deepEqual(read.body.rewardAmounts, { githubPrMergedSats: 1000 });
+
+  // The portal's read agrees with the bot's: no defaults fill the other rules.
+  const amounts = await get('/api/reward-amounts', 'test-internal-token');
+  assert.equal(amounts.status, 200);
+  assert.deepEqual(amounts.body, { rewardAmounts: { githubPrMergedSats: 1000 } });
+});
+
+test('reward-amounts with nothing saved is empty, not the defaults', async () => {
+  resetData();
+  const read = await get('/api/reward-amounts', 'test-internal-token');
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body, { rewardAmounts: {} });
+});
+
+test('a malformed stored reward amount is a 500 on read', async () => {
+  resetData({ rewardName: 'sats', rewardAmounts: { githubPrMergedSats: -5 } });
+  const read = await get('/api/reward-amounts', 'test-internal-token');
+  assert.equal(read.status, 500);
+  assert.match(read.body.message, /Stored reward amounts are invalid/);
 });
 
 test('a non-admin cannot write the reward policy', async () => {

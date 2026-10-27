@@ -88,8 +88,9 @@ export const createRewardsRouter = (deps: RewardsRouteDeps): Router => {
     }
 
     // Required rather than derived from the body: only the caller knows what
-    // makes two deliveries the same (GitHub's X-GitHub-Delivery), and two
-    // genuine identical rewards must still both pay.
+    // makes two deliveries the same (for a merged PR,
+    // `github:pull_request:<pull_request.id>:merged`, the key the signed
+    // webhook uses too), and two genuine identical rewards must still both pay.
     const idempotencyKey = req.header('idempotency-key');
     if (!idempotencyKey) {
       res.status(400).json({ error: 'Idempotency-Key header is required' });

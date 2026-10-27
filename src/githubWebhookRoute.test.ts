@@ -17,6 +17,7 @@ import {
   createGithubWebhookRouter,
   GithubWebhookRouteDeps,
 } from './githubWebhookRoute';
+import { createRewardsRouter, RewardsRouteDeps } from './rewardsRoute';
 import { RewardLedger, rewardKey } from './services/rewardLedger';
 import { RewardBudgetLedger } from './services/rewardBudget';
 import {
@@ -401,6 +402,64 @@ describe('POST /api/v1/github/webhook: events', () => {
 
     expect(replayed.status).toBe(200);
     expect(replayed.replayed).toBe('true');
+    expect(mockedPayInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  test('the legacy Logic App posting the same merge replays and pays once', async () => {
+    // Both paths share one ledger and one key per merged PR
+    // (docs/automation/github-rewards-logicapp.json), so a merge paid by the
+    // webhook is never paid again by the Logic App, or the other way round.
+    const app = express();
+    app.use(
+      createGithubWebhookRouter({
+        ledger,
+        budgetLedger,
+        webhookSecret: () => secret,
+        now: () => NOW,
+        ...(deps as unknown as Partial<GithubWebhookRouteDeps>),
+      }),
+    );
+    app.use(express.json());
+    app.use(
+      createRewardsRouter({
+        ledger,
+        budgetLedger,
+        isAuthorizedRewardKey: async key => key === 'automation-key',
+        ...(deps as unknown as Partial<RewardsRouteDeps>),
+      }),
+    );
+    const server = await new Promise<http.Server>(resolve => {
+      const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+    });
+    servers.push(server);
+    const { port } = server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    const paid = await deliver(`${base}/api/v1/github/webhook`);
+    expect(paid.status).toBe(200);
+
+    // The body and key the Logic App template builds from the same event.
+    const pullRequest = mergedEvent.pull_request;
+    const legacy = await fetch(`${base}/api/v1/rewards`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': 'automation-key',
+        'idempotency-key': `github:pull_request:${pullRequest.id}:merged`,
+      },
+      body: JSON.stringify({
+        recipient: pullRequest.user.login,
+        recipientId: pullRequest.user.id,
+        eventType: 'githubPrMerged',
+        repo: mergedEvent.repository.full_name,
+        reason: `GitHub: PR #${mergedEvent.number} merged - ${pullRequest.title}`,
+        source: 'github',
+      }),
+    });
+
+    expect(legacy.status).toBe(200);
+    expect(legacy.headers.get('idempotency-replayed')).toBe('true');
+    expect(await legacy.text()).toBe(paid.text);
     expect(mockedPayInvoice).toHaveBeenCalledTimes(1);
   });
 
