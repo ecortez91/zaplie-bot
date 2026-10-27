@@ -1,3 +1,5 @@
+const { rewardPeriodKey } = require('./rewardPeriod');
+
 const parseObject = (value) => {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     return value;
@@ -155,4 +157,43 @@ const summarizeAutomationPayments = (payments, rawUsers, sinceTs) => {
   };
 };
 
-module.exports = { paymentEpoch, summarizeAutomationPayments };
+/**
+ * What the treasury has paid in automated rewards in the current budget
+ * period, for the portal's read-only "spent this period". The bot's budget
+ * ledger enforces the cap; this is the LNbits view of it (paid only, so a
+ * pending or uncertain reward the bot has reserved is not counted here).
+ *
+ * @returns null when no budget is configured
+ */
+const summarizeBudgetSpend = (payments, budget, nowMs) => {
+  if (!budget) {
+    return null;
+  }
+  if (!Array.isArray(payments)) {
+    throw new Error('treasury payments response is not an array');
+  }
+  const current = rewardPeriodKey(nowMs, budget.period, budget.timezone);
+  let spentMsat = 0;
+  for (const payment of payments) {
+    const extra = parseObject(payment?.extra);
+    const epoch = paymentEpoch(payment?.time);
+    if (
+      typeof payment?.amount === 'number' &&
+      Number.isFinite(payment.amount) &&
+      payment.amount < 0 &&
+      extra.automation === true &&
+      epoch !== null &&
+      rewardPeriodKey(epoch * 1000, budget.period, budget.timezone) === current
+    ) {
+      spentMsat += Math.abs(payment.amount);
+    }
+  }
+  return {
+    period: budget.period,
+    periodKey: current,
+    capSats: budget.capSats,
+    spentSats: Math.round(spentMsat / 1000),
+  };
+};
+
+module.exports = { paymentEpoch, summarizeAutomationPayments, summarizeBudgetSpend };

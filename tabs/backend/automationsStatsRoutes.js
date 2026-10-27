@@ -9,11 +9,32 @@ const {
   getLnbitsToken,
   lnbitsGet,
 } = require('./lnbitsAdmin');
-const { summarizeAutomationPayments } = require('./automationPayments');
+const fs = require('fs');
+const {
+  summarizeAutomationPayments,
+  summarizeBudgetSpend,
+} = require('./automationPayments');
+const { dataPath } = require('./dataPaths');
+const { readEffectiveBudget } = require('./rewardBudget');
 
 const router = express.Router();
 
 const TREASURY_USERNAME = process.env.TREASURY_USERNAME || 'automation';
+
+// The budget the bot enforces, for "spent this period": the REWARDS_BUDGET_*
+// overrides first, then the portal's budget, as the bot resolves it. A
+// malformed environment or store shows no budget rather than failing the
+// whole stats panel; the bot fails closed on the same config independently.
+const readBudget = () => {
+  try {
+    return readEffectiveBudget(() =>
+      JSON.parse(fs.readFileSync(dataPath('data.json'), 'utf8')),
+    );
+  } catch (error) {
+    console.warn('Reward budget unavailable for stats:', error.message);
+    return null;
+  }
+};
 
 router.get('/', async (req, res) => {
   const token = extractBearerToken(req);
@@ -64,9 +85,11 @@ router.get('/', async (req, res) => {
           return response.json();
         }),
     );
-    res.json(
-      summarizeAutomationPayments(paymentLists.flat(), usersBody.data, sinceTs),
-    );
+    const payments = paymentLists.flat();
+    res.json({
+      ...summarizeAutomationPayments(payments, usersBody.data, sinceTs),
+      spentThisPeriod: summarizeBudgetSpend(payments, readBudget(), Date.now()),
+    });
   } catch (error) {
     console.error('Automations stats failed:', error.message);
     res.status(502).json({ error: error.message });

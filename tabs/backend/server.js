@@ -224,6 +224,7 @@ app.post('/api/reward-policy', requireAdmin, (req, res) => {
     message: 'Reward policy updated successfully',
     rewardAmounts: current.rewardAmounts,
     rewardPolicy: nextPolicy,
+    maxAmountSats: cap,
   });
 });
 
@@ -319,7 +320,9 @@ app.get('/api/reward-amounts', requireSignedInOrBot, (req, res) => {
 app.get('/api/reward-policy', requireSignedInOrBot, (req, res) => {
   const data = readData();
   try {
-    res.send(readRewardPolicy(data));
+    // maxAmountSats lets the editor stop an over-cap value before the server
+    // refuses it; the bot ignores it and applies its own cap.
+    res.send({ ...readRewardPolicy(data), maxAmountSats: maxRewardSats() });
   } catch (error) {
     res.status(500).send({
       message: `Stored reward policy is invalid: ${error.message}`,

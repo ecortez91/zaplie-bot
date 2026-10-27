@@ -53,12 +53,27 @@ jest.mock('../services/setupService', () => ({
     mockStartGithubAppCreation(idToken, organization),
 }));
 
+const mockGetRewardPolicy = jest.fn<Promise<unknown>, [string]>();
+const mockUpdateRewardAmounts = jest.fn<
+  Promise<{ rewardAmounts: Record<string, number> }>,
+  [string, Record<string, number>]
+>();
+
 jest.mock('../apiService', () => ({
   getAutomations: () => Promise.resolve({ repos: [] }),
   updateAutomations: () => Promise.resolve({ repos: [] }),
-  getRewardAmounts: () => Promise.resolve({ rewardAmounts: {} }),
-  updateRewardAmounts: () => Promise.resolve({ rewardAmounts: {} }),
+  getRewardPolicy: (idToken: string) => mockGetRewardPolicy(idToken),
+  updateRewardPolicy: () => Promise.reject(new Error('not used')),
+  getPeople: () => Promise.resolve([]),
+  updateRewardAmounts: (idToken: string, amounts: Record<string, number>) =>
+    mockUpdateRewardAmounts(idToken, amounts),
 }));
+
+const unconfiguredPolicy = {
+  rewardAmounts: {},
+  maxAmountSats: 10000,
+  rewardPolicy: { version: 1, levels: {}, overrides: {}, budget: null },
+};
 
 jest.mock('../services/connectionsService', () => ({
   getGithubConnection: (idToken: string) => mockGetGithubConnection(idToken),
@@ -138,6 +153,10 @@ beforeEach(() => {
   mockGetGithubSetupStatus.mockResolvedValue(createdStatus);
   mockGetGithubConnection.mockResolvedValue({ connected: true });
   mockGetWebhookKeys.mockResolvedValue([webhookKey]);
+  mockGetRewardPolicy.mockResolvedValue(unconfiguredPolicy);
+  mockUpdateRewardAmounts.mockResolvedValue({
+    rewardAmounts: { githubPrMergedSats: 21 },
+  });
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -166,7 +185,7 @@ describe('AutomationsComponent panel independence', () => {
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
-  test('the Logic Apps pilot card names every remaining production blocker', async () => {
+  test('the API keys card says GitHub uses the signed webhook and names what is still manual', async () => {
     mockGetAutomationsStats.mockResolvedValue(emptyStats);
 
     await renderAutomations();
@@ -175,13 +194,102 @@ describe('AutomationsComponent panel independence', () => {
       '[data-testid="logic-apps-pilot-card"]',
     );
     expect(card).not.toBeNull();
-    expect(card?.textContent).toContain('Draft — not production ready');
+    expect(card?.textContent).toContain('Reward API keys');
+    expect(card?.textContent).toContain('signed webhook');
+    expect(card?.textContent).toContain('The Logic App template is legacy.');
     expect(card?.textContent).toContain(
-      'remains blocked until aggregate budget controls, automatic ' +
-        'reconciliation of uncertain payment outcomes and GitHub webhook ' +
-        'signature verification land.',
+      'Uncertain payment outcomes are still reconciled by an operator.',
     );
-    expect(card?.textContent).not.toContain('durable idempotency');
+    expect(card?.textContent).not.toContain('Draft — not production ready');
+  });
+
+  test('a rule with no saved amount says it pays nothing', async () => {
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+
+    await renderAutomations();
+
+    expect(container.textContent).toContain(
+      'Not set: pays nothing unless a person has an override',
+    );
+    expect(container.textContent).toContain('Set amount');
+  });
+
+  test('saving one amount sends only that rule', async () => {
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+    await renderAutomations();
+
+    const setButton = Array.from(container.querySelectorAll('button')).find(
+      button => button.textContent === 'Set amount',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      setButton.click();
+    });
+    const input = container.querySelector(
+      'input[type="number"]',
+    ) as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      setter?.call(input, '21');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const save = Array.from(container.querySelectorAll('button')).find(
+      button => button.textContent === 'Save',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      save.click();
+    });
+
+    expect(mockUpdateRewardAmounts).toHaveBeenCalledWith('id-token', {
+      githubPrMergedSats: 21,
+    });
+  });
+
+  test('an amount above the per-reward cap is refused before it is sent', async () => {
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+    await renderAutomations();
+
+    const setButton = Array.from(container.querySelectorAll('button')).find(
+      button => button.textContent === 'Set amount',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      setButton.click();
+    });
+    const input = container.querySelector(
+      'input[type="number"]',
+    ) as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      setter?.call(input, '10001');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const save = Array.from(container.querySelectorAll('button')).find(
+      button => button.textContent === 'Save',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      save.click();
+    });
+
+    expect(mockUpdateRewardAmounts).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith(
+      'Reward amount cannot exceed the per-reward cap of 10,000 sats.',
+    );
+  });
+
+  test('renders the reward policy panel with the budget unset', async () => {
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+
+    await renderAutomations();
+
+    expect(container.textContent).toContain('Reward policy');
+    expect(container.textContent).toContain(
+      'Nothing pays until a budget is set.',
+    );
   });
 
   test('a rule with no saved amount is listed as not set, so an admin can set it', async () => {

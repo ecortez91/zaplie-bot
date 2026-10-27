@@ -1,11 +1,16 @@
 import axios from 'axios';
 import {
   getAutomations,
+  getPeople,
   getRewardAmounts,
   getRewardName,
+  getRewardPolicy,
+  parsePeopleResponse,
+  parseRewardPolicyResponse,
   updateAutomations,
   updateRewardAmounts,
   updateRewardName,
+  updateRewardPolicy,
 } from './apiService';
 
 jest.mock('axios');
@@ -126,6 +131,99 @@ describe('automations API', () => {
 
     await expect(getAutomations('id-token')).rejects.toThrow(
       'The automations response was invalid.',
+    );
+  });
+});
+
+describe('reward policy API', () => {
+  const OID = '11111111-2222-3333-4444-555555555555';
+  const valid = {
+    rewardAmounts: { githubPrMergedSats: 1000 },
+    maxAmountSats: 10000,
+    rewardPolicy: {
+      version: 1,
+      levels: {
+        githubPrMerged: { labelPrefix: 'reward:', bonuses: { L1: 250 } },
+      },
+      overrides: { [OID]: { githubPrMerged: { baseSats: 1500 } } },
+      budget: { period: 'week', capSats: 50000, timezone: 'Europe/London' },
+    },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('reads and writes a validated policy', async () => {
+    mockGet.mockResolvedValue({ data: valid });
+    mockPost.mockResolvedValue({ data: { message: 'ok', ...valid } });
+
+    await expect(getRewardPolicy('id-token')).resolves.toEqual(valid);
+    await expect(
+      updateRewardPolicy('id-token', {
+        budget: { period: 'week', capSats: 50000, timezone: 'Europe/London' },
+      }),
+    ).resolves.toEqual(valid);
+    expect(mockPost).toHaveBeenCalledWith(
+      '/api/reward-policy',
+      {
+        budget: { period: 'week', capSats: 50000, timezone: 'Europe/London' },
+      },
+      { headers: { Authorization: 'Bearer id-token' } },
+    );
+  });
+
+  test('accepts an unconfigured policy', () => {
+    const empty = {
+      rewardAmounts: {},
+      maxAmountSats: 10000,
+      rewardPolicy: { version: 1, levels: {}, overrides: {}, budget: null },
+    };
+    expect(parseRewardPolicyResponse(empty)).toEqual(empty);
+  });
+
+  const withPolicy = (change: Record<string, unknown>) => ({
+    ...valid,
+    rewardPolicy: { ...valid.rewardPolicy, ...change },
+  });
+
+  test.each([
+    ['no body', undefined],
+    ['a string amount', { ...valid, rewardAmounts: { a: '5' } }],
+    ['a zero amount', { ...valid, rewardAmounts: { a: 0 } }],
+    ['no cap', { ...valid, maxAmountSats: undefined }],
+    [
+      'a fractional bonus',
+      withPolicy({
+        levels: { githubPrMerged: { labelPrefix: 'r:', bonuses: { L1: 1.5 } } },
+      }),
+    ],
+    [
+      'a bad budget period',
+      withPolicy({ budget: { period: 'day', capSats: 5, timezone: 'UTC' } }),
+    ],
+    [
+      'a negative override',
+      withPolicy({
+        overrides: { [OID]: { githubPrMerged: { baseSats: -1 } } },
+      }),
+    ],
+  ])('rejects %s', (_label, data) => {
+    expect(() => parseRewardPolicyResponse(data)).toThrow(
+      'The reward policy response was invalid.',
+    );
+  });
+
+  test('reads the people list and refuses a malformed one', async () => {
+    mockGet.mockResolvedValue({
+      data: { people: [{ personAad: OID, displayName: 'Ada' }] },
+    });
+
+    await expect(getPeople('id-token')).resolves.toEqual([
+      { personAad: OID, displayName: 'Ada' },
+    ]);
+    expect(() => parsePeopleResponse({ people: [{ personAad: 1 }] })).toThrow(
+      'The people response was invalid.',
     );
   });
 });

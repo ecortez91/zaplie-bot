@@ -1,12 +1,23 @@
-import React, { FunctionComponent, useEffect, useRef, useState } from 'react';
+import React, {
+  FunctionComponent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useMsal } from '@azure/msal-react';
 import styles from './AutomationsComponent.module.css';
 import {
   getAutomations,
   updateAutomations,
-  getRewardAmounts,
+  getPeople,
+  getRewardPolicy,
   updateRewardAmounts,
+  updateRewardPolicy,
+  RewardPolicyPatch,
+  RewardPolicyResponse,
 } from '../apiService';
+import RewardPolicyPanel from './RewardPolicyPanel';
 import { loginRequest } from '../services/authConfig';
 import { acquireIdToken, isZaplieAdmin } from '../services/adminRole';
 import {
@@ -39,7 +50,17 @@ import 'react-toastify/dist/ReactToastify.css';
 
 const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-// Per-event rule metadata for the list; the amounts themselves come from /api/reward-amounts
+// The server's own reason for refusing a write (for example "exceeds the
+// per-reward cap"), which tells an admin what to change.
+const serverMessage = (err: unknown, fallback: string): string => {
+  const data = (err as { response?: { data?: { message?: unknown } } })
+    ?.response?.data;
+  return typeof data?.message === 'string' && data.message
+    ? data.message
+    : fallback;
+};
+
+// Per-event rule metadata for the list; the amounts themselves come from /api/reward-policy
 // and the run counts from /api/automations-stats. Nothing here is a metric.
 const RULE_META: Record<
   string,
@@ -57,7 +78,7 @@ const RULE_META: Record<
     eventType: 'githubPrMerged',
     title: 'For every pull request merged in a connected repository',
     icon: GithubIcon,
-    status: 'Draft flow',
+    status: 'Signed webhook',
   },
   githubIssueClosedSats: {
     audience: 'teammates',
@@ -143,7 +164,11 @@ const EngagementPanel: FunctionComponent<{
 const AutomationsComponent: FunctionComponent = () => {
   const { instance, accounts } = useMsal();
   const [repos, setRepos] = useState<string[]>([]);
+  // Only the amounts an admin saved: a rule missing here pays nothing.
   const [amounts, setAmounts] = useState<Record<string, number>>({});
+  const [policyConfig, setPolicyConfig] = useState<RewardPolicyResponse | null>(
+    null,
+  );
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [newRepo, setNewRepo] = useState('');
@@ -186,6 +211,7 @@ const AutomationsComponent: FunctionComponent = () => {
     accountIdRef.current = accountId;
     setRepos([]);
     setAmounts({});
+    setPolicyConfig(null);
     setAppInstalled(false);
     setGithubAppReady(null);
     setStats(null);
@@ -222,15 +248,16 @@ const AutomationsComponent: FunctionComponent = () => {
           throw new Error('You need to be signed in to view automations.');
         }
         const idToken = await acquireIdToken(instance, account);
-        const [automations, rewardAmounts] = await Promise.all([
+        const [automations, rewardPolicy] = await Promise.all([
           getAutomations(idToken),
-          getRewardAmounts(idToken),
+          getRewardPolicy(idToken),
         ]);
         if (cancelled) {
           return;
         }
         setRepos(automations.repos || []);
-        setAmounts(rewardAmounts.rewardAmounts || {});
+        setAmounts(rewardPolicy.rewardAmounts);
+        setPolicyConfig(rewardPolicy);
       } catch (err) {
         if (cancelled) {
           return;
@@ -372,7 +399,7 @@ const AutomationsComponent: FunctionComponent = () => {
   const handleCreateKey = async () => {
     const label = newKeyLabel.trim();
     if (!label) {
-      toast.error('Give the key a label, like "GitHub Logic App".');
+      toast.error('Give the key a label, like "Smoke test".');
       return;
     }
     const startedAs = accountId;
@@ -510,31 +537,65 @@ const AutomationsComponent: FunctionComponent = () => {
   };
 
   const handleSaveAmount = async (key: string) => {
-    const nextAmount = Number(editingValue);
-    if (!Number.isInteger(nextAmount) || nextAmount <= 0) {
+    const trimmed = editingValue.trim();
+    const nextAmount = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+    if (!Number.isSafeInteger(nextAmount) || nextAmount <= 0) {
       toast.error('Reward amount must be a positive whole number of sats.');
+      return;
+    }
+    if (policyConfig && nextAmount > policyConfig.maxAmountSats) {
+      toast.error(
+        `Reward amount cannot exceed the per-reward cap of ${NUMBER_FORMATTER.format(policyConfig.maxAmountSats)} sats.`,
+      );
       return;
     }
     const startedAs = accountId;
     try {
       const idToken = await acquireIdToken(instance, accounts[0]);
-      // `amounts` only changes on a successful save, so another card's unsaved edit can't bleed in here.
-      const data = await updateRewardAmounts(idToken, {
-        ...amounts,
-        [key]: nextAmount,
-      });
+      // Only the rule being edited: the server keeps the others as stored, and
+      // a rule nobody saved stays unset (it pays nothing).
+      const data = await updateRewardAmounts(idToken, { [key]: nextAmount });
       if (!stillSameAccount(startedAs)) {
         return;
       }
       setAmounts(data.rewardAmounts);
+      setPolicyConfig(current =>
+        current ? { ...current, rewardAmounts: data.rewardAmounts } : current,
+      );
       setEditingKey(null);
       toast.success('Reward amount updated.');
     } catch (err) {
       if (stillSameAccount(startedAs)) {
-        toast.error('Could not update the reward amount.');
+        toast.error(serverMessage(err, 'Could not update the reward amount.'));
       }
     }
   };
+
+  const handleSavePolicy = async (patch: RewardPolicyPatch): Promise<void> => {
+    const startedAs = accountId;
+    let data: RewardPolicyResponse;
+    try {
+      const idToken = await acquireIdToken(instance, accounts[0]);
+      data = await updateRewardPolicy(idToken, patch);
+    } catch (err) {
+      throw new Error(serverMessage(err, 'Could not save the reward policy.'));
+    }
+    if (!stillSameAccount(startedAs)) {
+      return;
+    }
+    setPolicyConfig(data);
+    setAmounts(data.rewardAmounts);
+    toast.success('Reward policy saved.');
+  };
+
+  const loadPeople = useCallback(async () => {
+    const account = accounts[0];
+    if (!account) {
+      return [];
+    }
+    return getPeople(await acquireIdToken(instance, account));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId, instance]);
 
   if (loading) {
     return (
@@ -566,9 +627,10 @@ const AutomationsComponent: FunctionComponent = () => {
           <span className={styles.eyebrow}>Workflow control centre</span>
           <h2 className={styles.title}>Automations</h2>
           <p className={styles.bannerSubtitle}>
-            Preview the GitHub rewards pilot, configure its rules and inspect
-            recorded treasury activity. Keep its treasury unfunded until the
-            safety blockers are closed.
+            Configure GitHub rewards, their budget and per-person amounts, and
+            inspect recorded treasury activity. Nothing pays until an admin sets
+            an amount and a budget. Fund the treasury with one budget period at
+            most.
           </p>
           <nav className={styles.sectionNav} aria-label="Automations sections">
             <a href="#automation-engagement">Recipients</a>
@@ -698,13 +760,13 @@ const AutomationsComponent: FunctionComponent = () => {
         <div className={styles.step}>
           <span className={styles.stepNum}>1</span>
           <span className={styles.stepText}>
-            Connect GitHub and deploy the pull-request sample flow.
+            Connect GitHub and add the signed webhook to each repository.
           </span>
         </div>
         <div className={styles.step}>
           <span className={styles.stepNum}>2</span>
           <span className={styles.stepText}>
-            Set the reward amount for each event.
+            Set the reward amount, the budget and any level bonuses.
           </span>
         </div>
         <div className={styles.step}>
@@ -737,9 +799,9 @@ const AutomationsComponent: FunctionComponent = () => {
             </div>
           </div>
           <p className={styles.connDescription}>
-            Install the Zaplie GitHub App and pick repositories for the draft
-            pull-request flow. Issue and review rewards require separate
-            verified flows.
+            Install the Zaplie GitHub App and pick the repositories whose merged
+            pull requests are rewarded through the signed webhook. Issue and
+            review rewards require separate verified flows.
           </p>
           {appInstalled && repos.length === 0 && (
             <span className={styles.connHint}>
@@ -821,17 +883,17 @@ const AutomationsComponent: FunctionComponent = () => {
               <img src={FlowArrowIcon} alt="" />
             </span>
             <div className={styles.connCardTitle}>
-              <span className={styles.connName}>GitHub Logic Apps pilot</span>
+              <span className={styles.connName}>Reward API keys</span>
               <span className={styles.connStatus}>
-                Draft — not production ready
+                For callers other than GitHub
               </span>
             </div>
           </div>
           <p className={styles.connDescription}>
-            Create a key for the GitHub pull-request sample flow. Production use
-            remains blocked until aggregate budget controls, automatic
-            reconciliation of uncertain payment outcomes and GitHub webhook
-            signature verification land.
+            GitHub pull requests reach the bot through its signed webhook and
+            need no key here. Keys are for other callers of the rewards API,
+            such as a smoke test. The Logic App template is legacy. Uncertain
+            payment outcomes are still reconciled by an operator.
           </p>
           {isAdmin && (
             <>
@@ -881,7 +943,7 @@ const AutomationsComponent: FunctionComponent = () => {
               <div className={styles.addRow}>
                 <input
                   type="text"
-                  placeholder='Key label, like "GitHub Logic App"'
+                  placeholder='Key label, like "Smoke test"'
                   value={newKeyLabel}
                   onChange={e => setNewKeyLabel(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleCreateKey()}
@@ -1088,6 +1150,24 @@ const AutomationsComponent: FunctionComponent = () => {
           })}
         </div>
       )}
+
+      <div className={styles.sectionHeader}>
+        <div>
+          <span className={styles.sectionKicker}>Admin controlled</span>
+          <h3 className={styles.sectionHeading}>Reward policy</h3>
+        </div>
+        <p>Budget, level bonuses and per-person amounts for merged PRs.</p>
+      </div>
+      {policyConfig ? (
+        <RewardPolicyPanel
+          key={accountId}
+          isAdmin={isAdmin}
+          config={policyConfig}
+          spent={stats?.spentThisPeriod}
+          loadPeople={loadPeople}
+          onSave={handleSavePolicy}
+        />
+      ) : null}
 
       <ToastContainer />
     </div>
