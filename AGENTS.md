@@ -181,6 +181,17 @@ table):
   (`docs/DEPLOYMENT.adoc`); never clear one just to let a retry through.
   `POST /api/v1/rewards` (`src/rewardsRoute.ts`) requires an
   `Idempotency-Key` header and replays the first result for a repeat.
+- GitHub calls `POST /api/v1/github/webhook` (`src/githubWebhookRoute.ts`)
+  directly, verified with `X-Hub-Signature-256` under `GITHUB_WEBHOOK_SECRET`
+  and mounted before `express.json()` because the signature covers the raw
+  body. Both routes run `processReward` (`src/services/processReward.ts`):
+  parse, reserve the key, repo allowlist, recipient, amount, budget, pay,
+  settle. The amount comes only from the portal's settings
+  (`GET /api/reward-policy`: saved amounts, level bonuses by PR label,
+  per-person bases); an unset amount or budget is a 503, never a default.
+  The period budget is enforced by `src/services/rewardBudget.ts`
+  (`bot-reward-budget.json`). The Logic App template under `docs/automation/`
+  is legacy.
 - The GitHub Actions workflows (`.github/workflows/`) build only `tabs/` and
   deploy to the `zappie-dev` App Service (slot per PR / `testing`); the bot is
   deployed via `teamsapp deploy`, not CI.

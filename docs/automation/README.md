@@ -1,184 +1,202 @@
-# Automated rewards via Logic Apps
+# Automated rewards: GitHub pull requests
 
-This draft ships a GitHub-specific rewards pilot: **pay a reward when a GitHub
-pull request is merged**, delivered as an
-Azure Logic App (Consumption) ARM template that each organisation deploys and
-customises in the workflow designer (trigger conditions and non-payment steps).
+Zaplie pays a reward when a pull request is merged in a connected repository.
+GitHub calls the bot directly through a signed webhook. The bot checks the
+signature, works out the amount from the admin's settings, checks the period
+budget, and pays from a dedicated treasury wallet.
 
-> **Not production-ready:** the endpoint still needs aggregate budget
-> enforcement, and a payment with an unknown outcome is held for an operator to
-> reconcile by hand rather than reconciled automatically.
-> The sample Request trigger also does not yet verify GitHub's webhook signature,
-> so `source: "github"` is a payload claim rather than authenticated provenance.
-> Keep the PR in draft and do not connect a funded treasury yet.
+Nothing pays until an admin has set an amount and a budget. Every amount, level
+bonus, per-person base and budget is a setting; there are no built-in amounts.
 
 ```
-GitHub webhook ──► Logic App (Request trigger)
-                     │ condition: action == 'closed' && pull_request.merged == true
-                     ▼
-                   HTTP POST ► Zaplie POST /api/v1/rewards  (X-Api-Key, Idempotency-Key)
-                                 │ validates key + payload
-                                 │ claims the Idempotency-Key (a repeat replays the first result)
-                                 │ checks repository against the connected allowlist
-                                 │ resolves GitHub numeric id → verified identity → LNbits user
-                                 │ records an unlinked recipient as pending (no auto-settlement yet)
-                                 │ pays from the "Automation" treasury wallet
-                                 ▼
-                               sats land in the recipient's Private wallet
+GitHub (repository webhook, "Pull requests")
+   │  X-Hub-Signature-256 = HMAC-SHA256(raw body, GITHUB_WEBHOOK_SECRET)
+   ▼
+Zaplie bot  POST /api/v1/github/webhook
+   │ 503 if GITHUB_WEBHOOK_SECRET is unset; 401 on a missing or wrong signature
+   │ only pull_request / closed / merged: true earns a reward (others: 204)
+   │ idempotency key = the signed pull request id (one reward per PR)
+   │ repository must be connected under Automations → Connections (else 403)
+   │ GitHub numeric id → verified identity → LNbits user (unlinked: pending)
+   │ amount = person's base override, else the org base, + highest level bonus
+   │ amount ≤ REWARDS_MAX_AMOUNT_SATS, and fits the period budget (else 402)
+   ▼
+pays from the "Automation" treasury wallet → recipient's Private wallet
 ```
 
-The Logic App uses the generic **Request trigger** instead of the native GitHub
-connector on purpose: the connector's pull request trigger is in Preview, its
-issue triggers only cover "assigned to me", and it does not support
-organisation repositories. A plain webhook covers every GitHub event type.
+## 1. Configure the bot
 
-## 1. Configure the Zaplie bot
-
-Set these environment variables on the bot (alongside the existing LNbits ones):
+Set these on the bot App Service, alongside the existing LNbits settings. Names
+only here; values live in App Service settings and nowhere else.
 
 | Variable | Purpose |
 | --- | --- |
-| `REWARDS_API_KEY` | Optional environment-managed key accepted in `X-Api-Key`. The endpoint returns 503 only when neither this key nor an active portal-managed key exists. |
+| `GITHUB_WEBHOOK_SECRET` | Shared secret GitHub signs each delivery with. Generate with `openssl rand -hex 32` and paste the same value into every repository webhook. Unset: the webhook answers 503 and pays nothing. |
 | `REWARDS_TREASURY_ADMINKEY` | Admin key of the treasury wallet that pays rewards (see below). |
-| `WEBSITE_API_URL` | Base URL of the portal backend API. The bot uses it for reward-rule configuration and verified identity resolution; for example `https://<portal-domain>/api`. |
-| `TAB_BACKEND_TOKEN` | Separate shared secret the bot sends to the portal backend. The bot and portal backend must use the same non-placeholder value. |
-| `REWARDS_MAX_AMOUNT_SATS` | Optional cap for configured reward rules. Defaults to 10000 (the same ceiling as the interactive zap card). Invalid configured amounts fail closed. |
-
-Generate `REWARDS_API_KEY` and `TAB_BACKEND_TOKEN` independently with e.g.
-`openssl rand -hex 32`.
+| `WEBSITE_API_URL` | Base URL of the portal backend API, including `/api` (for example `https://<portal-domain>/api`). The bot reads amounts, policy and identities from it. |
+| `TAB_BACKEND_TOKEN` | Shared secret the bot sends to the portal backend. Must be a real value, the same on both apps, or every reward fails before payment. |
+| `REWARDS_MAX_AMOUNT_SATS` | Ceiling for one reward (base plus bonus). Defaults to 10000. Set it on the bot and the portal backend. A malformed value fails closed. |
+| `REWARDS_BUDGET_PERIOD`, `REWARDS_BUDGET_CAP_SATS`, `REWARDS_BUDGET_TIMEZONE` | Optional. Each one that is set overrides the portal's budget field of the same name (`week` or `month`; a positive whole number of sats; an IANA zone such as `Europe/London`). |
+| `REWARDS_API_KEY` | Optional. Only for other callers of `POST /api/v1/rewards` (section 5); GitHub does not use it. |
 
 ### Treasury wallet
 
 Rewards are paid from a dedicated treasury, never from a teammate's Allowance:
 
 1. In LNbits, create a user named `automation` (lower case) with one wallet.
-   The portal backend finds the treasury by that username for its Automations
-   and reports pages; set `TREASURY_USERNAME` on the portal backend if you use
-   a different name.
-2. Fund that wallet (admin top-up).
+   Do not name it `Allowance`. The portal finds the treasury by that username;
+   set `TREASURY_USERNAME` on the portal backend if you use another name.
+2. Fund it with **one budget period at most**. The bot's budget ledger is the
+   first limit; the wallet balance is the second, independent one.
 3. Set `REWARDS_TREASURY_ADMINKEY` to that wallet's **Admin key**.
 
-Payments carry the memo from the automation (e.g. `GitHub: PR #123 merged`)
-and show in the recipient's wallet transaction log as sent by "Automation"
-(the shared feed resolves senders from teammate wallets, so treasury payments
-may display an unattributed sender there — known limitation).
+Payments carry the memo `GitHub: PR #<n> merged - <title>` and show as sent by
+"Automation" in the recipient's transaction log.
 
-### Idempotency
+## 2. Configure the portal
 
-Every request must carry an `Idempotency-Key` header: 1 to 256 printable ASCII
-characters, unique per reward. The template sends GitHub's `X-GitHub-Delivery`
-id, which stays the same when GitHub redelivers a webhook or a Logic App run is
-resubmitted. A missing key is rejected with
-`400 {"error":"Idempotency-Key header is required"}`, a malformed one with
-`400 {"error":"Idempotency-Key header is invalid"}`. The key is required, not
-derived from the payload, because two genuine rewards can have identical
-bodies.
+In the portal, open **Automations**. Only a `Zaplie.Admin` can edit; everyone
+else sees the values read-only.
 
-The bot records each key in `bot-reward-ledger.json` under `ZAPLIE_DATA_DIR`
-before it pays (see `docs/DEPLOYMENT.adoc`). A repeat of a key gets:
+1. **Connections**: add each repository (`owner/repo`) that should earn
+   rewards. A delivery from any other repository is refused with 403.
+2. **Reward rules**: set the amount for "pull request merged". Until it is set
+   the card reads "Not set: pays nothing" and the bot answers 503.
+3. **Reward policy → Budget**: weekly or monthly, the cap in sats, and the
+   time zone the period follows. Until a budget is set (here or in the
+   `REWARDS_BUDGET_*` settings) every reward answers 503.
+4. **Reward policy → Level bonuses** (optional): a label prefix (for example
+   `reward:`) and levels with a bonus each (for example `L1`, `L2`, `L3`).
+5. **Reward policy → Per-person base** (optional): a different base amount
+   for a named person.
 
-| Earlier outcome | Response to the repeat |
-| --- | --- |
-| Paid | `200` with the original body and `Idempotency-Replayed: true`. Nothing is paid. |
-| Pending (recipient not linked yet) | `202` with the original body and `Idempotency-Replayed: true`. Nothing is queued again. |
-| Still being processed | `409 {"status":"processing","error":"reward is already being processed"}` |
-| Payment or pending-reward outcome unknown | `409 {"status":"uncertain","error":"payment outcome unknown; needs reconciliation"}` |
-| Same key, different reward (source, repo, event or recipient id) | `409 {"error":"Idempotency-Key was already used for a different reward"}` |
-| Rejected before taking effect (bad payload, repo not connected, LNbits error before the payment call, or a pending reward the portal refused with a 4xx) | Nothing was recorded, so the repeat is processed normally. |
+Every value is checked in the browser and again by the server: positive whole
+sats only, and the largest base plus the largest bonus must stay within
+`REWARDS_MAX_AMOUNT_SATS`.
 
-When the payment call itself fails or returns no payment hash, the reward may
-have been paid. The same applies to queuing a pending reward: if the portal
-call fails in flight or answers with a 5xx, the portal may have stored it, and
-a queued reward is paid once the recipient links GitHub. In both cases the
-endpoint answers `500 {"error":"payment outcome unknown"}` and holds the key as
-`uncertain`: no retry or redelivery pays or queues it again until an operator
-has checked LNbits or the portal's pending rewards and cleared it.
+Each teammate links GitHub once under **Settings → Connect GitHub**. A reward
+for someone who has not linked yet is held as pending in the portal and is not
+paid automatically; an operator pays it by hand.
 
-Because of this, the HTTP action's retry policy is enabled (three retries, 30
-seconds apart). A retry of a reward that already paid replays the result; a
-retry after a failure known to have taken no effect tries again.
-
-A pending reward is recorded in the portal before the ledger marks it pending.
-If the bot stops between the two, the key stays `processing` (no money moved)
-and the pending entry may later need deduplicating by hand.
-
-## 2. Deploy the Logic App
-
-```bash
-az group create --name zaplie-automation --location westeurope
-
-az deployment group create \
-  --resource-group zaplie-automation \
-  --name github-rewards-logicapp \
-  --template-file docs/automation/github-rewards-logicapp.json \
-  --parameters \
-      zaplieRewardsUrl="https://<bot-domain>/api/v1/rewards" \
-      zaplieRewardsApiKey="<REWARDS_API_KEY value>"
-
-# The webhook URL for GitHub comes out of the deployment outputs:
-az deployment group show \
-  --resource-group zaplie-automation \
-  --name github-rewards-logicapp \
-  --query properties.outputs.webhookUrl.value -o tsv
-```
-
-The API key is a `securestring` template parameter fed into a `SecureString`
-workflow parameter, so it is not readable after deployment, and the HTTP action
-has **Secure Inputs** enabled so the key never shows up in run history.
-Moving the key to Key Vault with a managed identity is a follow-up, not part of
-this template.
-
-## 3. Point GitHub at the Logic App
+## 3. Add the webhook to each repository
 
 In the repository: **Settings → Webhooks → Add webhook**
 
-- **Payload URL**: the `webhookUrl` deployment output
-- **Content type**: `application/json`
-- **Events**: "Let me select individual events" → **Pull requests**
+- **Payload URL**: `https://<bot-domain>/api/v1/github/webhook`
+- **Content type**: `application/json` (form-encoded deliveries are refused
+  with 415)
+- **Secret**: the `GITHUB_WEBHOOK_SECRET` value
+- **Events**: "Let me select individual events" → **Pull requests** only
 
-GitHub's initial `ping` delivery has no `action` field, so the workflow runs
-and takes the empty else-branch — that is expected.
+GitHub sends a `ping` first; the bot answers 204. Try it on a test repository
+with a small amount before connecting the real ones.
 
-## 4. Customising the flow
+If the repository still has a webhook to the legacy Logic App, **remove it in
+the same change**. The two paths use different idempotency keys, so with both
+in place one merge would be paid twice.
 
-The reward amount is not part of the template: it is configured in the portal
-under **Automations → Reward rules**, keyed by `eventType`
-(the template sends `eventType: "githubPrMerged"`, which the bot resolves
-against the portal's `githubPrMergedSats` value). Open the Logic App in the
-Azure portal designer to change anything else without touching code: edit the
-condition (for example, only PRs into `main`) or add non-payment steps such as a
-Teams notification. The endpoint rejects caller-supplied amounts and non-GitHub
-sources. Provider-aware flows such as timesheets require a separate identity and
-idempotency contract and are intentionally not advertised by this draft.
+## 4. How the amount is decided
 
-### Power Pulse is a pending product decision
+For a merged pull request by a linked teammate:
 
-The current data model records reward events and sats paid. It does not record
-authoritative time, money or CO2 savings, so the Automations page must not infer
-or display those measurements yet. Before adding Power Pulse, define the source,
-unit, ownership, storage and idempotency rules for each measurement and persist
-them alongside the automation event.
+1. **Base**: that person's per-person base for the event if one is set,
+   otherwise the org amount from Reward rules. Neither set: 503, nothing paid.
+2. **Bonus**: the labels on the pull request when it merged are compared with
+   `<prefix><level>` for each configured level (case-insensitive, as GitHub
+   compares labels). The highest matching bonus is added. Bonuses are never
+   summed, and labels that match no level are ignored.
+3. **Cap**: base plus bonus must be at most `REWARDS_MAX_AMOUNT_SATS`, or
+   nothing is paid.
+4. **Budget**: the amount is reserved in the current period (ISO week, Monday
+   to Sunday, or calendar month, in the configured time zone). If it would
+   take the period over the cap the answer is 402 and nothing is paid.
 
-## Smoke test without Azure
+An unlinked author gets the org base plus the bonus, held as pending. Pending
+rewards count against the budget.
 
-The endpoint can be exercised directly by sending the same request the Logic
-App would send (the Logic App is what transforms the raw GitHub event into
-this payload — GitHub webhooks cannot target the endpoint directly):
+Labels must be on the pull request **before** it merges. A label added later
+changes nothing: the reward for that pull request has already been decided,
+and a redelivery replays it. Anyone with triage rights can add a label; that
+is accepted for staff use and should be revisited before customers use it.
+
+### Responses
+
+| Situation | Response | Paid? |
+| --- | --- | --- |
+| `GITHUB_WEBHOOK_SECRET` unset | 503 | No |
+| Signature missing, malformed or wrong | 401 | No |
+| Not a JSON content type | 415 | No |
+| Body over 1 MB | 413 | No |
+| `ping`, any other event, or a PR closed without merging | 204 | No |
+| Merge more than 30 days old (replay protection) | 422 | No |
+| Repository not connected | 403 | No |
+| No amount or no budget configured | 503 | No |
+| Over the period budget | 402 | No |
+| Paid | 200 `{"status":"paid",...}` | Yes |
+| Author has not linked GitHub | 202 `{"status":"pending",...}` | Held |
+| The same pull request again (GitHub redelivery, or a resent capture) | The first answer, with `Idempotency-Replayed: true` | No |
+| Payment outcome unknown | 500, then 409 `uncertain` on every repeat | Maybe: reconcile |
+
+A 402 releases the reward's key. Redelivering it from GitHub (**Settings →
+Webhooks → Recent deliveries → Redeliver**) in a later period pays it; that is
+a person's decision, never automatic.
+
+### Idempotency
+
+The webhook's idempotency key is the pull request's own id, from the signed
+body (`github:pull_request:<id>:merged`). It is deliberately not
+`X-GitHub-Delivery`: that header is not covered by the signature, so a
+captured request resent under a new delivery id must still replay rather than
+pay. A merge older than 30 days is refused so a replay can never outlive the
+reward ledger's 90-day record.
+
+The bot records each key in `bot-reward-ledger.json`, and each budget
+reservation in `bot-reward-budget.json`, both under `ZAPLIE_DATA_DIR` (see
+`docs/DEPLOYMENT.adoc`). A reward whose payment outcome is unknown stays
+`uncertain` and blocks every repeat until an operator reconciles it; it is
+never cleared or retried automatically.
+
+## 5. The rewards API (other callers)
+
+`POST /api/v1/rewards` runs the same pipeline for callers that are not GitHub,
+such as a smoke test. It takes `X-Api-Key` (`REWARDS_API_KEY` or a key created
+under **Automations → Reward API keys**) and a caller-chosen `Idempotency-Key`
+(1 to 256 printable ASCII characters, unique per reward):
 
 ```bash
 curl -s -X POST https://<bot-domain>/api/v1/rewards \
   -H "Content-Type: application/json" \
   -H "X-Api-Key: $REWARDS_API_KEY" \
   -H "Idempotency-Key: $(uuidgen)" \
-  -d '{"recipient":"octocat","recipientId":"583231","eventType":"githubPrMerged","repo":"octo-org/octo-repo","reason":"GitHub: PR #1 merged","source":"github"}'
+  -d '{"recipient":"octocat","recipientId":"583231","eventType":"githubPrMerged","repo":"octo-org/octo-repo","reason":"GitHub: PR #1 merged","source":"github","labels":["reward:L1"]}'
 ```
 
-Each `uuidgen` makes a new reward. To check replay, save the key in a variable
-and send the same request twice: the second answer is identical, carries
-`Idempotency-Replayed: true` (visible with `curl -i`), and pays nothing.
+| Field | Meaning |
+| --- | --- |
+| `recipient` | Display label (the GitHub login). |
+| `recipientId` | GitHub's stable numeric user id; the identity graph is keyed on it. |
+| `eventType` | `githubPrMerged`, `githubIssueClosed` or `githubReviewSubmitted`. |
+| `repo` | `owner/repo`, exactly as connected under Automations. |
+| `reason` | Invoice memo. |
+| `source` | `github`. |
+| `labels` | Optional: up to 50 printable ASCII strings of 1 to 50 characters. |
 
-`repo` must exactly match a repository configured under **Automations →
-Connections**. `recipientId` is GitHub's stable numeric user id; the login is
-kept only as a display label.
+`amountSats` is refused: the amount always comes from the settings. Each new
+`Idempotency-Key` is a new reward and counts against the budget. Sending the
+same key twice replays the first answer with `Idempotency-Replayed: true`.
 
-Expected: `{"status":"paid","paymentHash":"...","recipient":"octocat","amountSats":<configured value>}`.
+## Legacy: the Logic App template
+
+`github-rewards-logicapp.json` is the earlier pilot: a Logic App Request
+trigger that forwarded GitHub events to `POST /api/v1/rewards`. Its trigger
+does not verify GitHub's signature, so its `source: "github"` is a claim, not
+proof. It is kept for reference only. **Do not deploy it in front of a funded
+treasury**; use the signed webhook above.
+
+## Power Pulse is a pending product decision
+
+The data model records reward events and sats paid. It does not record
+authoritative time, money or CO2 savings, so the Automations page must not
+infer or display those measurements yet. Before adding Power Pulse, define the
+source, unit, ownership, storage and idempotency rules for each measurement and
+persist them alongside the automation event.

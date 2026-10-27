@@ -177,8 +177,9 @@ affected: only creation is gated.
 === Persistent application state
 
 The bot keeps its mutable state — the durable Zap ledger
-`bot-zap-ledger.json` and the automation reward ledger
-`bot-reward-ledger.json` — under `ZAPLIE_DATA_DIR`. Bicep sets
+`bot-zap-ledger.json`, the automation reward ledger `bot-reward-ledger.json`
+and the reward budget ledger `bot-reward-budget.json` — under
+`ZAPLIE_DATA_DIR`. Bicep sets
 `ZAPLIE_DATA_DIR=+%HOME%\data\zaplie+` on the App Service it provisions
 (Windows: `kind: 'app'`, no `reserved`/`linuxFxVersion`), outside `wwwroot`, so
 a clean deployment cannot replace it. App Service passes app settings to the
@@ -194,17 +195,18 @@ every deployed (non-development) runtime must set it to an absolute path or
 the bot refuses to start.
 
 Never include mutable JSON in a deployment artifact: `.webappignore` excludes
-both ledgers, their `.lock` files, and their `<ledger>.json.<pid>.<random>.tmp`
+the three ledgers, their `.lock` files, and their `<ledger>.json.<pid>.<random>.tmp`
 replacements. The bot creates the data directory with mode `0700` and ledger,
 lock, and temporary files with mode `0600` on supporting filesystems.
 
 Back up and restore the data directory as an application-consistent unit:
 
 . Stop or drain every bot process sharing the directory before copying it.
-. Copy the canonical `bot-zap-ledger.json` and `bot-reward-ledger.json`; never
-  copy `.lock` or `.tmp` artifacts. Keep backups access-controlled: payment
-  hashes are operational metadata, and the reward ledger also holds the GitHub
-  login of each rewarded recipient.
+. Copy the canonical `bot-zap-ledger.json`, `bot-reward-ledger.json` and
+  `bot-reward-budget.json` together; never copy `.lock` or `.tmp`
+  artifacts. Keep backups access-controlled: payment hashes are operational
+  metadata, and the reward ledger also holds the GitHub login of each
+  rewarded recipient.
 . To restore, keep the bot stopped, preserve a copy of the current directory,
   restore the canonical backup into `ZAPLIE_DATA_DIR`, restore restrictive
   permissions, and then start the bot.
@@ -218,7 +220,8 @@ The bot deliberately never evicts a ledger's `.lock` file by age: ownership
 is uncertain, and an eviction rule that guessed wrong could re-enable a payment
 that already settled. Treat a crash-left lock as a *manual outage*: while
 `bot-zap-ledger.json.lock` is present every zap submission fails, and while
-`bot-reward-ledger.json.lock` is present every reward request fails, after the
+`bot-reward-ledger.json.lock` or `bot-reward-budget.json.lock` is present
+every reward request fails, after the
 five-second lock timeout with an error naming this procedure. It stays that way
 until an operator clears it. After an unclean shutdown, stop/drain every bot
 process, inspect the canonical store, reconcile any `processing`, `unknown` or
@@ -233,8 +236,10 @@ it may belong to a write in flight.
 
 ==== Reconciling the reward ledger
 
-`bot-reward-ledger.json` records one entry per `Idempotency-Key` sent to
-`POST /api/v1/rewards` (stored as a SHA-256 digest, never the raw key). `paid`
+`bot-reward-ledger.json` records one entry per reward key (stored as a
+SHA-256 digest, never the raw key): the `Idempotency-Key` sent to
+`POST /api/v1/rewards`, or `github:pull_request:<id>:merged` for the signed
+GitHub webhook. `paid`
 and `pending` entries hold the response a repeat replays and are pruned after
 90 days. Two states never expire and always need a person:
 
@@ -243,8 +248,10 @@ and `pending` entries hold the response a repeat replays and are pruned after
   treasury wallet's outgoing payments in LNbits around the entry's `at` time
   (milliseconds since the epoch) for the recipient and amount. If it settled,
   the entry can stay as it is, since the reward is paid. If it did not, stop
-  the bot, delete that one entry from `records`, start the bot, and resubmit
-  the Logic App run. When the recipient had not linked GitHub, the uncertain
+  the bot, delete that one entry from `records`, delete the reservation with
+  the same digest from `bot-reward-budget.json` (under the period that holds
+  it), start the bot, and redeliver the delivery from GitHub (*Settings →
+  Webhooks → Recent deliveries → Redeliver*) or resend the API request. When the recipient had not linked GitHub, the uncertain
   call was the portal's pending-reward write instead (the bot logs
   `pending reward write`): look in the portal's `pending-rewards.json` for an
   entry for that GitHub id and amount. If it is there, leave the ledger entry
@@ -259,6 +266,19 @@ and `pending` entries hold the response a repeat replays and are pruned after
 Edit the file only with every bot process stopped, keep the JSON valid, and
 keep a copy of the file you started from. The bot refuses to start on a store
 it cannot validate rather than guessing.
+
+==== The reward budget ledger
+
+`bot-reward-budget.json` holds, per budget period (`week:2026-W44` or
+`month:2026-10`), one reservation in sats per reward key, using the same digest
+as the reward ledger. The bot reserves the amount before paying and refuses a
+reward that would take the period over the cap (`402`, nothing paid). Paid,
+pending and uncertain rewards keep their reservation; only a failure known to
+be before the payment releases it. A reservation that could not be released is
+logged (`reward budget could not release an unpaid reward`) and over-counts
+the period: it never over-pays. Periods older than about 13 months are pruned.
+The cap comes from the portal's reward policy or the `REWARDS_BUDGET_*`
+settings; with neither, every reward answers `503`.
 
 === Azure Functions
 
@@ -350,9 +370,15 @@ created. Must be a positive integer; a failed grant is logged, not retried
   with `openssl rand -hex 32` and set the same value on both apps
 | Bot, Portal backend
 
+| `GITHUB_WEBHOOK_SECRET`
+| Secret GitHub signs webhook deliveries with (`X-Hub-Signature-256`);
+  generate with `openssl rand -hex 32` and use the same value in each
+  repository webhook. Unset: `POST /api/v1/github/webhook` answers 503
+| Bot
+
 | `REWARDS_API_KEY`
 | Static API key accepted by the bot's rewards endpoint (in addition to
-  portal-managed keys created in Automations)
+  portal-managed keys created in Automations). GitHub does not use it
 | Bot
 
 | `REWARDS_TREASURY_ADMINKEY`
@@ -360,10 +386,17 @@ created. Must be a positive integer; a failed grant is logged, not retried
 | Bot
 
 | `REWARDS_MAX_AMOUNT_SATS`
-| Upper bound in sats for a single automated reward (default 10000). A
-  malformed value fails closed — reward rules are rejected rather than accepted
-  under an unintended ceiling
+| Upper bound in sats for a single automated reward, base plus level bonus
+  (default 10000). A malformed value fails closed — reward rules are rejected
+  rather than accepted under an unintended ceiling
 | Bot, Portal backend
+
+| `REWARDS_BUDGET_PERIOD`, `REWARDS_BUDGET_CAP_SATS`, `REWARDS_BUDGET_TIMEZONE`
+| Optional overrides of the portal's reward budget: `week` or `month`, a
+  positive whole number of sats per period, and an IANA time zone. Each one
+  set wins over the portal's field; with no complete budget in either place
+  every reward answers 503. A malformed value fails closed
+| Bot
 
 | `ZAP_MAX_AMOUNT_SATS`
 | Upper bound in sats for a single person-to-person zap or self-issued invoice
@@ -609,10 +642,14 @@ Complete these once per new environment, right after the first deployment:
   .. Keep this list in step with the Teams app's availability (below).
 . *Prepare LNbits.* No extension is needed for provisioning: the bot creates
   users through the core Users API, which requires an LNbits admin account.
-  Create the treasury wallet that funds automation rewards and copy its admin
-  key into `REWARDS_TREASURY_ADMINKEY`. Weekly allowance top-ups are handled
-  by the LNbits https://github.com/BenGWeeks/allowance[allowance extension],
-  not by the bot; wiring it up is tracked separately.
+  Create the treasury wallet that funds automation rewards, fund it with one
+  budget period at most, and copy its admin key into
+  `REWARDS_TREASURY_ADMINKEY`. Then follow `docs/automation/README.md` to set
+  `GITHUB_WEBHOOK_SECRET`, the reward amount, the budget and each repository
+  webhook; nothing pays until the amount and the budget are set. Weekly
+  allowance top-ups are handled by the LNbits
+  https://github.com/BenGWeeks/allowance[allowance extension], not by the
+  bot; wiring it up is tracked separately.
 . *Rotate the burned LNbits credentials.* Historic CI builds injected
   `REACT_APP_LNBITS_PASSWORD` and `REACT_APP_LNBITS_ADMINKEY` into the
   portal's public JavaScript bundle, so any admin key or service-account
