@@ -413,6 +413,7 @@ describe('POST /api/v1/github/webhook: events', () => {
     app.use(
       createGithubWebhookRouter({
         ledger,
+        budgetLedger,
         webhookSecret: () => secret,
         now: () => NOW,
         ...(deps as unknown as Partial<GithubWebhookRouteDeps>),
@@ -422,6 +423,7 @@ describe('POST /api/v1/github/webhook: events', () => {
     app.use(
       createRewardsRouter({
         ledger,
+        budgetLedger,
         isAuthorizedRewardKey: async key => key === 'automation-key',
         ...(deps as unknown as Partial<RewardsRouteDeps>),
       }),
