@@ -206,3 +206,101 @@ authoritative time, money or CO2 savings, so the Automations page must not
 infer or display those measurements yet. Before adding Power Pulse, define the
 source, unit, ownership, storage and idempotency rules for each measurement and
 persist them alongside the automation event.
+
+# Weekly allowances: the LNbits allowance extension
+
+Every person's Allowance wallet is topped up on a schedule by the LNbits
+[allowance extension](https://github.com/BenGWeeks/allowance), paying from a
+"Fund" wallet. Zaplie never pays: the portal backend only keeps one schedule
+per person in the extension (named `zaplie:<oid>`) and one pay link per
+Allowance wallet (Lightning address `zaplie-<first 12 hex of the oid>@<LNbits
+host>`). See `docs/SOLUTION_DESIGN.adoc`, "Weekly allowances".
+
+Nothing is created or paid until an admin stores an **enabled** policy with an
+amount, period, anchor, time and time zone. There are no built-in amounts or
+schedules. A disabled policy pauses every Zaplie schedule on the next sync.
+
+## Prerequisites (once)
+
+In LNbits (super user):
+
+1. Install the allowance extension and note its version.
+2. Enable it for the **Zaplie** account, and create a wallet named `Fund` on
+   that account. Never name it `Allowance` or `Private`, and never use a wallet
+   that belongs to a person; the sync refuses both.
+3. Enable **LNURLp** for every person's LNbits user, and add it to the default
+   extensions for new users. A person without it is skipped (the pay link is
+   refused) and the rest of the run carries on.
+4. Fund the `Fund` wallet with at least one period (amount × people). Apply is
+   refused below one period unless `--allow-underfunded` is given, and warns
+   below two.
+
+On the portal App Service, set (names only; values live in App Service
+settings):
+
+| Setting | Purpose |
+| --- | --- |
+| `ALLOWANCE_FUND_ADMINKEY` | Admin key of the `Fund` wallet. Comma-separated for more than one Fund wallet (100 schedules each). Unset: preview only, apply refused. |
+| `LNBITS_PUBLIC_HOST` | The public LNbits host the extension pays over HTTPS, for example `bank.knowall.ai`. Defaults to the host of `LNBITS_NODE_URL`. |
+| `ALLOWANCE_MAX_AMOUNT_SATS` | Optional ceiling per person per period (default 100000). |
+
+## Running the sync from the command line (the fallback)
+
+Run it on the portal App Service (Linux, SSH console), so it reads the same
+`data.json` and writes the same `allowance-sync.json` as the portal:
+
+```bash
+cd /home/site/wwwroot      # the deployed tabs/ folder
+# If `printenv LNBITS_NODE_URL` prints nothing in this shell, load the app
+# settings it needs from the app process (prints nothing):
+while IFS= read -r line; do export "$line"; done < <(tr '\0' '\n' < /proc/1/environ | grep -E '^(LNBITS_|ALLOWANCE_|ZAPLIE_DATA_DIR=)')
+```
+
+1. Write the policy agreed with the Product Owner to a file. Every value is a
+   decision, none is a default (weekday 0 is Sunday, 5 is Friday):
+
+   ```json
+   {
+     "enabled": true,
+     "amountSats": <sats per person per period>,
+     "period": "weekly",
+     "anchorWeekday": <0-6>,
+     "anchorTime": "<HH:mm>",
+     "timezone": "<IANA zone, e.g. Europe/London>",
+     "memo": "<shown to the payer; never 'Weekly Allowance cleared'>"
+   }
+   ```
+
+2. Store it (validated; no LNbits call), then check it:
+
+   ```bash
+   node backend/scripts/allowance-sync.js --set-policy /tmp/allowance-policy.json
+   node backend/scripts/allowance-sync.js --show-policy
+   ```
+
+3. Preview. Nothing in LNbits changes. Review the table, the Fund balance and
+   the **total per period** with the Product Owner:
+
+   ```bash
+   node backend/scripts/allowance-sync.js
+   ```
+
+4. Apply, echoing the previewed total. A different total (people or the policy
+   changed since the preview) is refused: preview again.
+
+   ```bash
+   node backend/scripts/allowance-sync.js --apply --confirm-total <total per period>
+   ```
+
+5. Run the preview again: every line should be `noop`.
+
+To stop all allowances, set `"enabled": false` with `--set-policy`, preview,
+and apply with the total the preview shows (0 unless hand-edited schedules
+remain active): every Zaplie schedule is paused, none is deleted. To leave someone out, add their Entra object id to `excludedOids`;
+their schedule is deleted on the next apply.
+
+`drift` lines are schedules someone changed by hand in the extension; they are
+reported, not overwritten. `--overwrite-drift` puts them back to the policy.
+`paused` lines are schedules paused by hand, and stay paused unless
+overwritten. Each apply appends one line per change to `allowance-audit.jsonl`
+in the data directory; no key is ever printed or stored.

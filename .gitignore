@@ -38,6 +38,9 @@ tabs/backend/lnbits-zap-idempotency.json.lock.stale.*
 tabs/backend/lnbits-zap-idempotency.json.*.tmp
 tabs/backend/webhook-keys.json
 tabs/backend/data.json
+tabs/backend/allowance-sync.json
+tabs/backend/allowance-sync.json.*.tmp
+tabs/backend/allowance-audit.jsonl
 
 # Local bot data directory for the durable Zap and reward ledgers; deployed
 # instances point ZAPLIE_DATA_DIR outside the app.

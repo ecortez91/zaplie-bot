@@ -143,12 +143,41 @@ const lnbitsRequest = async (path, options = {}) => {
     // gateway's own credentials failed, which is a 502 for the browser.
     const status =
       response.status === 400 || response.status === 404 ? response.status : 502;
-    throw new LnbitsGatewayError(
+    const error = new LnbitsGatewayError(
       `LNbits request failed with status ${response.status}`,
       status,
     );
+    // Server-side callers (the allowance sync) act on the real upstream
+    // status (409 conflict, 422 limit, 429 back-off); the router never sees it.
+    error.upstreamStatus = response.status;
+    if (options.readErrorDetail) {
+      error.upstreamDetail = await readErrorDetail(response);
+    }
+    throw error;
   }
   return safeJson(response);
+};
+
+// Anything that looks like an LNbits key (32 hex characters) is masked: an
+// error detail must never carry a credential into a log or a run summary.
+const KEY_LIKE = /[0-9a-f]{32,}/gi;
+const MAX_ERROR_DETAIL = 300;
+
+const maskKeys = (text) => String(text).replace(KEY_LIKE, '[redacted]');
+
+const readErrorDetail = async (response) => {
+  try {
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return '';
+    }
+    const body = await response.json();
+    const detail = body && typeof body === 'object' ? body.detail : body;
+    const text = typeof detail === 'string' ? detail : JSON.stringify(detail ?? '');
+    return maskKeys(text).slice(0, MAX_ERROR_DETAIL);
+  } catch (_error) {
+    return '';
+  }
 };
 
 const redactSensitive = (value, depth = 0) => {
@@ -544,6 +573,40 @@ const getWalletPayLinks = async (walletId, aadObjectId) => {
   );
 };
 
+// Pay links on a wallet the server already holds keys for (the allowance sync
+// walks every Allowance wallet). Listing takes the invoice key; creating and
+// updating take the wallet's admin key, as the lnurlp extension requires.
+const listWalletPayLinksWithKey = async (wallet) => {
+  const links = await lnbitsRequest('/lnurlp/api/v1/links?all_wallets=false', {
+    walletKey: wallet.inkey,
+    readErrorDetail: true,
+  });
+  if (!Array.isArray(links)) {
+    throw new LnbitsGatewayError('LNbits pay links response is malformed');
+  }
+  return links.map(redactSensitive);
+};
+
+const createWalletPayLink = async (wallet, body) =>
+  redactSensitive(
+    await lnbitsRequest('/lnurlp/api/v1/links', {
+      method: 'POST',
+      walletKey: wallet.adminkey,
+      body,
+      readErrorDetail: true,
+    }),
+  );
+
+const updateWalletPayLink = async (wallet, linkId, body) =>
+  redactSensitive(
+    await lnbitsRequest(`/lnurlp/api/v1/links/${encodeURIComponent(linkId)}`, {
+      method: 'PUT',
+      walletKey: wallet.adminkey,
+      body,
+      readErrorDetail: true,
+    }),
+  );
+
 const createInvoice = async (wallet, amount, memo) => {
   const result = await lnbitsRequest('/api/v1/payments', {
     method: 'POST',
@@ -843,6 +906,7 @@ module.exports = {
   createInvoice,
   createSendZap,
   createOwnedInvoice,
+  createWalletPayLink,
   ensureCaller,
   getAllPayments,
   getInvoicePayment,
@@ -853,8 +917,12 @@ module.exports = {
   listAllWallets,
   listRawUsers,
   listUserWallets,
+  listUserWalletsWithKeys,
   listUsers,
+  listWalletPayLinksWithKey,
   listWalletPayments,
+  lnbitsRequest,
+  maskKeys,
   maxZapAmountSats,
   payOwnedInvoice,
   resetCachesForTests,
@@ -864,4 +932,5 @@ module.exports = {
   sanitizeBalanceMsat,
   sanitizeUser,
   sendZap,
+  updateWalletPayLink,
 };

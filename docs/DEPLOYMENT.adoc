@@ -409,6 +409,33 @@ created. Must be a positive integer; a failed grant is logged, not retried
   rather than falling back to a wider ceiling
 | Portal backend
 
+| `ALLOWANCE_FUND_ADMINKEY`
+| Admin key of the LNbits wallet the allowance extension pays weekly
+  allowances from (the "Fund" wallet on the Zaplie account; never a wallet
+  named `Allowance` or `Private`, never a person's). Comma-separated for more
+  than one Fund wallet, in order (the extension allows 100 schedules per
+  wallet). Only ever sent to the allowance and lnurlp extension APIs and
+  `GET /api/v1/wallet`; never logged, stored or returned. Unset: the allowance
+  sync can preview pay links only and refuses to apply (503)
+| Portal backend
+
+| `ALLOWANCE_MAX_AMOUNT_SATS`
+| Upper bound in sats for one person's allowance per period (default 100000).
+  A malformed value fails closed
+| Portal backend
+
+| `LNBITS_PUBLIC_HOST`
+| Public host of LNbits that Lightning addresses are served on (for example
+  `bank.knowall.ai`). Defaults to the host of `LNBITS_NODE_URL`. The extension
+  pays over public HTTPS, so it must not be an internal address
+| Portal backend
+
+| `ALLOWANCE_SYNC_CONCURRENCY`, `ALLOWANCE_PER_WALLET_LIMIT`, `ALLOWANCE_MAX_PEOPLE`
+| Optional tuning for the allowance sync: parallel LNbits calls (default 4),
+  schedules per Fund wallet (default 100, the extension's limit) and the most
+  people one policy may cover (default 1000; more refuses to apply)
+| Portal backend
+
 | `AAD_TENANT_ID`, `AAD_CLIENT_ID`
 | Entra tenant and app client id used to validate MSAL idTokens
 | Portal backend
