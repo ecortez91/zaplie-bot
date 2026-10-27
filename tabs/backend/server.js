@@ -18,8 +18,12 @@ const { maxRewardSats } = require('./rewardAmounts');
 const {
   RewardPolicyError,
   applyRewardPolicyPatch,
+  assertRewardConfigWithinCap,
+  emptyPolicy,
+  parseRewardPolicy,
   readRewardPolicy,
-  validateRewardPolicy,
+  readRewardPolicyStructure,
+  readStoredRewardAmounts,
 } = require('./rewardPolicy');
 
 const app = express();
@@ -127,16 +131,30 @@ app.post('/api/reward-amounts', requireAdmin, (req, res) => {
     return;
   }
 
+  // The stored values are read for shape only, not against the cap: an admin
+  // who lowered REWARDS_MAX_AMOUNT_SATS below a stored amount must still be
+  // able to save the correction. The cap is checked on the result below.
   const data = readData();
   let storedRewardAmounts;
   try {
-    storedRewardAmounts = migrateRewardAmounts(data.rewardAmounts);
+    storedRewardAmounts = readStoredRewardAmounts(data);
   } catch (error) {
     res.status(500).send({
       message: `Stored reward amounts are invalid: ${error.message}`,
     });
     return;
   }
+  let currentPolicy;
+  try {
+    currentPolicy =
+      data.rewardPolicy === undefined
+        ? emptyPolicy()
+        : parseRewardPolicy(data.rewardPolicy);
+  } catch (error) {
+    res.status(500).send({ message: `Stored reward policy is invalid: ${error.message}` });
+    return;
+  }
+
   // Only what an admin saved is stored: merging the defaults here would turn
   // one saved amount into three configured ones, and an unconfigured event
   // must pay nothing (the bot fails closed on it).
@@ -144,25 +162,14 @@ app.post('/api/reward-amounts', requireAdmin, (req, res) => {
     ...storedRewardAmounts,
     ...rewardAmounts,
   };
-  const storedValidation = validateRewardAmountPatch(nextRewardAmounts);
-  if (!storedValidation.valid) {
-    res.status(500).send({
-      message: `Stored reward amounts are invalid: ${storedValidation.message}`,
-    });
-    return;
-  }
 
-  // A new base must still leave room for the largest level bonus and every
-  // per-person override under REWARDS_MAX_AMOUNT_SATS.
-  let currentPolicy;
+  // Every amount, and each base plus the largest level bonus or per-person
+  // override, must fit under REWARDS_MAX_AMOUNT_SATS after the patch.
   try {
-    currentPolicy = readRewardPolicy(data).rewardPolicy;
-  } catch (error) {
-    res.status(500).send({ message: `Stored reward policy is invalid: ${error.message}` });
-    return;
-  }
-  try {
-    validateRewardPolicy(currentPolicy, nextRewardAmounts, maxRewardSats());
+    assertRewardConfigWithinCap(
+      { rewardAmounts: nextRewardAmounts, rewardPolicy: currentPolicy },
+      maxRewardSats(),
+    );
   } catch (error) {
     res.status(400).send({ message: error.message });
     return;
@@ -188,7 +195,10 @@ app.post('/api/reward-policy', requireAdmin, (req, res) => {
   let cap;
   try {
     cap = maxRewardSats();
-    current = readRewardPolicy(data);
+    // Shape only: a stored value over a since-lowered cap must not block the
+    // patch that corrects it. applyRewardPolicyPatch checks the cap on the
+    // result.
+    current = readRewardPolicyStructure(data);
   } catch (error) {
     res.status(500).send({ message: `Stored reward policy is invalid: ${error.message}` });
     return;

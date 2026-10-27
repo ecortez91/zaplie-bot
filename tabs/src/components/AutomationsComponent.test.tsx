@@ -296,7 +296,9 @@ describe('AutomationsComponent panel independence', () => {
 
     await renderAutomations();
 
-    expect(container.textContent).toContain('Not set: pays nothing');
+    expect(container.textContent).toContain(
+      'Not set: pays nothing unless a person has an override',
+    );
     expect(
       Array.from(container.querySelectorAll('button')).some(
         button => button.textContent === 'Set amount',
