@@ -238,14 +238,52 @@ uses development mode and falls back to the ignored `.zaplie-data` directory
 when no override is configured. This fallback is never selected by a deployed
 bot.
 
+=== Automation Rewards
+
+GitHub calls the bot's `POST /api/v1/github/webhook`
+(`src/githubWebhookRoute.ts`) directly. The route reads the raw body,
+verifies `X-Hub-Signature-256` (HMAC-SHA256 under `GITHUB_WEBHOOK_SECRET`,
+503 when unset, 401 when wrong) and turns a merged `pull_request` event into a
+reward request. `POST /api/v1/rewards` (`src/rewardsRoute.ts`) takes the same
+request from other callers with an API key. Both hand it to `processReward`
+(`src/services/processReward.ts`), which runs, in order: parse, reserve the
+idempotency key, check the repository allowlist, resolve the recipient, work
+out the amount, reserve it in the period budget, pay, settle.
+
+The amount is never in the request. It comes from the portal's
+`GET /api/reward-policy` (`tabs/backend/rewardPolicy.js`, validated again in
+`src/services/fetchRewardPolicy.ts`): the person's base override for the event
+if one is set, otherwise the amount an admin saved for the event, plus the
+largest configured level bonus whose label (`<prefix><level>`) is on the pull
+request. Nothing has a default: an unset amount or budget is a 503. Base plus
+bonus must stay within `REWARDS_MAX_AMOUNT_SATS`, checked when the policy is
+written and again when it is read.
+
+The period budget (`src/services/rewardBudget.ts`, `bot-reward-budget.json`)
+is an ISO week or calendar month in the configured time zone
+(`src/services/rewardPeriod.ts`). The period is the one the bot is in when it
+processes the delivery, not the merge time: a merge late on Sunday that GitHub
+delivers, or someone redelivers, on Monday counts against Monday's week. The
+amount is reserved under the reward's ledger key before paying, so a replay
+never counts twice; over the cap is a 402 with nothing paid. The treasury
+wallet is funded with one period at most, so LNbits refusing the payment is a
+second, independent limit.
+
+The webhook keys idempotency on the signed pull request id rather than
+`X-GitHub-Delivery`, which the signature does not cover. The Logic App
+template (`docs/automation/github-rewards-logicapp.json`) is legacy: its
+trigger verifies nothing. It sends the same key,
+`github:pull_request:<pull_request.id>:merged`, so the two paths share one
+ledger entry per merge and can never both pay for it.
+
 === Reward Idempotency Ledger
 
-`POST /api/v1/rewards` (`src/rewardsRoute.ts`) is called by an automation such
-as the GitHub Logic App, which may deliver the same event more than once.
-Every request must carry an `Idempotency-Key` header (1 to 256 printable ASCII
-characters; the Logic App sends `github:pull_request:<pull_request.id>:merged`,
-the same key the signed GitHub webhook uses, so the two paths can never both
-pay for one merge). The key is
+`POST /api/v1/rewards` (`src/rewardsRoute.ts`) is called by an automation
+that may deliver the same event more than once. Every request must carry an
+`Idempotency-Key` header (1 to 256 printable ASCII characters). The signed
+GitHub webhook uses `github:pull_request:<id>:merged` from the signed body
+instead, so a GitHub redelivery replays; the legacy Logic App sends that same
+key, so a merge either path has paid replays on the other. The key is
 required rather than derived from the body because two genuine rewards can
 have identical bodies, and only the caller knows which deliveries are the
 same.
@@ -287,14 +325,14 @@ atomic temp-file replacement with file and directory sync, the sweep of stale
 temporaries, and fail-closed validation on startup and on every write. It has
 its own schema because a reward replay needs the original response and a
 pending reward is a settled outcome that paid nothing. `paid` and `pending`
-records are pruned after ninety days, which covers GitHub redeliveries and the
-default Logic App run-history window; `processing` and `uncertain` records are
+records are pruned after ninety days, which covers GitHub redeliveries (the
+webhook also refuses merges older than thirty days); `processing` and `uncertain` records are
 never pruned. The bot constructs the ledger at startup, so a missing
 `ZAPLIE_DATA_DIR` or an unreadable store stops it before it serves a request.
 
-With the ledger in place the Logic App's HTTP action retries (three times, 30
-seconds apart): a retry after a settled payment replays it, and a retry after
-a failure known to have taken no effect tries again.
+With the ledger in place a caller may retry freely: a retry after a settled
+payment replays it, and a retry after a failure known to have taken no effect
+tries again.
 
 === Recipient Notifications
 
