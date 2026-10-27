@@ -163,6 +163,69 @@ test('an anonymous write is rejected', async () => {
   assert.equal(res.status, 401);
 });
 
+// Issue 446: the write used to store any truthy JSON value verbatim, and the
+// open read served it to every visitor.
+const writeRewardNameStore = data =>
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data));
+
+const INVALID_REWARD_NAMES = [
+  ['an object', { x: 1 }],
+  ['an array', ['sats']],
+  ['a number', 123],
+  ['a blank string', '   '],
+  ['33 code points', 'a'.repeat(33)],
+  ['a control character', 'sa\u0000ts'],
+];
+
+for (const [label, newRewardName] of INVALID_REWARD_NAMES) {
+  test(`an admin cannot save ${label} as the reward name`, async () => {
+    writeRewardNameStore({ rewardName: 'Points' });
+    const res = await post('/api/reward-name', `Bearer ${ADMIN_TOKEN}`, {
+      newRewardName,
+    });
+    assert.equal(res.status, 400);
+    assert.match(res.body.message, /^The reward name /);
+
+    // The refused write never reached the store.
+    const read = await get('/api/reward-name');
+    assert.deepEqual(read.body, { rewardName: 'Points' });
+  });
+}
+
+test('a missing reward name is a 400 that says why', async () => {
+  const res = await post('/api/reward-name', `Bearer ${ADMIN_TOKEN}`, {});
+  assert.equal(res.status, 400);
+  assert.equal(res.body.message, 'The reward name must be text.');
+});
+
+test('an admin saves a padded reward name and the open read returns it trimmed', async () => {
+  const res = await post('/api/reward-name', `Bearer ${ADMIN_TOKEN}`, {
+    newRewardName: '  Zaps  ',
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.rewardName, 'Zaps');
+
+  const read = await get('/api/reward-name');
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body, { rewardName: 'Zaps' });
+});
+
+test('a 32-code-point reward name with an emoji is accepted', async () => {
+  const newRewardName = `${'a'.repeat(31)}⚡`;
+  const res = await post('/api/reward-name', `Bearer ${ADMIN_TOKEN}`, {
+    newRewardName,
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.rewardName, newRewardName);
+});
+
+test('a bad reward name stored before validation reads as sats', async () => {
+  writeRewardNameStore({ rewardName: 12 });
+  const read = await get('/api/reward-name');
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body, { rewardName: 'sats' });
+});
+
 test('a non-admin cannot write the bot persona', async () => {
   const res = await post('/api/bot-persona', `Bearer ${USER_TOKEN}`, {
     botPersona: 'Be nice.',

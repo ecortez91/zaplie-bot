@@ -26,24 +26,98 @@ export const getRewardName = async (): Promise<RewardNameResponse> => {
   return parseRewardNameResponse(response.data);
 };
 
+// Kept in step with backend/rewardName.js: the Settings field explains a
+// refusal before the request is sent, the backend is what actually enforces it.
+export const MAX_REWARD_NAME_LENGTH = 32;
+
+// A reward name the admin has to change, as opposed to a save that failed for
+// some other reason (network, auth, server). Its message is written for the
+// admin and is safe to show as is.
+export class RewardNameError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RewardNameError';
+    // Keeps instanceof working when the class is compiled down to ES5.
+    Object.setPrototypeOf(this, RewardNameError.prototype);
+  }
+}
+
+// Code points, as the backend counts them: String.length counts UTF-16 units
+// and would bill an emoji twice. (Array.from, not a spread: this bundle still
+// compiles down to ES5.)
+export const rewardNameLength = (value: string): number =>
+  Array.from(value).length;
+
+// A label is one line: all of C0, DEL and C1, plus U+2028/U+2029.
+const hasControlCharacter = (value: string): boolean =>
+  Array.from(value).some(character => {
+    const code = character.codePointAt(0) as number;
+    return (
+      code < 0x20 ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029
+    );
+  });
+
+// Mirrors validateRewardName in backend/rewardName.js, same order and same
+// sentences. The control-character check runs before trimming, which would
+// otherwise hide one at either end.
+const rewardNameProblem = (value: string): string | null => {
+  if (hasControlCharacter(value)) {
+    return 'The reward name must be one line of plain text, without control characters.';
+  }
+  const rewardName = value.trim();
+  if (!rewardName) {
+    return 'The reward name cannot be empty.';
+  }
+  if (rewardNameLength(rewardName) > MAX_REWARD_NAME_LENGTH) {
+    return `The reward name must be at most ${MAX_REWARD_NAME_LENGTH} characters.`;
+  }
+  return null;
+};
+
+// The backend's 400 carries the reason in `message`; anything else is not a
+// problem with the name and is passed through untouched.
+const rejectedRewardNameMessage = (error: unknown): string | null => {
+  const response = (
+    error as { response?: { status?: unknown; data?: unknown } } | null
+  )?.response;
+  if (response?.status !== 400) {
+    return null;
+  }
+  const message = (response.data as { message?: unknown } | null)?.message;
+  return typeof message === 'string' && message.trim() ? message.trim() : null;
+};
+
 export const updateRewardName = async (
   idToken: string,
   newRewardName: string,
 ): Promise<RewardNameResponse> => {
-  const normalizedRewardName = newRewardName.trim();
-  if (!normalizedRewardName) {
-    throw new Error('The reward name cannot be empty.');
+  const problem = rewardNameProblem(newRewardName);
+  if (problem) {
+    throw new RewardNameError(problem);
   }
+  const normalizedRewardName = newRewardName.trim();
 
-  const response = await axios.post(
-    `${API_URL}/reward-name`,
-    { newRewardName: normalizedRewardName },
-    {
-      headers: {
-        Authorization: `Bearer ${idToken}`,
+  let response;
+  try {
+    response = await axios.post(
+      `${API_URL}/reward-name`,
+      { newRewardName: normalizedRewardName },
+      {
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
       },
-    },
-  );
+    );
+  } catch (error) {
+    const message = rejectedRewardNameMessage(error);
+    if (message) {
+      throw new RewardNameError(message);
+    }
+    throw error;
+  }
   return parseRewardNameResponse(response.data);
 };
 

@@ -5,7 +5,12 @@ import React, {
   useContext,
 } from 'react';
 import styles from './setting.module.css';
-import { updateRewardName } from '../apiService';
+import {
+  MAX_REWARD_NAME_LENGTH,
+  RewardNameError,
+  rewardNameLength,
+  updateRewardName,
+} from '../apiService';
 import { toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { RewardNameContext } from './RewardNameContext';
@@ -71,13 +76,24 @@ const RewardsNameSetting: FunctionComponent = () => {
       setIsEditing(false);
       setJustSaved(true);
       toast.success('Reward name has been updated successfully!');
-    } catch {
-      setSaveError("We couldn't save the reward name. Try again.");
+    } catch (error) {
+      // A refused name says what to change; anything else is worth a retry.
+      setSaveError(
+        error instanceof RewardNameError
+          ? error.message
+          : "We couldn't save the reward name. Try again.",
+      );
       toast.error('Error updating reward name.');
     } finally {
       setSaving(false);
     }
   };
+
+  // The input has no maxLength: the DOM counts UTF-16 units and would cut an
+  // emoji name off early, so the count (in code points, as the backend counts)
+  // is what tells the admin they have gone over, and it keeps counting past
+  // zero to do that.
+  const remaining = MAX_REWARD_NAME_LENGTH - rewardNameLength(currency.trim());
 
   return (
     <section className={styles.section} aria-labelledby="rewards-heading">
@@ -103,52 +119,62 @@ const RewardsNameSetting: FunctionComponent = () => {
             </span>
           </>
         ) : rewardName !== null ? (
-          <div className={styles.inputRow}>
-            <input
-              id="reward-name-input"
-              type="text"
-              value={currency}
-              onChange={event => {
-                setCurrency(event.target.value);
-                setTouched(true);
-                setSaveError(null);
-                setJustSaved(false);
-              }}
-              disabled={!isEditing || saving}
-              className={`${styles.textBox} ${isEditing ? styles.editing : ''}`}
-              title="Reward name"
-              placeholder="Enter reward name"
-              aria-invalid={saveError ? 'true' : undefined}
-            />
-            {isAdmin &&
-              (saving ? (
-                <button
-                  type="button"
-                  disabled
-                  aria-busy="true"
-                  className={styles.primaryButton}
-                >
-                  Saving…
-                </button>
-              ) : !isEditing ? (
-                <button
-                  type="button"
-                  onClick={handleEditClick}
-                  className={styles.secondaryButton}
-                >
-                  Edit
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleSaveClick}
-                  className={styles.primaryButton}
-                  disabled={saving}
-                >
-                  Save
-                </button>
-              ))}
-          </div>
+          <>
+            <div className={styles.inputRow}>
+              <input
+                id="reward-name-input"
+                type="text"
+                value={currency}
+                onChange={event => {
+                  setCurrency(event.target.value);
+                  setTouched(true);
+                  setSaveError(null);
+                  setJustSaved(false);
+                }}
+                disabled={!isEditing || saving}
+                className={`${styles.textBox} ${isEditing ? styles.editing : ''}`}
+                title="Reward name"
+                placeholder="Enter reward name"
+                aria-invalid={saveError ? 'true' : undefined}
+                aria-describedby={isEditing ? 'reward-name-count' : undefined}
+              />
+              {isAdmin &&
+                (saving ? (
+                  <button
+                    type="button"
+                    disabled
+                    aria-busy="true"
+                    className={styles.primaryButton}
+                  >
+                    Saving…
+                  </button>
+                ) : !isEditing ? (
+                  <button
+                    type="button"
+                    onClick={handleEditClick}
+                    className={styles.secondaryButton}
+                  >
+                    Edit
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSaveClick}
+                    className={styles.primaryButton}
+                    disabled={saving}
+                  >
+                    Save
+                  </button>
+                ))}
+            </div>
+            {isEditing ? (
+              <p id="reward-name-count" className={styles.helperText}>
+                {remaining >= 0
+                  ? `${remaining} characters left`
+                  : `${-remaining} character${remaining === -1 ? '' : 's'} over the limit`}
+              </p>
+            ) : null}
+          </>
         ) : null}
 
         {loadError ? (

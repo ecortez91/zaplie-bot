@@ -2,6 +2,7 @@ import React, { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import RewardsNameSetting from './RewardsNameSetting';
 import { RewardNameContext } from './RewardNameContext';
+import { RewardNameError } from '../apiService';
 
 const mockUseMsal = jest.fn();
 const mockAcquireIdToken = jest.fn();
@@ -19,6 +20,7 @@ jest.mock('../services/adminRole', () => ({
 }));
 
 jest.mock('../apiService', () => ({
+  ...jest.requireActual('../apiService'),
   updateRewardName: (idToken: string, rewardName: string) =>
     mockUpdateRewardName(idToken, rewardName),
 }));
@@ -224,5 +226,68 @@ describe('RewardsNameSetting', () => {
     });
 
     expect(container.querySelector('input')?.value).toBe('Karma');
+  });
+
+  test('shows why a reward name was refused instead of the generic retry', async () => {
+    const setRewardName = jest.fn();
+    mockUpdateRewardName.mockRejectedValue(
+      new RewardNameError('The reward name must be at most 32 characters.'),
+    );
+
+    await renderSetting({
+      rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
+      setRewardName,
+      isLoading: false,
+      error: null,
+      retry: jest.fn(),
+    });
+
+    await act(async () => {
+      getButton('Edit').click();
+    });
+    await act(async () => {
+      getButton('Save').click();
+    });
+    await eventually(() => {
+      expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+        'The reward name must be at most 32 characters.',
+      );
+    });
+    expect(setRewardName).not.toHaveBeenCalled();
+    expect(
+      (container.querySelector('input') as HTMLInputElement).disabled,
+    ).toBe(false);
+  });
+
+  test('counts the characters left while editing, past the limit too', async () => {
+    await renderSetting({
+      rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
+      setRewardName: jest.fn(),
+      isLoading: false,
+      error: null,
+      retry: jest.fn(),
+    });
+
+    await act(async () => {
+      getButton('Edit').click();
+    });
+    const count = () =>
+      container.querySelector('#reward-name-count')?.textContent;
+    expect(count()).toBe('28 characters left');
+
+    const input = container.querySelector('input');
+    if (!input) throw new Error('Reward name input was not rendered.');
+    // An emoji is one character, as the backend counts it.
+    await act(async () => {
+      setInputValue(input, '🎉'.repeat(32));
+    });
+    expect(count()).toBe('0 characters left');
+
+    await act(async () => {
+      setInputValue(input, 'a'.repeat(33));
+    });
+    expect(count()).toBe('1 character over the limit');
   });
 });
