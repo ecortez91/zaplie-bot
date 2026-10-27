@@ -61,7 +61,8 @@ else sees the values read-only.
 1. **Connections**: add each repository (`owner/repo`) that should earn
    rewards. A delivery from any other repository is refused with 403.
 2. **Reward rules**: set the amount for "pull request merged". Until it is set
-   the card reads "Not set: pays nothing" and the bot answers 503.
+   the card reads "Not set: pays nothing unless a person has an override",
+   and a reward for anyone without an override answers 503.
 3. **Reward policy → Budget**: weekly or monthly, the cap in sats, and the
    time zone the period follows. Until a budget is set (here or in the
    `REWARDS_BUDGET_*` settings) every reward answers 503.
