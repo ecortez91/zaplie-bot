@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { findUniqueUserByAadObjectId, parseExtra } = require('./lnbitsUserDirectory');
+const {
+  findUniqueUserByAadObjectId,
+  listPeople,
+  parseExtra,
+} = require('./lnbitsUserDirectory');
 
 test('parses object and JSON-string LNbits user metadata', () => {
   assert.deepEqual(parseExtra({ extra: { aadObjectId: 'aad-1' } }), {
@@ -47,4 +51,27 @@ test('fails loud for malformed or ambiguous directory data', () => {
       ),
     /More than one LNbits user is linked/,
   );
+});
+
+test('lists people by Entra id and name only, never wallets or keys', () => {
+  const OID_A = 'AAAAAAAA-1111-2222-3333-444444444444';
+  const OID_B = 'bbbbbbbb-1111-2222-3333-444444444444';
+  const users = [
+    {
+      id: 'user-1',
+      external_id: OID_A,
+      username: 'zed',
+      extra: { display_name: 'Zed Person', adminkey: 'never-returned' },
+      wallets: [{ adminkey: 'never-returned' }],
+    },
+    { id: 'user-2', extra: { aadObjectId: OID_B }, username: 'amy' },
+    { id: 'treasury', username: 'automation' },
+    { id: 'user-3', external_id: 'not-a-guid' },
+  ];
+
+  assert.deepEqual(listPeople(users), [
+    { personAad: OID_B, displayName: 'amy' },
+    { personAad: OID_A.toLowerCase(), displayName: 'Zed Person' },
+  ]);
+  assert.throws(() => listPeople(null), /not an array/);
 });

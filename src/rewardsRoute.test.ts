@@ -20,7 +20,7 @@ import {
 } from './rewardsRoute';
 import { getWebhookKeyHashes } from './services/fetchWebhookKeys';
 import { RewardLedger, rewardKey } from './services/rewardLedger';
-import { RewardError } from './services/rewardsService';
+import { RewardAmount, RewardError } from './services/rewardsService';
 import {
   createInvoice,
   getUserWalletsByUserId,
@@ -74,6 +74,13 @@ const paidBody = {
   amountSats: 21,
 };
 
+const AMOUNT_21: RewardAmount = {
+  amountSats: 21,
+  baseSats: 21,
+  bonusSats: 0,
+  level: null,
+};
+
 const tempDirectories: string[] = [];
 const servers: http.Server[] = [];
 let storePath: string;
@@ -81,7 +88,7 @@ let ledger: RewardLedger;
 let deps: {
   isAuthorizedRewardKey: jest.Mock<(key: string) => Promise<boolean>>;
   assertRepoConnected: jest.Mock<(repo: string) => Promise<void>>;
-  resolveAmountSats: jest.Mock<() => Promise<number>>;
+  resolveAmountSats: jest.Mock<() => Promise<RewardAmount>>;
   recordRewardOutcome: jest.Mock<(outcome: unknown) => void>;
 };
 const savedTreasuryKey = process.env.REWARDS_TREASURY_ADMINKEY;
@@ -147,7 +154,7 @@ beforeEach(() => {
   deps = {
     isAuthorizedRewardKey: jest.fn(async (key: string) => key === API_KEY),
     assertRepoConnected: jest.fn(async () => undefined),
-    resolveAmountSats: jest.fn(async () => 21),
+    resolveAmountSats: jest.fn(async () => AMOUNT_21),
     recordRewardOutcome: jest.fn(),
   };
   process.env.REWARDS_TREASURY_ADMINKEY = 'treasury-admin-key';

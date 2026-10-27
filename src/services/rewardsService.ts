@@ -3,9 +3,12 @@ import {
   createInvoice,
   payInvoice,
 } from './lnbitsService';
-import { getRewardAmounts } from './fetchRewardAmounts';
+import { getRewardConfig } from './fetchRewardPolicy';
 import { getAutomations } from './fetchAutomations';
-import { resolveRewardRecipientByGithubId } from './identityService';
+import {
+  ResolvedRewardRecipient,
+  resolveRewardRecipientByGithubId,
+} from './identityService';
 import {
   createPendingReward,
   PendingRewardWriteUncertainError,
@@ -62,6 +65,17 @@ export interface RewardRequest {
   repo: string; // owner/repo, checked against the connected-repos allowlist
   reason: string;
   source: 'github';
+  // Label names on the PR at merge. Not part of the reward's identity: a
+  // relabel after the first delivery changes nothing (the ledger replays).
+  labels: string[];
+}
+
+/** The configured amount for one reward and how it was made up. */
+export interface RewardAmount {
+  amountSats: number;
+  baseSats: number;
+  bonusSats: number;
+  level: string | null;
 }
 
 export interface ResolvedRewardRequest {
@@ -72,6 +86,31 @@ export interface ResolvedRewardRequest {
   repo?: string;
   reason: string;
   source: string;
+  baseSats?: number;
+  bonusSats?: number;
+  level?: string | null;
+}
+
+const LABEL_PATTERN = /^[ -~]{1,50}$/;
+const MAX_LABELS = 50;
+
+function parseLabels(labels: unknown): string[] {
+  if (labels === undefined) {
+    return [];
+  }
+  if (
+    !Array.isArray(labels) ||
+    labels.length > MAX_LABELS ||
+    !labels.every(
+      label => typeof label === 'string' && LABEL_PATTERN.test(label),
+    )
+  ) {
+    throw new RewardError(
+      `labels must be up to ${MAX_LABELS} printable ASCII strings of 1-50 characters`,
+      400,
+    );
+  }
+  return labels as string[];
 }
 
 export function parseRewardRequest(body: unknown): RewardRequest {
@@ -83,6 +122,7 @@ export function parseRewardRequest(body: unknown): RewardRequest {
     repo,
     reason,
     source,
+    labels,
   } = (body ?? {}) as Record<string, unknown>;
   if (typeof recipient !== 'string' || recipient.trim().length === 0) {
     throw new RewardError('recipient must be a non-empty string', 400);
@@ -115,6 +155,7 @@ export function parseRewardRequest(body: unknown): RewardRequest {
   if (source !== 'github') {
     throw new RewardError('source must be github', 400);
   }
+  const parsedLabels = parseLabels(labels);
   return {
     recipient: recipient.trim(),
     // GitHub ids are numbers over the wire; store as a string to match the identity store's key
@@ -123,6 +164,7 @@ export function parseRewardRequest(body: unknown): RewardRequest {
     repo,
     reason: reason.trim(),
     source,
+    labels: parsedLabels,
   };
 }
 
@@ -157,19 +199,59 @@ function isValidRewardAmount(amountSats: unknown): amountSats is number {
   return isPositiveInteger(amountSats) && amountSats <= maxAmountSats();
 }
 
+/**
+ * The level bonus for a set of labels: the largest configured bonus whose
+ * `labelPrefix + level` is on the PR. One bonus, never a sum; labels are
+ * matched case-insensitively, as GitHub treats them.
+ */
+export function selectLevel(
+  labels: readonly string[],
+  rule: { labelPrefix: string; bonuses: Record<string, number> } | undefined,
+): { level: string; bonusSats: number } | null {
+  if (!rule) {
+    return null;
+  }
+  const present = new Set(labels.map(label => label.toLowerCase()));
+  let best: { level: string; bonusSats: number } | null = null;
+  for (const [level, bonusSats] of Object.entries(rule.bonuses)) {
+    if (
+      present.has(`${rule.labelPrefix}${level}`.toLowerCase()) &&
+      (best === null || bonusSats > best.bonusSats)
+    ) {
+      best = { level, bonusSats };
+    }
+  }
+  return best;
+}
+
+/**
+ * The amount for a reward, from the admin's settings only: the person's base
+ * override for this event, else the org base, plus the bonus for the highest
+ * level label on the PR. An unlinked recipient (null) gets the org base.
+ *
+ * @throws RewardError 503 when no base is configured for the event
+ * @throws Error when the total is not a positive integer within
+ *   REWARDS_MAX_AMOUNT_SATS, or the portal policy is unreadable
+ */
 export async function resolveAmountSats(
   request: RewardRequest,
-): Promise<number> {
+  recipient: ResolvedRewardRecipient | null,
+): Promise<RewardAmount> {
   const eventType = request.eventType;
   const configKey = `${eventType}Sats`;
-  const rewardAmounts = await getRewardAmounts();
-  const amountSats = Object.prototype.hasOwnProperty.call(
-    rewardAmounts,
-    configKey,
-  )
+  const { rewardAmounts, rewardPolicy } = await getRewardConfig();
+
+  const personAad = recipient?.personAad.toLowerCase();
+  const override =
+    personAad !== undefined &&
+    Object.prototype.hasOwnProperty.call(rewardPolicy.overrides, personAad)
+      ? rewardPolicy.overrides[personAad][eventType]
+      : undefined;
+  const orgBase = Object.prototype.hasOwnProperty.call(rewardAmounts, configKey)
     ? rewardAmounts[configKey]
     : undefined;
-  if (amountSats === undefined) {
+  const baseSats = override?.baseSats ?? orgBase;
+  if (baseSats === undefined) {
     // Not the caller's fault: an admin has not set this amount yet, so the
     // service is unavailable for this event until they do (fail closed).
     throw new RewardError(
@@ -177,12 +259,21 @@ export async function resolveAmountSats(
       503,
     );
   }
+
+  const selected = selectLevel(request.labels, rewardPolicy.levels[eventType]);
+  const bonusSats = selected?.bonusSats ?? 0;
+  const amountSats = baseSats + bonusSats;
   if (!isValidRewardAmount(amountSats)) {
     throw new Error(
       `configured amount for '${configKey}' is invalid: ${amountSats}`,
     );
   }
-  return amountSats;
+  return {
+    amountSats,
+    baseSats,
+    bonusSats,
+    level: selected?.level ?? null,
+  };
 }
 
 // 10000 matches the portal's documented default for this variable.
@@ -200,25 +291,24 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-// Resolve the recipient to an LNbits user through the identity graph, keyed on the
-// stable GitHub id. A recipient who hasn't linked their GitHub yet returns null so
-// the caller holds the reward pending instead of dropping the recognition.
-async function resolveRecipientUserId(
-  reward: ResolvedRewardRequest,
-): Promise<string | null> {
-  if (!reward.recipientId) {
+/**
+ * Resolves the recipient through the identity graph, keyed on the stable
+ * GitHub id. A recipient who hasn't linked GitHub yet is null, so the reward
+ * is held pending instead of dropped.
+ *
+ * Runs before the amount, because a person's base override depends on who
+ * they are. Any error here happens before payment, so a retry is safe.
+ */
+export async function resolveRewardRecipient(request: {
+  recipientId?: string;
+}): Promise<ResolvedRewardRecipient | null> {
+  if (!request.recipientId) {
     throw new RewardError(
       'recipientId is required to resolve the recipient',
       400,
     );
   }
-  const resolvedRecipient = await resolveRewardRecipientByGithubId(
-    reward.recipientId,
-  );
-  if (!resolvedRecipient) {
-    return null;
-  }
-  return resolvedRecipient.lnbitsUserId;
+  return resolveRewardRecipientByGithubId(request.recipientId);
 }
 
 /**
@@ -232,11 +322,17 @@ async function resolveRecipientUserId(
  */
 export async function payReward(
   reward: ResolvedRewardRequest,
+  recipient: ResolvedRewardRecipient | null,
 ): Promise<{ paymentHash: string } | { pending: true }> {
   const treasuryAdminKey = requiredEnv('REWARDS_TREASURY_ADMINKEY');
 
-  const userId = await resolveRecipientUserId(reward);
-  if (userId === null) {
+  if (recipient === null) {
+    if (!reward.recipientId) {
+      throw new RewardError(
+        'recipientId is required to queue a pending reward',
+        400,
+      );
+    }
     try {
       await createPendingReward({
         provider: 'github',
@@ -260,6 +356,7 @@ export async function payReward(
     return { pending: true };
   }
 
+  const userId = recipient.lnbitsUserId;
   const wallets = await getUserWalletsByUserId(userId);
   if (!Array.isArray(wallets)) {
     throw new Error(`Could not read the wallets for LNbits user ${userId}`);
@@ -278,6 +375,10 @@ export async function payReward(
     eventType: reward.eventType,
     repo: reward.repo,
     source: reward.source,
+    // How the amount was made up: numbers and a short level name, no names.
+    ...(reward.baseSats !== undefined ? { baseSats: reward.baseSats } : {}),
+    ...(reward.bonusSats !== undefined ? { bonusSats: reward.bonusSats } : {}),
+    ...(reward.level !== undefined ? { level: reward.level } : {}),
     // The bot holds only the treasury wallet's admin key, not its wallet
     // object, and a lookup just to fill id/name/user would put an LNbits round
     // trip on the payment path for fields no reader uses (see SOLUTION_DESIGN).

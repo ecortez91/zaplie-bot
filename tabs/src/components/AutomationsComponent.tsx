@@ -506,7 +506,7 @@ const AutomationsComponent: FunctionComponent = () => {
 
   const handleStartEdit = (key: string) => {
     setEditingKey(key);
-    setEditingValue(String(amounts[key]));
+    setEditingValue(amounts[key] === undefined ? '' : String(amounts[key]));
   };
 
   const handleSaveAmount = async (key: string) => {
@@ -556,7 +556,7 @@ const AutomationsComponent: FunctionComponent = () => {
     key => !key.revokedAt,
   ).length;
   const visibleRuleKeys = RULE_ORDER.filter(
-    key => key in amounts && RULE_META[key].audience === ruleAudience,
+    key => RULE_META[key].audience === ruleAudience,
   );
 
   return (
@@ -1042,10 +1042,18 @@ const AutomationsComponent: FunctionComponent = () => {
                         src={ZapIcon}
                         alt=""
                       />
-                      <span className={styles.ruleAmountValue}>
-                        {NUMBER_FORMATTER.format(amounts[key])}
-                      </span>
-                      <span className={styles.ruleAmountUnit}>Sats</span>
+                      {amounts[key] === undefined ? (
+                        <span className={styles.ruleAmountUnit}>
+                          Not set: pays nothing unless a person has an override
+                        </span>
+                      ) : (
+                        <>
+                          <span className={styles.ruleAmountValue}>
+                            {NUMBER_FORMATTER.format(amounts[key])}
+                          </span>
+                          <span className={styles.ruleAmountUnit}>Sats</span>
+                        </>
+                      )}
                     </span>
                   )}
                   {isAdmin &&
@@ -1069,7 +1077,9 @@ const AutomationsComponent: FunctionComponent = () => {
                         className={styles.cardEditButton}
                         onClick={() => handleStartEdit(key)}
                       >
-                        Edit amount
+                        {amounts[key] === undefined
+                          ? 'Set amount'
+                          : 'Edit amount'}
                       </button>
                     ))}
                 </div>

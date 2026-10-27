@@ -184,6 +184,22 @@ describe('AutomationsComponent panel independence', () => {
     expect(card?.textContent).not.toContain('durable idempotency');
   });
 
+  test('a rule with no saved amount is listed as not set, so an admin can set it', async () => {
+    // /api/reward-amounts returns only saved amounts (none here), never defaults.
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+
+    await renderAutomations();
+
+    expect(container.textContent).toContain(
+      'Not set: pays nothing unless a person has an override',
+    );
+    expect(
+      Array.from(container.querySelectorAll('button')).some(
+        button => button.textContent === 'Set amount',
+      ),
+    ).toBe(true);
+  });
+
   test('shows a stats-only error and keeps the other panels when stats rejects', async () => {
     mockGetAutomationsStats.mockRejectedValue(
       new Error('Automations stats response is malformed.'),

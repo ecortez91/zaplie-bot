@@ -10,11 +10,21 @@ const { writeJsonSecure } = require('./secureJsonStore');
 const identityRoutes = require('./identityRoutes');
 const pendingRewardsStore = require('./pendingRewardsStore');
 const {
-  DEFAULT_REWARD_AMOUNTS,
   migrateRewardAmounts,
   validateRewardAmountPatch,
 } = require('./rewardAmounts');
 const { validateBotPersona, readStoredBotPersona } = require('./botPersona');
+const { maxRewardSats } = require('./rewardAmounts');
+const {
+  RewardPolicyError,
+  applyRewardPolicyPatch,
+  assertRewardConfigWithinCap,
+  emptyPolicy,
+  parseRewardPolicy,
+  readRewardPolicy,
+  readRewardPolicyStructure,
+  readStoredRewardAmounts,
+} = require('./rewardPolicy');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -65,8 +75,6 @@ app.use('/api/setup', require('./setupRoutes'));
 
 const { requireAdmin } = require('./adminAuth');
 const { requireSignedInOrBot } = require('./readAuth');
-
-const defaultRewardAmounts = DEFAULT_REWARD_AMOUNTS;
 
 // Mutable state must survive a clean deploy, so in production it lives
 // outside the deployment tree: ZAPLIE_DATA_DIR points at a durable directory
@@ -123,26 +131,47 @@ app.post('/api/reward-amounts', requireAdmin, (req, res) => {
     return;
   }
 
+  // The stored values are read for shape only, not against the cap: an admin
+  // who lowered REWARDS_MAX_AMOUNT_SATS below a stored amount must still be
+  // able to save the correction. The cap is checked on the result below.
   const data = readData();
   let storedRewardAmounts;
   try {
-    storedRewardAmounts = migrateRewardAmounts(data.rewardAmounts);
+    storedRewardAmounts = readStoredRewardAmounts(data);
   } catch (error) {
     res.status(500).send({
       message: `Stored reward amounts are invalid: ${error.message}`,
     });
     return;
   }
+  let currentPolicy;
+  try {
+    currentPolicy =
+      data.rewardPolicy === undefined
+        ? emptyPolicy()
+        : parseRewardPolicy(data.rewardPolicy);
+  } catch (error) {
+    res.status(500).send({ message: `Stored reward policy is invalid: ${error.message}` });
+    return;
+  }
+
+  // Only what an admin saved is stored: merging the defaults here would turn
+  // one saved amount into three configured ones, and an unconfigured event
+  // must pay nothing (the bot fails closed on it).
   const nextRewardAmounts = {
-    ...defaultRewardAmounts,
     ...storedRewardAmounts,
     ...rewardAmounts,
   };
-  const storedValidation = validateRewardAmountPatch(nextRewardAmounts);
-  if (!storedValidation.valid) {
-    res.status(500).send({
-      message: `Stored reward amounts are invalid: ${storedValidation.message}`,
-    });
+
+  // Every amount, and each base plus the largest level bonus or per-person
+  // override, must fit under REWARDS_MAX_AMOUNT_SATS after the patch.
+  try {
+    assertRewardConfigWithinCap(
+      { rewardAmounts: nextRewardAmounts, rewardPolicy: currentPolicy },
+      maxRewardSats(),
+    );
+  } catch (error) {
+    res.status(400).send({ message: error.message });
     return;
   }
 
@@ -154,6 +183,47 @@ app.post('/api/reward-amounts', requireAdmin, (req, res) => {
   res.send({
     message: 'Reward amounts updated successfully',
     rewardAmounts: data.rewardAmounts,
+  });
+});
+
+// The reward policy: level bonuses, per-person base overrides and the period
+// budget. Each supplied top-level key replaces the stored one; anything else
+// in the body is refused.
+app.post('/api/reward-policy', requireAdmin, (req, res) => {
+  const data = readData();
+  let current;
+  let cap;
+  try {
+    cap = maxRewardSats();
+    // Shape only: a stored value over a since-lowered cap must not block the
+    // patch that corrects it. applyRewardPolicyPatch checks the cap on the
+    // result.
+    current = readRewardPolicyStructure(data);
+  } catch (error) {
+    res.status(500).send({ message: `Stored reward policy is invalid: ${error.message}` });
+    return;
+  }
+
+  let nextPolicy;
+  try {
+    nextPolicy = applyRewardPolicyPatch(current, req.body, cap);
+  } catch (error) {
+    if (error instanceof RewardPolicyError) {
+      res.status(400).send({ message: error.message });
+      return;
+    }
+    throw error;
+  }
+
+  data.rewardPolicy = nextPolicy;
+  if (!writeData(data)) {
+    res.status(500).send({ message: 'Reward policy could not be persisted' });
+    return;
+  }
+  res.send({
+    message: 'Reward policy updated successfully',
+    rewardAmounts: current.rewardAmounts,
+    rewardPolicy: nextPolicy,
   });
 });
 
@@ -222,20 +292,37 @@ app.get('/api/bot-persona', requireSignedInOrBot, (req, res) => {
   res.send({ botPersona: readStoredBotPersona(data.botPersona) });
 });
 
-// Endpoint to get automation reward amounts
+// Endpoint to get automation reward amounts. Only what an admin saved, no
+// defaults merged: an unset event is not configured and pays nothing, the
+// same fail-closed rule as /api/reward-policy and the bot.
 app.get('/api/reward-amounts', requireSignedInOrBot, (req, res) => {
   const data = readData();
   try {
-    const storedRewardAmounts = migrateRewardAmounts(data.rewardAmounts);
-    const rewardAmounts = { ...defaultRewardAmounts, ...storedRewardAmounts };
-    const validation = validateRewardAmountPatch(rewardAmounts);
-    if (!validation.valid) {
-      throw new Error(validation.message);
+    const rewardAmounts = migrateRewardAmounts(data.rewardAmounts);
+    if (Object.keys(rewardAmounts).length > 0) {
+      const validation = validateRewardAmountPatch(rewardAmounts);
+      if (!validation.valid) {
+        throw new Error(validation.message);
+      }
     }
     res.send({ rewardAmounts });
   } catch (error) {
     res.status(500).send({
       message: `Stored reward amounts are invalid: ${error.message}`,
+    });
+  }
+});
+
+// What the bot pays from, in one response: the amounts an admin saved (no
+// defaults merged, so an unconfigured event is absent) and the validated
+// policy. A malformed store is a 500, and the bot then refuses to pay.
+app.get('/api/reward-policy', requireSignedInOrBot, (req, res) => {
+  const data = readData();
+  try {
+    res.send(readRewardPolicy(data));
+  } catch (error) {
+    res.status(500).send({
+      message: `Stored reward policy is invalid: ${error.message}`,
     });
   }
 });

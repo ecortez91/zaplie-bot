@@ -1,12 +1,15 @@
 import {
   parseRewardRequest,
   resolveAmountSats,
+  resolveRewardRecipient,
   assertRepoConnected,
   payReward,
+  RewardAmount,
   RewardError,
   RewardPaymentUncertainError,
 } from './rewardsService';
 import { recordRewardOutcome } from './pulse';
+import { ResolvedRewardRecipient } from './identityService';
 import {
   PaidRewardResponse,
   PendingRewardResponse,
@@ -31,6 +34,7 @@ export interface ProcessRewardDeps {
   >;
   parseRewardRequest?: typeof parseRewardRequest;
   assertRepoConnected?: typeof assertRepoConnected;
+  resolveRewardRecipient?: typeof resolveRewardRecipient;
   resolveAmountSats?: typeof resolveAmountSats;
   payReward?: typeof payReward;
   recordRewardOutcome?: typeof recordRewardOutcome;
@@ -98,6 +102,7 @@ export const processReward = async (
     ledger,
     parseRewardRequest: parse = parseRewardRequest,
     assertRepoConnected: assertConnected = assertRepoConnected,
+    resolveRewardRecipient: resolveRecipient = resolveRewardRecipient,
     resolveAmountSats: resolveAmount = resolveAmountSats,
     payReward: pay = payReward,
     recordRewardOutcome: record = recordRewardOutcome,
@@ -170,11 +175,17 @@ export const processReward = async (
   }
 
   let amountSats: number;
+  let recipient: ResolvedRewardRecipient | null;
+  let amount: RewardAmount;
   try {
     // Restricted to GitHub. Generic flow identities need a separate
     // provider-aware contract before they can pay.
     await assertConnected(request.repo);
-    amountSats = await resolveAmount(request);
+    // Who before how much: a person's base override depends on who they
+    // are. A resolution failure is before payment, so the key is released.
+    recipient = await resolveRecipient(request);
+    amount = await resolveAmount(request, recipient);
+    amountSats = amount.amountSats;
   } catch (error) {
     await release();
     return fail(error);
@@ -182,7 +193,16 @@ export const processReward = async (
 
   let result;
   try {
-    result = await pay({ ...request, amountSats });
+    result = await pay(
+      {
+        ...request,
+        amountSats,
+        baseSats: amount.baseSats,
+        bonusSats: amount.bonusSats,
+        level: amount.level,
+      },
+      recipient,
+    );
   } catch (error) {
     if (error instanceof RewardPaymentUncertainError) {
       // It may have paid, or queued a pending reward that pays later, so
