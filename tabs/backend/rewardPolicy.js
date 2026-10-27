@@ -218,11 +218,14 @@ const assertWithinCap = (policy, rewardAmounts, cap) => {
 };
 
 /**
- * Validates a whole policy against the per-reward cap.
+ * Validates a policy's shape only: keys, types and value ranges, but not the
+ * per-reward cap. Write paths use it so a stored value above a since-lowered
+ * cap can still be read and corrected; anything that feeds a payment must
+ * also call assertWithinCap (validateRewardPolicy does both).
  *
  * @throws RewardPolicyError with a message an admin can act on
  */
-const validateRewardPolicy = (policy, rewardAmounts, cap) => {
+const parseRewardPolicy = (policy) => {
   if (!isPlainObject(policy)) {
     throw new RewardPolicyError('rewardPolicy must be an object');
   }
@@ -231,14 +234,58 @@ const validateRewardPolicy = (policy, rewardAmounts, cap) => {
     throw new RewardPolicyError(`rewardPolicy.version must be ${POLICY_VERSION}`);
   }
   onlyKeys(rest, POLICY_KEYS, 'rewardPolicy');
-  const validated = {
+  return {
     version: POLICY_VERSION,
     levels: validateLevels(rest.levels ?? {}),
     overrides: validateOverrides(rest.overrides ?? {}),
     budget: validateBudget(rest.budget ?? null),
   };
+};
+
+/**
+ * Validates a whole policy, shape and per-reward cap.
+ *
+ * @throws RewardPolicyError with a message an admin can act on
+ */
+const validateRewardPolicy = (policy, rewardAmounts, cap) => {
+  const validated = parseRewardPolicy(policy);
   assertWithinCap(validated, rewardAmounts, cap);
   return validated;
+};
+
+/**
+ * The reward amounts an admin saved, checked for shape only (known rules,
+ * positive integers) and not against the cap.
+ *
+ * @throws RewardPolicyError when the stored value is malformed
+ */
+const readStoredRewardAmounts = (data) => {
+  let stored;
+  try {
+    stored = migrateRewardAmounts(data.rewardAmounts);
+  } catch (error) {
+    throw new RewardPolicyError(error.message);
+  }
+  for (const [key, value] of Object.entries(stored)) {
+    if (!Object.prototype.hasOwnProperty.call(DEFAULT_REWARD_AMOUNTS, key)) {
+      throw new RewardPolicyError(`unknown reward rule ${key}`);
+    }
+    if (!isPositiveInt(value)) {
+      throw new RewardPolicyError(`${key} must be a positive integer`);
+    }
+  }
+  return stored;
+};
+
+/**
+ * @throws RewardPolicyError when any amount is above the per-reward cap
+ */
+const assertAmountsWithinCap = (rewardAmounts, cap) => {
+  for (const [key, value] of Object.entries(rewardAmounts)) {
+    if (value > cap) {
+      throw new RewardPolicyError(`${key} exceeds the per-reward cap of ${cap}`);
+    }
+  }
 };
 
 /**
@@ -248,39 +295,59 @@ const validateRewardPolicy = (policy, rewardAmounts, cap) => {
  * @throws Error when the stored value is malformed or above the cap
  */
 const readConfiguredRewardAmounts = (data, cap) => {
-  const stored = migrateRewardAmounts(data.rewardAmounts);
-  for (const [key, value] of Object.entries(stored)) {
-    if (!Object.prototype.hasOwnProperty.call(DEFAULT_REWARD_AMOUNTS, key)) {
-      throw new RewardPolicyError(`unknown reward rule ${key}`);
-    }
-    if (!isPositiveInt(value) || value > cap) {
-      throw new RewardPolicyError(`${key} must be a positive integer up to ${cap}`);
-    }
-  }
+  const stored = readStoredRewardAmounts(data);
+  assertAmountsWithinCap(stored, cap);
   return stored;
 };
 
 /**
- * The stored policy, validated again on every read so a hand-edited
- * data.json fails closed instead of paying something nobody chose.
+ * The stored amounts and policy, checked for shape only. For the admin write
+ * paths: lowering REWARDS_MAX_AMOUNT_SATS below a stored value must not lock
+ * the admin out of correcting it. The written result is checked with
+ * assertRewardConfigWithinCap before it is stored.
  *
- * @throws Error when the stored policy or amounts are malformed
+ * @throws RewardPolicyError when the stored amounts or policy are malformed
+ */
+const readRewardPolicyStructure = (data) => ({
+  rewardAmounts: readStoredRewardAmounts(data),
+  rewardPolicy:
+    data.rewardPolicy === undefined
+      ? emptyPolicy()
+      : parseRewardPolicy(data.rewardPolicy),
+});
+
+/**
+ * The cap check for a whole configuration: every amount, and every base plus
+ * the largest bonus, within the per-reward cap.
+ *
+ * @throws RewardPolicyError naming the first value over the cap
+ */
+const assertRewardConfigWithinCap = ({ rewardAmounts, rewardPolicy }, cap) => {
+  assertAmountsWithinCap(rewardAmounts, cap);
+  assertWithinCap(rewardPolicy, rewardAmounts, cap);
+};
+
+/**
+ * The stored policy, validated again on every read so a hand-edited
+ * data.json fails closed instead of paying something nobody chose. This is
+ * what the bot pays from, so a value above the cap is an error here.
+ *
+ * @throws Error when the stored policy or amounts are malformed or over the cap
  */
 const readRewardPolicy = (data) => {
   const cap = maxRewardSats();
-  const rewardAmounts = readConfiguredRewardAmounts(data, cap);
-  const rewardPolicy =
-    data.rewardPolicy === undefined
-      ? emptyPolicy()
-      : validateRewardPolicy(data.rewardPolicy, rewardAmounts, cap);
-  return { rewardAmounts, rewardPolicy };
+  const config = readRewardPolicyStructure(data);
+  assertRewardConfigWithinCap(config, cap);
+  return config;
 };
 
 /**
  * Applies an admin's patch: each supplied top-level key (`levels`,
- * `overrides`, `budget`) replaces the stored one whole.
+ * `overrides`, `budget`) replaces the stored one whole. The result, with the
+ * stored amounts, must be within the cap: a patch that lowers a value over a
+ * since-lowered cap is accepted, one that leaves anything over it is not.
  *
- * @param current the result of readRewardPolicy (already validated)
+ * @param current the result of readRewardPolicyStructure (shape-checked)
  * @returns the next policy to store
  * @throws RewardPolicyError for an invalid patch (a 400)
  */
@@ -289,8 +356,12 @@ const applyRewardPolicyPatch = (current, patch, cap) => {
     throw new RewardPolicyError('send at least one of levels, overrides, budget');
   }
   onlyKeys(patch, POLICY_KEYS, 'rewardPolicy');
-  const next = { ...current.rewardPolicy, ...patch };
-  return validateRewardPolicy(next, current.rewardAmounts, cap);
+  const next = parseRewardPolicy({ ...current.rewardPolicy, ...patch });
+  assertRewardConfigWithinCap(
+    { rewardAmounts: current.rewardAmounts, rewardPolicy: next },
+    cap,
+  );
+  return next;
 };
 
 module.exports = {
@@ -298,8 +369,13 @@ module.exports = {
   POLICY_VERSION,
   RewardPolicyError,
   applyRewardPolicyPatch,
+  assertRewardConfigWithinCap,
+  assertWithinCap,
   emptyPolicy,
+  parseRewardPolicy,
   readConfiguredRewardAmounts,
   readRewardPolicy,
+  readRewardPolicyStructure,
+  readStoredRewardAmounts,
   validateRewardPolicy,
 };
