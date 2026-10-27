@@ -1044,7 +1044,7 @@ const AutomationsComponent: FunctionComponent = () => {
                       />
                       {amounts[key] === undefined ? (
                         <span className={styles.ruleAmountUnit}>
-                          Not set: pays nothing
+                          Not set: pays nothing unless a person has an override
                         </span>
                       ) : (
                         <>
