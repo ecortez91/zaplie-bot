@@ -337,3 +337,230 @@ export const getPeople = async (idToken: string): Promise<Person[]> => {
   });
   return parsePeopleResponse(response.data);
 };
+
+// Weekly allowances: the policy the portal backend reconciles the LNbits
+// allowance extension with (backend/allowancePolicy.js enforces every rule).
+// The extension pays from the Fund wallet; nothing here ever carries a key.
+export type AllowancePeriod = 'weekly' | 'monthly';
+
+export interface AllowancePolicy {
+  version: 1;
+  enabled: boolean;
+  amountSats: number | null;
+  period: AllowancePeriod | null;
+  anchorWeekday: number | null;
+  anchorDay: number | null;
+  anchorTime: string | null;
+  timezone: string | null;
+  memo: string;
+  payLink: {
+    minSats: number | null;
+    maxSats: number | null;
+    commentChars: number;
+  };
+  overwriteDrift: boolean;
+  excludedOids: string[];
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export type AllowancePolicyPatch = Partial<
+  Omit<AllowancePolicy, 'version' | 'updatedAt' | 'updatedBy'>
+>;
+
+export interface AllowanceFundWallet {
+  id: string | null;
+  name: string;
+  balanceSats: number | null;
+}
+
+export interface AllowanceHealth {
+  healthy: boolean;
+  schedulerOk: boolean;
+  lastCompleted: number | null;
+  overdue: number | null;
+  pending: number | null;
+}
+
+export interface AllowanceRunSummary {
+  mode: 'dry' | 'apply';
+  at: string;
+  finishedAt?: string;
+  by: string;
+  created: number;
+  updated: number;
+  deleted: number;
+  payLinks: number;
+  drift: number;
+  errors: number;
+  aborted: string | null;
+  totalPerPeriodSats: number;
+}
+
+export interface AllowanceStatus {
+  policy: AllowancePolicy;
+  maxAmountSats: number;
+  fund: {
+    configured: boolean;
+    wallets: AllowanceFundWallet[];
+    health: AllowanceHealth | null;
+    error?: string;
+  };
+  lastRun: AllowanceRunSummary | null;
+  lastAdminApply: {
+    policyUpdatedAt: string | null;
+    totalPerPeriodSats: number;
+    at: string;
+    by: string;
+  } | null;
+  running: boolean;
+  timer: {
+    enabled: boolean;
+    disabled: boolean;
+    invalid: boolean;
+    intervalMinutes: number;
+  };
+}
+
+export interface AllowanceSyncAction {
+  kind: string;
+  oid: string | null;
+  displayName: string | null;
+  reason: string | null;
+  fields?: string[];
+  amountSats?: number;
+  lightningAddress?: string;
+  startDatetime?: string;
+  error?: string;
+}
+
+export interface AllowanceSyncSummary {
+  policyEnabled: boolean;
+  fundConfigured: boolean;
+  people: number;
+  paylinkCreates: number;
+  paylinkUpdates: number;
+  creates: number;
+  updates: number;
+  recreates: number;
+  deletes: number;
+  noop: number;
+  drift: number;
+  paused: number;
+  deferred: number;
+  skipped: number;
+  changes: number;
+  amountSats: number | null;
+  totalPerPeriodSats: number;
+  fundBalanceSats: number;
+  nextStart: string | null;
+}
+
+export interface AllowanceNotice {
+  code: string;
+  message: string;
+  overridable?: boolean;
+}
+
+export interface AllowanceSyncResult {
+  mode: 'dry' | 'apply';
+  at: string;
+  summary: AllowanceSyncSummary;
+  warnings: AllowanceNotice[];
+  blockers: AllowanceNotice[];
+  actions: AllowanceSyncAction[];
+  result?: AllowanceRunSummary;
+  errors?: AllowanceSyncAction[];
+}
+
+const isNonNegativeInteger = (value: unknown): value is number =>
+  isFiniteNumber(value) && Number.isInteger(value) && value >= 0;
+
+export const parseAllowanceStatus = (data: unknown): AllowanceStatus => {
+  const invalid = new Error('The allowance status response was invalid.');
+  if (
+    !isPlainObject(data) ||
+    !isPlainObject(data.policy) ||
+    typeof data.policy.enabled !== 'boolean' ||
+    !(
+      data.policy.amountSats === null ||
+      isPositiveInteger(data.policy.amountSats)
+    ) ||
+    !isPlainObject(data.policy.payLink) ||
+    !isPositiveInteger(data.maxAmountSats) ||
+    !isPlainObject(data.fund) ||
+    typeof data.fund.configured !== 'boolean' ||
+    !Array.isArray(data.fund.wallets) ||
+    !isPlainObject(data.timer)
+  ) {
+    throw invalid;
+  }
+  return data as unknown as AllowanceStatus;
+};
+
+export const parseAllowanceSyncResult = (
+  data: unknown,
+): AllowanceSyncResult => {
+  const invalid = new Error('The allowance sync response was invalid.');
+  if (
+    !isPlainObject(data) ||
+    !isPlainObject(data.summary) ||
+    !isNonNegativeInteger(data.summary.totalPerPeriodSats) ||
+    !isNonNegativeInteger(data.summary.changes) ||
+    !Array.isArray(data.actions) ||
+    !Array.isArray(data.warnings) ||
+    !Array.isArray(data.blockers)
+  ) {
+    throw invalid;
+  }
+  return data as unknown as AllowanceSyncResult;
+};
+
+export const getAllowanceStatus = async (
+  idToken: string,
+): Promise<AllowanceStatus> => {
+  const response = await axios.get(`${API_URL}/allowances/policy`, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  return parseAllowanceStatus(response.data);
+};
+
+export const updateAllowancePolicy = async (
+  idToken: string,
+  patch: AllowancePolicyPatch,
+): Promise<AllowanceStatus> => {
+  const response = await axios.post(`${API_URL}/allowances/policy`, patch, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  return parseAllowanceStatus(response.data);
+};
+
+export const previewAllowanceSync = async (
+  idToken: string,
+  options: { overwriteDrift: boolean },
+): Promise<AllowanceSyncResult> => {
+  const response = await axios.post(
+    `${API_URL}/allowances/sync?mode=dry`,
+    { overwriteDrift: options.overwriteDrift },
+    { headers: { Authorization: `Bearer ${idToken}` } },
+  );
+  return parseAllowanceSyncResult(response.data);
+};
+
+// Apply echoes the preview's total per period: the server refuses (409) if
+// the plan it computes now has a different total.
+export const applyAllowanceSync = async (
+  idToken: string,
+  options: {
+    confirmTotalSats: number;
+    overwriteDrift: boolean;
+    allowUnderfunded: boolean;
+  },
+): Promise<AllowanceSyncResult> => {
+  const response = await axios.post(
+    `${API_URL}/allowances/sync?mode=apply`,
+    options,
+    { headers: { Authorization: `Bearer ${idToken}` } },
+  );
+  return parseAllowanceSyncResult(response.data);
+};

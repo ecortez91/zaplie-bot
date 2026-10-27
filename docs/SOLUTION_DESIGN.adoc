@@ -657,6 +657,16 @@ step, run from `tabs/backend/scripts/allowance-sync.js`:
 Apply is refused unless it echoes the preview's total per period, and while a
 Fund wallet holds less than one period unless explicitly overridden.
 
+Admins preview and apply from *Automations → Weekly allowances*
+(`/api/allowances`: `GET /policy` for any signed-in user or the bot,
+`POST /policy`, `POST /sync?mode=dry|apply` and `GET /runs` for a
+`Zaplie.Admin`). A timer in the portal backend
+(`ALLOWANCE_SYNC_INTERVAL_MINUTES`, default 360) then keeps schedules in step,
+so new people get theirs, but only for the policy an admin last applied with a
+confirmed total (`lastAdminApply` in `allowance-sync.json`). A changed policy
+waits for an admin; a disabled one is applied at once, since it only pauses.
+The timer never overrides a block or an underfunded Fund.
+
 *Consequences:* A second run with nothing changed is all noop. Funding
 payments run Fund to Allowance, so they never pair as an Allowance-to-Private
 zap and stay out of the feed and the leaderboard; the Fund wallet must not be

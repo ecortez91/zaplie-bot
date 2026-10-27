@@ -25,6 +25,9 @@ const {
   readRewardPolicyStructure,
   readStoredRewardAmounts,
 } = require('./rewardPolicy');
+const { createAllowanceRouter } = require('./allowanceRoutes');
+const { createAllowanceTimer } = require('./allowanceTimer');
+const { createAllowanceSyncStore } = require('./allowanceSyncStore');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -345,6 +348,15 @@ app.post('/api/reward-name', requireAdmin, (req, res) => {
   }
 });
 
+// Weekly allowances: the policy, the Fund status and the preview/apply sync.
+// Mounted before the shared-token middleware for the same reason as the
+// config routes above: reads take an MSAL token or the bot's, writes an admin's.
+const allowanceStore = createAllowanceSyncStore();
+app.use(
+  '/api/allowances',
+  createAllowanceRouter({ readData, writeData, store: allowanceStore }),
+);
+
 // Use the authentication middleware for API routes
 app.use('/api', authMiddleware);
 
@@ -390,6 +402,9 @@ if (require.main === module) {
   app.listen(port, () => {
     console.log(`Server is running on http://localhost:${port}`);
   });
+  // One process, one timer: the sync's in-process lock covers this instance
+  // only, like the gateway's other in-memory state.
+  createAllowanceTimer({ readData, store: allowanceStore }).start();
 }
 
 module.exports = app;

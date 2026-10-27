@@ -44,6 +44,7 @@ const {
 const { nextAnchor, startMatchesAnchor } = require('./allowanceSchedule');
 
 const NAME_PREFIX = 'zaplie:';
+const TIMER_ACTOR = 'timer';
 const MANAGED_TAG = '[zaplie-managed]';
 const OID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DEFAULT_CONCURRENCY = 4;
@@ -1048,6 +1049,16 @@ const runAllowanceSync = async (
     };
     nextState.lastRun = runSummary;
     nextState.runs = [...(state.runs || []), runSummary];
+    // The timer only maintains a policy a person (an admin or the CLI) has
+    // applied with a confirmed total; a changed policy waits for them.
+    if (by !== TIMER_ACTOR && !aborted) {
+      nextState.lastAdminApply = {
+        policyUpdatedAt: policy.updatedAt,
+        totalPerPeriodSats: plan.summary.totalPerPeriodSats,
+        at: finishedAt.toISOString(),
+        by,
+      };
+    }
     store.write(nextState);
     store.appendAudit(audit);
     return { ...preview, result: runSummary, errors: results.filter((r) => !r.ok).map((r) => ({ ...publicAction(r.action), error: r.error })) };
@@ -1060,6 +1071,7 @@ module.exports = {
   AllowanceSyncError,
   MANAGED_TAG,
   NAME_PREFIX,
+  TIMER_ACTOR,
   applyPlan,
   gatherSnapshot,
   isSyncRunning,

@@ -67,6 +67,39 @@ jest.mock('../apiService', () => ({
   getPeople: () => Promise.resolve([]),
   updateRewardAmounts: (idToken: string, amounts: Record<string, number>) =>
     mockUpdateRewardAmounts(idToken, amounts),
+  getAllowanceStatus: () =>
+    Promise.resolve({
+      policy: {
+        version: 1,
+        enabled: false,
+        amountSats: null,
+        period: null,
+        anchorWeekday: null,
+        anchorDay: null,
+        anchorTime: null,
+        timezone: null,
+        memo: '',
+        payLink: { minSats: null, maxSats: null, commentChars: 0 },
+        overwriteDrift: false,
+        excludedOids: [],
+        updatedAt: null,
+        updatedBy: null,
+      },
+      maxAmountSats: 100000,
+      fund: { configured: false, wallets: [], health: null },
+      lastRun: null,
+      lastAdminApply: null,
+      running: false,
+      timer: {
+        enabled: true,
+        disabled: false,
+        invalid: false,
+        intervalMinutes: 360,
+      },
+    }),
+  updateAllowancePolicy: () => Promise.reject(new Error('not used')),
+  previewAllowanceSync: () => Promise.reject(new Error('not used')),
+  applyAllowanceSync: () => Promise.reject(new Error('not used')),
 }));
 
 const unconfiguredPolicy = {
@@ -201,6 +234,21 @@ describe('AutomationsComponent panel independence', () => {
       'Uncertain payment outcomes are still reconciled by an operator.',
     );
     expect(card?.textContent).not.toContain('Draft — not production ready');
+  });
+
+  test('shows the weekly allowances panel, read-only for a non-admin', async () => {
+    mockGetAutomationsStats.mockResolvedValue(emptyStats);
+    mockIsAdmin.mockReturnValue(false);
+
+    await renderAutomations();
+
+    const panel = container.querySelector('[aria-label="Weekly allowances"]');
+    expect(panel).not.toBeNull();
+    expect(panel?.textContent).toContain(
+      'Off: no allowance is created or paid.',
+    );
+    expect(panel?.querySelector('input')).toBeNull();
+    expect(panel?.textContent).not.toContain('Preview sync');
   });
 
   test('a rule with no saved amount says it pays nothing', async () => {

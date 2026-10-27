@@ -717,6 +717,30 @@ test('run: a malformed stored policy fails closed before anything is read', asyn
   );
 });
 
+test('run: a person\'s apply records the policy it confirmed; the timer\'s does not', async () => {
+  const stamped = { ...POLICY, updatedAt: '2026-10-28T09:00:00.000Z', updatedBy: 'admin' };
+  const byTimer = createWorld({ users: USERS });
+  const timerStore = tempStore();
+  await runAllowanceSync(
+    { mode: 'apply', confirmTotalSats: 50000, by: 'timer' },
+    byTimer.deps({ allowancePolicy: stamped }, timerStore),
+  );
+  assert.equal(timerStore.read().lastAdminApply, undefined);
+
+  const byAdmin = createWorld({ users: USERS });
+  const adminStore = tempStore();
+  await runAllowanceSync(
+    { mode: 'apply', confirmTotalSats: 50000, by: 'admin-oid' },
+    byAdmin.deps({ allowancePolicy: stamped }, adminStore),
+  );
+  assert.deepEqual(adminStore.read().lastAdminApply, {
+    policyUpdatedAt: '2026-10-28T09:00:00.000Z',
+    totalPerPeriodSats: 50000,
+    at: NOW.toISOString(),
+    by: 'admin-oid',
+  });
+});
+
 test('run: only one sync at a time', async () => {
   const world = createWorld({ users: USERS });
   let release;

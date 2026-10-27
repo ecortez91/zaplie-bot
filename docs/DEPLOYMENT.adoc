@@ -436,6 +436,19 @@ created. Must be a positive integer; a failed grant is logged, not retried
   people one policy may cover (default 1000; more refuses to apply)
 | Portal backend
 
+| `ALLOWANCE_SYNC_INTERVAL_MINUTES`
+| How often the portal backend runs the allowance sync on its own (default
+  360; `0` turns it off; a malformed value also turns it off). It only
+  maintains a policy an admin has already previewed and applied, never
+  applies over a block such as an underfunded Fund wallet, and applies a
+  disabled policy (which only pauses schedules) without waiting
+| Portal backend
+
+| `ALLOWANCE_SYNC_DISABLED`
+| `true` stops the automatic allowance sync whatever the interval says.
+  Admins can still preview and apply from Automations
+| Portal backend
+
 | `AAD_TENANT_ID`, `AAD_CLIENT_ID`
 | Entra tenant and app client id used to validate MSAL idTokens
 | Portal backend

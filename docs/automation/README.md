@@ -243,6 +243,28 @@ settings):
 | `ALLOWANCE_FUND_ADMINKEY` | Admin key of the `Fund` wallet. Comma-separated for more than one Fund wallet (100 schedules each). Unset: preview only, apply refused. |
 | `LNBITS_PUBLIC_HOST` | The public LNbits host the extension pays over HTTPS, for example `bank.knowall.ai`. Defaults to the host of `LNBITS_NODE_URL`. |
 | `ALLOWANCE_MAX_AMOUNT_SATS` | Optional ceiling per person per period (default 100000). |
+| `ALLOWANCE_SYNC_INTERVAL_MINUTES` | Optional. How often the automatic sync runs (default 360; `0` turns it off). |
+| `ALLOWANCE_SYNC_DISABLED` | Optional. `true` stops the automatic sync. |
+
+## From the portal
+
+Open **Automations → Weekly allowances**. Everyone signed in sees the
+policy, the Fund balance, the extension's health and the last run. Only a
+`Zaplie.Admin` can edit:
+
+1. Fill in the policy and **Save policy**. Saving changes nothing in LNbits.
+2. **Preview sync** lists every change (pay links, schedules, drift, skips)
+   with the **total per period** and any warning or block.
+3. **Apply N changes** applies exactly that preview: the server refuses it
+   (409) if its own plan now has a different total, and the preview must be
+   run again. An underfunded Fund needs the explicit tick to go ahead.
+
+After that the portal keeps the schedules in step every
+`ALLOWANCE_SYNC_INTERVAL_MINUTES` (new people get theirs) for as long as the
+policy is the one an admin applied. A changed policy waits for an admin to
+preview and apply it; turning the policy off is applied automatically, since
+it only pauses schedules. The automatic sync never applies over a block and
+never overwrites a hand edit unless the policy's `overwriteDrift` says so.
 
 ## Running the sync from the command line (the fallback)
 
