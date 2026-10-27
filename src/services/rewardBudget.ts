@@ -5,6 +5,8 @@ import {
   ensureDataDirectory,
   isErrnoException,
   LedgerFile,
+  recoverStaleLock,
+  resolveStaleLockMs,
   sweepStaleTemporaries,
   validateDuration,
   withStoreLock,
@@ -42,6 +44,9 @@ export interface RewardBudgetLedgerOptions {
   storePath?: string;
   lockRetryMs?: number;
   lockTimeoutMs?: number;
+  // At startup a lock file older than this is removed as crash-left. Defaults
+  // to ZAPLIE_LEDGER_STALE_LOCK_MS, else 30 s. 0 disables it.
+  staleLockMs?: number;
   now?: () => number;
 }
 
@@ -180,6 +185,11 @@ export class RewardBudgetLedger {
       'Reward budget lock timeout',
       options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
     );
+    const staleLockMs = resolveStaleLockMs(
+      RewardBudgetError,
+      'Reward budget stale lock threshold',
+      options.staleLockMs,
+    );
     this.now = options.now ?? Date.now;
     this.file = {
       storePath: this.storePath,
@@ -188,9 +198,12 @@ export class RewardBudgetLedger {
       lockTimeoutImpact: 'every reward request fails',
       lockRetryMs,
       errorType: RewardBudgetError,
+      activityChannel: 'api',
     };
     ensureDataDirectory(this.file);
     sweepStaleTemporaries(this.storePath, this.now());
+    // Same startup lock recovery as the zap ledger; records are untouched.
+    recoverStaleLock(this.file, this.now(), staleLockMs);
     readStore(this.storePath);
   }
 

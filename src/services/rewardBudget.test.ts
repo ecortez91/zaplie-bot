@@ -258,3 +258,43 @@ describe('resolveBudget and getRewardBudget', () => {
     await expect(getRewardBudget()).rejects.toMatchObject({ statusCode: 503 });
   });
 });
+
+describe('RewardBudgetLedger startup lock recovery', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('a crash-left lock older than the threshold is removed at startup', async () => {
+    const lockPath = `${storePath}.lock`;
+    fs.writeFileSync(lockPath, 'ab'.repeat(32), { mode: 0o600 });
+    const mtime = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockPath, mtime, mtime);
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const ledger = new RewardBudgetLedger({ storePath, staleLockMs: 30_000 });
+
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(String(errors.mock.calls[0][0])).toContain(
+      'Reward budget ledger lock',
+    );
+    await expect(ledger.reserve(WEEK, key(1), 600, 1000)).resolves.toBe(
+      'reserved',
+    );
+  });
+
+  test('a young lock is left alone at startup', () => {
+    const lockPath = `${storePath}.lock`;
+    fs.writeFileSync(lockPath, 'ab'.repeat(32), { mode: 0o600 });
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    new RewardBudgetLedger({ storePath, staleLockMs: 30_000 });
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+  });
+
+  test('an invalid staleLockMs option is rejected', () => {
+    expect(
+      () => new RewardBudgetLedger({ storePath, staleLockMs: -1 }),
+    ).toThrow('Reward budget stale lock threshold is invalid');
+  });
+});

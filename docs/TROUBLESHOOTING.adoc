@@ -16,6 +16,9 @@
 | Users have no wallets / "Failed Receivers" when sending a Zap
 | The recipient has not interacted with the app yet, so `ensureUserSetup` never ran. Ask them to message the bot once; verify `LNBITS_ADMINKEY` belongs to an admin account that can reach the core Users API (`/users/api/v1/user`)
 
+| Every zap fails with the generic "D'oh!" error after a restart
+| A ledger lock is still held. Check the bot's startup log: `Zap ledger lock ... was <n>s old at startup and has been removed as crash-left` means it recovered on its own (reconcile any `processing` or `unknown` record the next line counts); `Zap ledger lock ... is <n>s old and may belong to a live process; leaving it` means the lock was younger than `ZAPLIE_LEDGER_STALE_LOCK_MS` (default 30 s) at boot. Restart the bot once more after 30 seconds, or follow the lock recovery procedure in `docs/DEPLOYMENT.adoc` (Persistent application state). Never delete `bot-zap-ledger.json` or a record in it to make zaps work again
+
 | `send zap` card submits but payment fails
 | Check `LNBITS_ADMINKEY` and `LNBITS_NODE_URL`; confirm the sender's Allowance wallet has sufficient balance and the LNbits instance is reachable from the bot
 

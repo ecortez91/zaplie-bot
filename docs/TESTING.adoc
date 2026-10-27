@@ -18,7 +18,23 @@ closing the gaps.
 - `src/services/zapLedger.test.ts` covers restart durability, independent
   instances, two actual Node processes, exclusive-lock timeout after a crash,
   atomic-write crash leftovers, strict schema/config validation, key scoping,
-  and the absence of raw Teams and wallet identifiers from the store.
+  and the absence of raw Teams and wallet identifiers from the store. Its
+  `ZapLedger startup lock recovery` block pins the crash-left lock rule:
+  `a crash-left lock older than the threshold is removed at startup`,
+  `a young lock is left alone at startup and still times out closed`,
+  `staleLockMs: 0 never touches the lock`,
+  `a processing record left by a crash survives lock recovery and still blocks
+  the recipient` (recovery frees the lock, never the record),
+  `the startup log names processing and unknown records`, and strict parsing
+  of `ZAPLIE_LEDGER_STALE_LOCK_MS`. `a crash-left lock that appears after
+  startup still times out closed` pins that the runtime path evicts nothing.
+- `src/services/ledgerFile.test.ts` unit-tests `recoverStaleLock`: no lock,
+  disabled, too young, removed (owner token shortened in the log, no
+  `.stale.` file left behind), `a lock replaced between stat and rename is put
+  back`, a lock that vanishes first, and a lock that cannot be inspected
+  failing startup closed; plus the `ledger.lock_timeout` activity on a lock
+  timeout. `src/services/rewardLedger.test.ts` and
+  `src/services/rewardBudget.test.ts` each pin the same startup recovery.
 - `src/commands/zapRecipient.test.ts` exercises the production transition path,
   including safe pre-payment release, persisted unknown outcomes, and a paid
   duplicate after restart that never invokes the payment dependency.

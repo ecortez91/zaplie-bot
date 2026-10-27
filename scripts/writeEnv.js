@@ -57,6 +57,7 @@ const selectedVars = {
   LEADERBOARD_TOP_N: envConfig.LEADERBOARD_TOP_N,
   PORTAL_URL: envConfig.PORTAL_URL,
   ZAPLIE_DATA_DIR: envConfig.ZAPLIE_DATA_DIR,
+  ZAPLIE_LEDGER_STALE_LOCK_MS: envConfig.ZAPLIE_LEDGER_STALE_LOCK_MS,
   WEBSITE_URL: envConfig.WEBSITE_URL,
   CONTENT_URL: envConfig.CONTENT_URL,
   // A local debug session overwrites both with the port 3000 tunnel before
@@ -106,6 +107,7 @@ appendEnvFile(envOutputPath, {
   LEADERBOARD_TOP_N: selectedVars.LEADERBOARD_TOP_N,
   PORTAL_URL: selectedVars.PORTAL_URL,
   ZAPLIE_DATA_DIR: selectedVars.ZAPLIE_DATA_DIR,
+  ZAPLIE_LEDGER_STALE_LOCK_MS: selectedVars.ZAPLIE_LEDGER_STALE_LOCK_MS,
   WEBSITE_URL: selectedVars.WEBSITE_URL,
   CONTENT_URL: selectedVars.CONTENT_URL,
   TAB_ENDPOINT: selectedVars.TAB_ENDPOINT,

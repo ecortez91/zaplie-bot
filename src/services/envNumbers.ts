@@ -21,3 +21,18 @@ export function positiveIntFromEnv(name: string, fallback: number): number {
   }
   return value;
 }
+
+// Same strict rule, but 0 is allowed: for a setting where 0 means "off"
+// (ZAPLIE_LEDGER_STALE_LOCK_MS). Bot-only, so it has no portal twin.
+export function nonNegativeIntFromEnv(name: string, fallback: number): number {
+  const configured = process.env[name];
+  if (configured === undefined || configured.trim() === '') {
+    return fallback;
+  }
+  const trimmed = configured.trim();
+  const value = /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : NaN;
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return value;
+}

@@ -192,6 +192,9 @@ table):
   `src/services/ledgerFile.ts`. A record left `processing`, `unknown` or
   `uncertain` blocks that payment until an operator reconciles it with LNbits
   (`docs/DEPLOYMENT.adoc`); never clear one just to let a retry through.
+  At startup only, each ledger removes its own `.lock` once it is older than
+  `ZAPLIE_LEDGER_STALE_LOCK_MS` (default 30 s, `0` off) and never touches a
+  record; at runtime a held lock is never evicted.
   `POST /api/v1/rewards` (`src/rewardsRoute.ts`) requires an
   `Idempotency-Key` header and replays the first result for a repeat.
 - GitHub calls `POST /api/v1/github/webhook` (`src/githubWebhookRoute.ts`)

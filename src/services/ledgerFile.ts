@@ -5,6 +5,8 @@
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { nonNegativeIntFromEnv } from './envNumbers';
+import { recordActivity } from './pulse';
 
 // Windows enforces mandatory sharing, so a concurrent lock-free reader holding
 // the canonical store open can make MoveFileEx(REPLACE_EXISTING) fail with
@@ -21,6 +23,13 @@ const RENAME_RETRY_MS = 20;
 // than that belongs to a dead process, never to a write in flight.
 const STALE_TEMP_MS = 60 * 60 * 1000;
 const LOCK_WAIT_LOG_MS = 5_000;
+// The lock is only ever held across local file I/O (a read, a JSON serialise
+// and one fsync'd rename), so a healthy hold lasts milliseconds. At startup a
+// lock older than this belongs to a process that died holding it. Thirty
+// seconds sits below a typical crash-plus-boot gap, so the common restart
+// recovers on its own, and far above any live hold.
+export const STALE_LOCK_ENV = 'ZAPLIE_LEDGER_STALE_LOCK_MS';
+export const DEFAULT_STALE_LOCK_MS = 30_000;
 
 export type LedgerErrorType = new (message: string, cause?: unknown) => Error;
 
@@ -33,6 +42,9 @@ export interface LedgerFile {
   lockTimeoutImpact: string;
   lockRetryMs: number;
   errorType: LedgerErrorType;
+  // Telemetry channel of the payments this store guards: Teams zap cards or
+  // the rewards API.
+  activityChannel: 'teams' | 'api';
 }
 
 /** True for a Node system error that carries an errno `code` (e.g. ENOENT). */
@@ -113,6 +125,165 @@ export const sweepStaleTemporaries = (
   }
 };
 
+/**
+ * The stale-lock threshold for a ledger: the `staleLockMs` option when given,
+ * else `ZAPLIE_LEDGER_STALE_LOCK_MS`, else 30 s. 0 disables recovery.
+ *
+ * @throws errorType `<name> is invalid` for a bad option, or naming the
+ *   variable for a malformed environment value, so the bot refuses to start
+ */
+export const resolveStaleLockMs = (
+  errorType: LedgerErrorType,
+  name: string,
+  option: number | undefined,
+): number => {
+  if (option !== undefined) {
+    return validateDuration(errorType, name, option);
+  }
+  try {
+    return nonNegativeIntFromEnv(STALE_LOCK_ENV, DEFAULT_STALE_LOCK_MS);
+  } catch (error) {
+    throw new errorType(
+      `${STALE_LOCK_ENV} must be a non-negative integer`,
+      error,
+    );
+  }
+};
+
+export type StaleLockRecovery = 'none' | 'kept' | 'removed';
+
+// For tests only: runs between the last ownership check and the rename, which
+// is the window a live process could re-take the lock in.
+export interface StaleLockHooks {
+  beforeRename?: () => void;
+}
+
+const OWNER_TOKEN_PREFIX = /^[a-f0-9]{8}/;
+
+const statOrUndefined = (filePath: string): fs.Stats | undefined => {
+  try {
+    return fs.statSync(filePath);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  }
+};
+
+const sameFile = (left: fs.Stats, right: fs.Stats): boolean =>
+  left.ino === right.ino && left.mtimeMs === right.mtimeMs;
+
+/**
+ * At startup, removes this store's lock file if it is older than
+ * `staleAfterMs`.
+ *
+ * The lock is only held across local file I/O, so a lock that old belongs to a
+ * process that died holding it (an App Service restart SIGKILLs the bot). The
+ * runtime acquire path still never evicts anything: this runs once, when a
+ * ledger is constructed. Records are never touched - a `processing` or
+ * `unknown` entry left by the same crash keeps blocking its payment until an
+ * operator reconciles it.
+ *
+ * The lock is moved aside with a rename, which is atomic per inode, and the
+ * inode is checked on both sides: if a live process re-took the lock in the
+ * gap, the moved file is put back with link(), which never clobbers a newer
+ * lock.
+ *
+ * @returns `none` (no lock, or recovery disabled), `kept` (too young, or
+ *   replaced by a live process), or `removed`
+ * @throws errorType when the lock cannot be inspected, so the bot refuses to
+ *   start rather than guess
+ */
+export const recoverStaleLock = (
+  file: LedgerFile,
+  nowMs: number,
+  staleAfterMs: number,
+  hooks: StaleLockHooks = {},
+): StaleLockRecovery => {
+  if (staleAfterMs === 0) {
+    return 'none';
+  }
+  try {
+    const observed = statOrUndefined(file.lockPath);
+    if (!observed) {
+      return 'none';
+    }
+    const ageMs = nowMs - observed.mtimeMs;
+    const ageSeconds = Math.max(0, Math.round(ageMs / 1000));
+    if (ageMs < staleAfterMs) {
+      console.error(
+        `${file.label} lock ${file.lockPath} is ${ageSeconds}s old and may ` +
+          `belong to a live process; leaving it. If ${file.lockTimeoutImpact} ` +
+          'after startup, follow the lock recovery procedure in ' +
+          'docs/DEPLOYMENT.adoc.',
+      );
+      return 'kept';
+    }
+
+    let ownerToken: string;
+    try {
+      ownerToken = fs.readFileSync(file.lockPath, 'utf8');
+    } catch (error) {
+      if (isErrnoException(error) && error.code === 'ENOENT') {
+        return 'none';
+      }
+      throw error;
+    }
+    const current = statOrUndefined(file.lockPath);
+    if (!current) {
+      return 'none';
+    }
+    if (!sameFile(current, observed)) {
+      return 'kept';
+    }
+
+    hooks.beforeRename?.();
+    const graveyard = `${file.lockPath}.stale.${process.pid}.${randomBytes(8).toString('hex')}`;
+    try {
+      fs.renameSync(file.lockPath, graveyard);
+    } catch (error) {
+      if (isErrnoException(error) && error.code === 'ENOENT') {
+        return 'none';
+      }
+      throw error;
+    }
+
+    const moved = fs.statSync(graveyard);
+    if (!sameFile(moved, observed)) {
+      // The path was re-created in the gap and we moved a live lock. Put it
+      // back; link() refuses to clobber a lock taken in the meantime.
+      try {
+        fs.linkSync(graveyard, file.lockPath);
+      } catch {
+        // A newer holder owns the path, so the moved file is somebody's live
+        // lock and not ours to delete. Its holder's release fails closed on
+        // the ownership check instead.
+        return 'kept';
+      }
+      fs.unlinkSync(graveyard);
+      return 'kept';
+    }
+    fs.unlinkSync(graveyard);
+
+    const tokenPrefix =
+      OWNER_TOKEN_PREFIX.exec(ownerToken)?.[0] ?? 'unreadable';
+    console.error(
+      `${file.label} lock ${file.lockPath} was ${ageSeconds}s old at startup ` +
+        `and has been removed as crash-left (owner token ${tokenPrefix}). Any ` +
+        '`processing`, `unknown` or `uncertain` record in ' +
+        `${file.storePath} still needs reconciling with LNbits before it will ` +
+        'pay again (docs/DEPLOYMENT.adoc).',
+    );
+    return 'removed';
+  } catch (error) {
+    throw new file.errorType(
+      `${file.label} lock could not be inspected at startup`,
+      error,
+    );
+  }
+};
+
 // fsync of the file only guarantees its contents. On POSIX the rename itself
 // is a directory update, and without syncing the directory a power loss can
 // restore the old entry - losing a `paid` record that markPaid already
@@ -163,8 +334,8 @@ const replaceStoreFile = async (
  *
  * @returns a release function that deletes the lock only if it still holds
  *   this owner's token
- * @throws errorType when the lock times out; a crash-left lock is never
- *   evicted automatically
+ * @throws errorType when the lock times out; nothing is evicted here - a
+ *   crash-left lock is only recovered at startup, by `recoverStaleLock`
  */
 export const acquireLock = async (
   file: LedgerFile,
@@ -222,9 +393,18 @@ export const acquireLock = async (
         );
       }
       if (Date.now() >= deadline) {
-        // Deliberate: an orphaned lock is a manual outage, not something to
-        // evict on a timer. Name the recovery procedure so the operator is
-        // not left guessing at a bare timeout.
+        // Deliberate: at runtime an orphaned lock is not evicted on a timer
+        // (startup recovery handles the crash-and-restart case). Name the
+        // recovery procedure so the operator is not left guessing at a bare
+        // timeout, and record it so an alert can fire on it.
+        recordActivity({
+          activityType: 'ledger.lock_timeout',
+          title: 'Ledger lock timed out',
+          level: 'error',
+          subject: 'ledger-lock',
+          channel: file.activityChannel,
+          upstreamId: `${file.lockPath}:${startedAt}`,
+        });
         throw new file.errorType(
           `${file.label} lock timed out; ${file.lockTimeoutImpact} until an ` +
             'operator follows the lock recovery procedure in ' +

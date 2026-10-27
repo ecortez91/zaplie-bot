@@ -6,6 +6,8 @@ import {
   ensureDataDirectory,
   isErrnoException,
   LedgerFile,
+  recoverStaleLock,
+  resolveStaleLockMs,
   sweepStaleTemporaries,
   validateDuration,
   withStoreLock,
@@ -62,6 +64,9 @@ export interface ZapLedgerOptions {
   settleLockTimeoutMs?: number;
   // How long a `paid` record is kept. 0 disables pruning entirely.
   retentionMs?: number;
+  // At startup a lock file older than this is removed as crash-left. Defaults
+  // to ZAPLIE_LEDGER_STALE_LOCK_MS, else 30 s. 0 disables it.
+  staleLockMs?: number;
   now?: () => number;
 }
 
@@ -247,6 +252,11 @@ export class ZapLedger {
       'Zap ledger retention window',
       options.retentionMs ?? DEFAULT_RETENTION_MS,
     );
+    const staleLockMs = resolveStaleLockMs(
+      ZapLedgerError,
+      'Zap ledger stale lock threshold',
+      options.staleLockMs,
+    );
     this.now = options.now ?? Date.now;
     this.file = {
       storePath: this.storePath,
@@ -255,15 +265,31 @@ export class ZapLedger {
       lockTimeoutImpact: 'every zap submission fails',
       lockRetryMs,
       errorType: ZapLedgerError,
+      activityChannel: 'teams',
     };
     ensureDataDirectory(this.file);
     // Once per process, outside the lock: a crash temporary is a startup
     // condition, not something to look for on every payment.
     sweepStaleTemporaries(this.storePath, this.timestamp());
+    // Same for a lock left by a process that died holding it (an App Service
+    // restart): without this, every zap fails until someone deletes it by
+    // hand. Records are untouched; the count below says what needs checking.
+    recoverStaleLock(this.file, this.timestamp(), staleLockMs);
     // Atomic replacements make an unlocked startup read safe. Validating here
     // keeps a corrupt or unreadable canonical store from producing a healthy
     // bot that discovers the problem only when someone tries to move money.
-    readStore(this.storePath);
+    const store = readStore(this.storePath);
+    const unsettled = Object.values(store.records).filter(
+      entry => entry.state !== 'paid',
+    ).length;
+    if (unsettled > 0) {
+      // A count only: the keys are digests of Teams identifiers.
+      console.error(
+        `Zap ledger ${this.storePath} holds ${unsettled} \`processing\` or ` +
+          '`unknown` record(s); each blocks its recipient until an operator ' +
+          'reconciles it with LNbits (docs/DEPLOYMENT.adoc).',
+      );
+    }
   }
 
   async tryAcquire(key: string): Promise<boolean> {
