@@ -25,3 +25,6 @@ bot-zap-ledger.json.*.tmp
 bot-reward-ledger.json
 bot-reward-ledger.json.lock
 bot-reward-ledger.json.*.tmp
+bot-reward-budget.json
+bot-reward-budget.json.lock
+bot-reward-budget.json.*.tmp
