@@ -22,7 +22,18 @@ export interface AutomationHistoryItem {
   recipient: Pick<AutomationRecipient, 'id' | 'displayName' | 'audience'>;
 }
 
+// Paid automated rewards in the current budget period, from the treasury's
+// LNbits history. The bot's budget ledger is what enforces the cap.
+export interface BudgetSpend {
+  period: 'week' | 'month';
+  periodKey: string;
+  capSats: number;
+  spentSats: number;
+}
+
 export interface AutomationsStats {
+  // null when no budget is configured; absent from an older backend.
+  spentThisPeriod?: BudgetSpend | null;
   paidSatsThisMonth: number;
   paymentsThisMonth: number;
   runsByEventType: Record<string, number>;
@@ -77,6 +88,19 @@ const isNumberRecord = (value: unknown): value is Record<string, number> =>
   !Array.isArray(value) &&
   Object.values(value as Record<string, unknown>).every(isFiniteNumber);
 
+const isBudgetSpend = (value: unknown): value is BudgetSpend => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as Partial<BudgetSpend>;
+  return (
+    (candidate.period === 'week' || candidate.period === 'month') &&
+    typeof candidate.periodKey === 'string' &&
+    isFiniteNumber(candidate.capSats) &&
+    isFiniteNumber(candidate.spentSats)
+  );
+};
+
 export const parseAutomationsStats = (value: unknown): AutomationsStats => {
   if (!value || typeof value !== 'object') {
     throw new Error('Automations stats response is malformed.');
@@ -105,7 +129,12 @@ export const parseAutomationsStats = (value: unknown): AutomationsStats => {
     !isFiniteNumber(candidate.paymentsThisMonth) ||
     !isNumberRecord(candidate.runsByEventType) ||
     !validEngagement ||
-    !validHistory
+    !validHistory ||
+    !(
+      candidate.spentThisPeriod === undefined ||
+      candidate.spentThisPeriod === null ||
+      isBudgetSpend(candidate.spentThisPeriod)
+    )
   ) {
     throw new Error('Automations stats response is malformed.');
   }

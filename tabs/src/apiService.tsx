@@ -190,3 +190,150 @@ export const updateAutomations = async (
   );
   return parseAutomationsResponse(response.data);
 };
+
+// Reward policy: what the bot pays from. Kept in step with
+// backend/rewardPolicy.js, which is what actually enforces every rule.
+export type RewardEventType =
+  'githubPrMerged' | 'githubIssueClosed' | 'githubReviewSubmitted';
+
+export interface LevelRule {
+  labelPrefix: string;
+  bonuses: Record<string, number>;
+}
+
+export interface RewardBudget {
+  period: 'week' | 'month';
+  capSats: number;
+  timezone: string;
+}
+
+export interface RewardPolicy {
+  version: 1;
+  levels: Partial<Record<RewardEventType, LevelRule>>;
+  overrides: Record<
+    string,
+    Partial<Record<RewardEventType, { baseSats: number }>>
+  >;
+  budget: RewardBudget | null;
+}
+
+export interface RewardPolicyResponse {
+  // Only the amounts an admin saved: a missing rule pays nothing.
+  rewardAmounts: Record<string, number>;
+  rewardPolicy: RewardPolicy;
+  // REWARDS_MAX_AMOUNT_SATS, so the editor can stop an over-cap value early.
+  maxAmountSats: number;
+}
+
+export type RewardPolicyPatch = Partial<
+  Pick<RewardPolicy, 'levels' | 'overrides' | 'budget'>
+>;
+
+export interface Person {
+  personAad: string;
+  displayName: string;
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const isPositiveInteger = (value: unknown): value is number =>
+  isFiniteNumber(value) && Number.isInteger(value) && value > 0;
+
+const isPositiveIntegerRecord = (value: unknown): boolean =>
+  isPlainObject(value) && Object.values(value).every(isPositiveInteger);
+
+const isLevelRule = (value: unknown): value is LevelRule =>
+  isPlainObject(value) &&
+  typeof value.labelPrefix === 'string' &&
+  isPositiveIntegerRecord(value.bonuses);
+
+const isBudget = (value: unknown): value is RewardBudget =>
+  isPlainObject(value) &&
+  (value.period === 'week' || value.period === 'month') &&
+  isPositiveInteger(value.capSats) &&
+  typeof value.timezone === 'string';
+
+const isOverrides = (value: unknown): boolean =>
+  isPlainObject(value) &&
+  Object.values(value).every(
+    perEvent =>
+      isPlainObject(perEvent) &&
+      Object.values(perEvent).every(
+        override =>
+          isPlainObject(override) && isPositiveInteger(override.baseSats),
+      ),
+  );
+
+export const parseRewardPolicyResponse = (
+  data: unknown,
+): RewardPolicyResponse => {
+  const invalid = new Error('The reward policy response was invalid.');
+  if (!isPlainObject(data) || !isPlainObject(data.rewardPolicy)) {
+    throw invalid;
+  }
+  const { rewardAmounts, rewardPolicy, maxAmountSats } = data;
+  const policy = rewardPolicy as Record<string, unknown>;
+  if (
+    !isPositiveIntegerRecord(rewardAmounts) ||
+    !isPositiveInteger(maxAmountSats) ||
+    policy.version !== 1 ||
+    !isPlainObject(policy.levels) ||
+    !Object.values(policy.levels).every(isLevelRule) ||
+    !isOverrides(policy.overrides) ||
+    !(policy.budget === null || isBudget(policy.budget))
+  ) {
+    throw invalid;
+  }
+  return {
+    rewardAmounts: rewardAmounts as Record<string, number>,
+    rewardPolicy: rewardPolicy as unknown as RewardPolicy,
+    maxAmountSats,
+  };
+};
+
+export const getRewardPolicy = async (
+  idToken: string,
+): Promise<RewardPolicyResponse> => {
+  const response = await axios.get(`${API_URL}/reward-policy`, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  return parseRewardPolicyResponse(response.data);
+};
+
+export const updateRewardPolicy = async (
+  idToken: string,
+  patch: RewardPolicyPatch,
+): Promise<RewardPolicyResponse> => {
+  const response = await axios.post(`${API_URL}/reward-policy`, patch, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  return parseRewardPolicyResponse(response.data);
+};
+
+export const parsePeopleResponse = (data: unknown): Person[] => {
+  const people = isPlainObject(data) ? data.people : undefined;
+  if (
+    !Array.isArray(people) ||
+    !people.every(
+      person =>
+        isPlainObject(person) &&
+        typeof person.personAad === 'string' &&
+        typeof person.displayName === 'string',
+    )
+  ) {
+    throw new Error('The people response was invalid.');
+  }
+  return people.map(person => ({
+    personAad: person.personAad as string,
+    displayName: person.displayName as string,
+  }));
+};
+
+// Admin only: names and Entra object ids for the per-person override picker.
+export const getPeople = async (idToken: string): Promise<Person[]> => {
+  const response = await axios.get(`${API_URL}/identities/people`, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  return parsePeopleResponse(response.data);
+};

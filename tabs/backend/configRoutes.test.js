@@ -261,6 +261,7 @@ test('/api/reward-policy rejects an anonymous read and accepts the bot token', a
   assert.deepEqual(read.body, {
     rewardAmounts: {},
     rewardPolicy: { version: 1, levels: {}, overrides: {}, budget: null },
+    maxAmountSats: 10000,
   });
 });
 

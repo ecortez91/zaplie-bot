@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { paymentEpoch, summarizeAutomationPayments } = require('./automationPayments');
+const {
+  paymentEpoch,
+  summarizeAutomationPayments,
+  summarizeBudgetSpend,
+} = require('./automationPayments');
 
 const sinceTs = Date.parse('2024-01-01T00:00:00.000Z') / 1000;
 
@@ -158,5 +162,36 @@ test('validates timestamps and upstream collection shapes', () => {
   assert.throws(
     () => summarizeAutomationPayments([], null, sinceTs),
     /LNbits users response is not an array/,
+  );
+});
+
+test('spent this period sums automated treasury payouts in the current budget week only', () => {
+  const now = Date.parse('2026-10-29T12:00:00Z'); // Thursday, 2026-W44
+  const budget = { period: 'week', capSats: 50000, timezone: 'Europe/London' };
+  const at = (iso) => Date.parse(iso) / 1000;
+  const payments = [
+    { amount: -600000, time: at('2026-10-26T00:30:00Z'), extra: { automation: true } },
+    { amount: -400000, time: at('2026-10-29T10:00:00Z'), extra: '{"automation":true}' },
+    // Sunday 23:30 London is still the previous week.
+    { amount: -900000, time: at('2026-10-25T23:30:00Z'), extra: { automation: true } },
+    // A manual zap from the treasury is not an automated reward.
+    { amount: -700000, time: at('2026-10-27T10:00:00Z'), extra: {} },
+    // Incoming funding is not spend.
+    { amount: 5000000, time: at('2026-10-27T10:00:00Z'), extra: { automation: true } },
+  ];
+
+  assert.deepEqual(summarizeBudgetSpend(payments, budget, now), {
+    period: 'week',
+    periodKey: 'week:2026-W44',
+    capSats: 50000,
+    spentSats: 1000,
+  });
+});
+
+test('spent this period is null without a budget and refuses a non-array', () => {
+  assert.equal(summarizeBudgetSpend([], null, Date.now()), null);
+  assert.throws(
+    () => summarizeBudgetSpend(null, { period: 'month', capSats: 1, timezone: 'UTC' }, 0),
+    /not an array/,
   );
 });
