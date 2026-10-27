@@ -225,8 +225,9 @@ export const processReward = async (
       body: { error: 'reward budget exhausted for this period' },
     };
   }
-  // Only for failures known to be before the payment left the bot. A
-  // failure here keeps the reservation: it over-counts, never over-pays.
+  // Only when no sats are known to have left the treasury: a failure before
+  // the payment, or a reward held as pending. A failure here keeps the
+  // reservation: it over-counts, never over-pays.
   const releaseBudget = async (): Promise<void> => {
     try {
       await budgetLedger.release(periodKey, ledgerKey);
@@ -272,6 +273,9 @@ export const processReward = async (
   }
 
   if ('pending' in result) {
+    // Nothing pays a pending reward yet, so holding its sats would only
+    // shrink the period for linked people. Paying it later must reserve then.
+    await releaseBudget();
     const pendingBody: PendingRewardResponse = {
       status: 'pending',
       recipient: request.recipient,

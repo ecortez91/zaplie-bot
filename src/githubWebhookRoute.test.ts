@@ -72,7 +72,8 @@ const mergedEvent = {
     title: 'Add the thing',
     merged: true,
     merged_at: '2026-10-28T11:59:00Z',
-    user: { login: 'octocat', id: 583231 },
+    user: { login: 'octocat', id: 583231, type: 'User' },
+    merged_by: { login: 'reviewer', id: 9001, type: 'User' },
     labels: [{ name: 'bug' }, { name: 'reward:L2' }],
   },
   repository: { full_name: 'octo-org/octo-repo' },
@@ -500,6 +501,57 @@ describe('POST /api/v1/github/webhook: events', () => {
 
     expect(response.status).toBe(202);
     expect(mockedCreatePendingReward).toHaveBeenCalledTimes(1);
+    expect(mockedPayInvoice).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [
+      'merged by its own author',
+      { merged_by: { login: 'octocat', id: 583231, type: 'User' } },
+      'author merged their own pull request',
+    ],
+    [
+      'authored by Dependabot',
+      { user: { login: 'dependabot[bot]', id: 49699333, type: 'Bot' } },
+      'author is a bot',
+    ],
+  ])(
+    'a PR %s is a 200 not-rewarded, reserves nothing and queues nothing',
+    async (_label, change, reason) => {
+      const reserve = jest.spyOn(budgetLedger, 'reserve');
+      const url = await startServer();
+
+      const response = await deliver(url, {
+        body: {
+          ...mergedEvent,
+          pull_request: { ...mergedEvent.pull_request, ...change },
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.text)).toEqual({
+        status: 'not-rewarded',
+        reason,
+      });
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(reserve).not.toHaveBeenCalled();
+      expect(mockedCreatePendingReward).not.toHaveBeenCalled();
+      expect(mockedPayInvoice).not.toHaveBeenCalled();
+    },
+  );
+
+  test('a signed merge without merged_by is a 400 and pays nothing', async () => {
+    const url = await startServer();
+
+    const response = await deliver(url, {
+      body: {
+        ...mergedEvent,
+        pull_request: { ...mergedEvent.pull_request, merged_by: null },
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(fs.existsSync(storePath)).toBe(false);
     expect(mockedPayInvoice).not.toHaveBeenCalled();
   });
 

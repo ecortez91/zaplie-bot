@@ -117,7 +117,17 @@ For a merged pull request by a linked teammate:
    take the period over the cap the answer is 402 and nothing is paid.
 
 An unlinked author gets the org base plus the bonus, held as pending. Pending
-rewards count against the budget.
+rewards do not count against the budget: nothing pays them automatically, so
+they would only shrink the period for linked people.
+
+Two merges earn nothing and answer 200 `{"status":"not-rewarded"}`:
+
+- **Bot authors** (GitHub `type: Bot`, or a login ending in `[bot]`, such as
+  Dependabot). They have no Zaplie person to pay.
+- **Self-merges**: the person who merged the pull request (`merged_by`, by
+  GitHub numeric id) is its author. Auto-merge counts as the person who
+  enabled it, so an author turning on auto-merge for their own pull request is
+  a self-merge. Someone else must merge it, or a merge queue.
 
 Labels must be on the pull request **before** it merges. A label added later
 changes nothing: the reward for that pull request has already been decided,
@@ -134,6 +144,8 @@ is accepted for staff use and should be revisited before customers use it.
 | Body over 1 MB | 413 | No |
 | `ping`, any other event, or a PR closed without merging | 204 | No |
 | Merge more than 30 days old (replay protection) | 422 | No |
+| Merge with no `merged_by` | 400 | No |
+| Bot author, or the author merged it themselves | 200 `{"status":"not-rewarded",...}` | No |
 | Repository not connected | 403 | No |
 | No amount or no budget configured | 503 | No |
 | Over the period budget | 402 | No |
