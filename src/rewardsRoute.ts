@@ -1,27 +1,13 @@
 import { Response, Router } from 'express';
 import { createHash, timingSafeEqual } from 'crypto';
 import { getWebhookKeyHashes } from './services/fetchWebhookKeys';
+import { RewardError } from './services/rewardsService';
 import {
-  parseRewardRequest,
-  resolveAmountSats,
-  assertRepoConnected,
-  payReward,
-  RewardError,
-  RewardPaymentUncertainError,
-} from './services/rewardsService';
-import { recordRewardOutcome } from './services/pulse';
-import {
-  PaidRewardResponse,
-  PendingRewardResponse,
-  RewardEntry,
-  RewardLedger,
-  rewardFingerprint,
-  rewardKey,
-} from './services/rewardLedger';
-
-// Printable ASCII only: a GitHub delivery id is a GUID, and anything outside
-// this range is a malformed header rather than a key worth hashing.
-const IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,256}$/;
+  IDEMPOTENCY_KEY_PATTERN,
+  processReward,
+  ProcessRewardDeps,
+  ProcessRewardResult,
+} from './services/processReward';
 
 /**
  * True if the presented key matches `REWARDS_API_KEY` or the hash of any
@@ -55,46 +41,21 @@ export const isAuthorizedRewardKey = async (
   return hashes.includes(providedHash);
 };
 
-export interface RewardsRouteDeps {
-  ledger: Pick<
-    RewardLedger,
-    | 'reserve'
-    | 'markPaid'
-    | 'markPending'
-    | 'markUncertain'
-    | 'releaseIfProcessing'
-  >;
+export interface RewardsRouteDeps extends ProcessRewardDeps {
   isAuthorizedRewardKey?: (providedKey: string) => Promise<boolean>;
-  parseRewardRequest?: typeof parseRewardRequest;
-  assertRepoConnected?: typeof assertRepoConnected;
-  resolveAmountSats?: typeof resolveAmountSats;
-  payReward?: typeof payReward;
-  recordRewardOutcome?: typeof recordRewardOutcome;
 }
 
-// A replay answers with the stored outcome and records nothing: the first
-// request already did, and a redelivery is not a new reward.
-const replay = (res: Response, entry: RewardEntry): void => {
-  switch (entry.state) {
-    case 'paid':
-      res.set('Idempotency-Replayed', 'true').status(200).json(entry.response);
-      return;
-    case 'pending':
-      res.set('Idempotency-Replayed', 'true').status(202).json(entry.response);
-      return;
-    case 'processing':
-      res.status(409).json({
-        status: 'processing',
-        error: 'reward is already being processed',
-      });
-      return;
-    case 'uncertain':
-      res.status(409).json({
-        status: 'uncertain',
-        error: 'payment outcome unknown; needs reconciliation',
-      });
-      return;
+/**
+ * Sends a processReward result. A replay carries `Idempotency-Replayed: true`.
+ */
+export const sendRewardResult = (
+  res: Response,
+  result: ProcessRewardResult,
+): void => {
+  if (result.replayed) {
+    res.set('Idempotency-Replayed', 'true');
   }
+  res.status(result.status).json(result.body);
 };
 
 /**
@@ -107,54 +68,8 @@ const replay = (res: Response, entry: RewardEntry): void => {
  *   (tests only; each defaults to the real module)
  */
 export const createRewardsRouter = (deps: RewardsRouteDeps): Router => {
-  const {
-    ledger,
-    isAuthorizedRewardKey: isAuthorized = isAuthorizedRewardKey,
-    parseRewardRequest: parse = parseRewardRequest,
-    assertRepoConnected: assertConnected = assertRepoConnected,
-    resolveAmountSats: resolveAmount = resolveAmountSats,
-    payReward: pay = payReward,
-    recordRewardOutcome: record = recordRewardOutcome,
-  } = deps;
+  const { isAuthorizedRewardKey: isAuthorized = isAuthorizedRewardKey } = deps;
   const router = Router();
-
-  // A failure here leaves the key `processing`, which blocks every retry with
-  // a 409 until an operator clears it: safe, never a second payment.
-  const release = async (ledgerKey: string): Promise<void> => {
-    try {
-      await ledger.releaseIfProcessing(ledgerKey);
-    } catch (error) {
-      console.error(
-        'rewards ledger could not release an unpaid reward; it stays processing until reconciled:',
-        error,
-      );
-    }
-  };
-
-  // The reward has already been paid or queued, so the response still says
-  // so. A ledger that could not record it keeps the key `processing`, which
-  // blocks redelivery: the operator reconciles it, nobody is paid twice.
-  const settle = async (operation: () => Promise<void>): Promise<void> => {
-    try {
-      await operation();
-    } catch (error) {
-      console.error(
-        'rewards ledger could not record a settled reward; it stays processing until reconciled:',
-        error,
-      );
-    }
-  };
-
-  const fail = (res: Response, error: unknown, ledgerKey: string): void => {
-    if (error instanceof RewardError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-    // Internals (env names, LNbits ids) must not leak into Logic App run history.
-    console.error('rewards payment failed:', error);
-    record({ status: 'failed', requestKey: ledgerKey });
-    res.status(500).json({ error: 'internal error' });
-  };
 
   router.post('/api/v1/rewards', async (req, res) => {
     try {
@@ -184,97 +99,11 @@ export const createRewardsRouter = (deps: RewardsRouteDeps): Router => {
       res.status(400).json({ error: 'Idempotency-Key header is invalid' });
       return;
     }
-    const ledgerKey = rewardKey(idempotencyKey);
 
-    let request;
-    try {
-      request = parse(req.body);
-    } catch (error) {
-      fail(res, error, ledgerKey);
-      return;
-    }
-
-    let reservation;
-    try {
-      reservation = await ledger.reserve(ledgerKey, rewardFingerprint(request));
-    } catch (error) {
-      // Nothing was reserved or paid, so the caller's retry is safe.
-      console.error('rewards ledger unavailable:', error);
-      res.status(503).json({ error: 'rewards endpoint unavailable' });
-      return;
-    }
-    if (reservation.kind === 'conflict') {
-      res.status(409).json({
-        error: 'Idempotency-Key was already used for a different reward',
-      });
-      return;
-    }
-    if (reservation.kind === 'replay') {
-      replay(res, reservation.entry);
-      return;
-    }
-
-    let amountSats: number;
-    try {
-      // This draft endpoint is deliberately restricted to GitHub. Generic flow
-      // identities need a separate provider-aware contract before they can pay.
-      await assertConnected(request.repo);
-      amountSats = await resolveAmount(request);
-    } catch (error) {
-      await release(ledgerKey);
-      fail(res, error, ledgerKey);
-      return;
-    }
-
-    let result;
-    try {
-      result = await pay({ ...request, amountSats });
-    } catch (error) {
-      if (error instanceof RewardPaymentUncertainError) {
-        // It may have paid, or queued a pending reward that pays later, so
-        // the key is never released: every redelivery gets a 409 until an
-        // operator reconciles it.
-        console.error('rewards payment outcome unknown:', error);
-        await settle(() => ledger.markUncertain(ledgerKey));
-        record({
-          status: 'needs-checking',
-          requestKey: ledgerKey,
-          sats: amountSats,
-        });
-        res.status(500).json({ error: 'payment outcome unknown' });
-        return;
-      }
-      // Anything else failed before the payment or pending-reward request
-      // took effect, so a retry may pay.
-      await release(ledgerKey);
-      fail(res, error, ledgerKey);
-      return;
-    }
-
-    if ('pending' in result) {
-      const body: PendingRewardResponse = {
-        status: 'pending',
-        recipient: request.recipient,
-        amountSats,
-      };
-      await settle(() => ledger.markPending(ledgerKey, body));
-      record({ status: 'pending', requestKey: ledgerKey, sats: amountSats });
-      res.status(202).json(body);
-      return;
-    }
-    const body: PaidRewardResponse = {
-      status: 'paid',
-      paymentHash: result.paymentHash,
-      recipient: request.recipient,
-      amountSats,
-    };
-    await settle(() => ledger.markPaid(ledgerKey, body));
-    record({
-      status: 'paid',
-      paymentHash: result.paymentHash,
-      sats: amountSats,
-    });
-    res.status(200).json(body);
+    sendRewardResult(
+      res,
+      await processReward(deps, { idempotencyKey, body: req.body }),
+    );
   });
 
   return router;
