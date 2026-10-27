@@ -1,9 +1,11 @@
 // satsAmount.ts
 //
 // The server-side parser for a user-typed sats amount. It applies the zap
-// card's own rule, so a submit forged outside the card cannot pass an amount
-// the card would refuse. Number() is not that rule: it reads '1e3' as 1,000,
-// '1.000' as 1, '0x10' as 16, and trims ' 5 ' to 5.
+// card's digit grammar (ASCII digits, no sign, no leading zero), so a submit
+// forged outside the card cannot pass a form the card would refuse. The cap is
+// the caller's: validateZapSubmit checks MAX_ZAP_SATS and the live balance at
+// submit, not the balance the card was rendered with. Number() is not that
+// rule: it reads '1e3' as 1,000, '1.000' as 1, '0x10' as 16, and trims ' 5 ' to 5.
 //
 // The same rule lives in two other places, so read all three together:
 // - zapAmountRegex in src/commands/sendZapCommand.ts is the card's client-side
@@ -32,6 +34,7 @@ export const SATS_AMOUNT_PATTERN = /^[1-9][0-9]*$/;
  *
  * @param raw - The submitted value, untrusted.
  * @param bounds - The inclusive range the amount must fall in.
+ *   Bounds that are not safe integers, or a min above max, refuse everything.
  * @returns The amount in sats, or null when the value is not acceptable.
  */
 export function parseSatsAmount(
@@ -39,6 +42,9 @@ export function parseSatsAmount(
   bounds: SatsAmountBounds,
 ): number | null {
   const { min = 1, max } = bounds;
+  if (!Number.isSafeInteger(max) || !Number.isSafeInteger(min) || max < min) {
+    return null;
+  }
   if (typeof raw !== 'string') {
     return null;
   }

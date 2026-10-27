@@ -24,6 +24,17 @@ describe('parseSatsAmount', () => {
     expect(parseSatsAmount('11', bounds)).toBeNull();
   });
 
+  // Bounds come from the caller, so a bad pair must fail closed rather than
+  // let any amount through: '5' <= NaN and '5' > NaN are both false.
+  test.each([
+    ['max NaN', { max: Number.NaN }],
+    ['max Infinity', { max: Number.POSITIVE_INFINITY }],
+    ['min above max', { min: 10, max: 5 }],
+    ['non-integer max', { max: 10.5 }],
+  ])('refuses any amount when the bounds are bad: %s', (_name, bounds) => {
+    expect(parseSatsAmount('5', bounds)).toBeNull();
+  });
+
   // Each of these is a number to Number(), which is how a forged submit paid
   // an amount the user never typed: 1e3 is 1,000 and 1.000 is 1.
   test.each([
