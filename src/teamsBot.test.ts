@@ -511,14 +511,14 @@ describe('TeamsBot pays a zap card at most once per recipient', () => {
     allowanceWallet: null,
   };
 
-  const submitContext = (cardId: string): MockContext => {
+  const submitContext = (cardId: string, zapAmount = '10'): MockContext => {
     const mock = makeContext({
       replyToId: cardId,
       value: {
         action: 'submitZaps',
         zapReceiverId: 'recipient-1',
         zapMessage: 'thanks!',
-        zapAmount: '10',
+        zapAmount,
       },
     });
     (mock.context.turnState as Map<unknown, unknown>).set('user', {
@@ -655,6 +655,23 @@ describe('TeamsBot pays a zap card at most once per recipient', () => {
       expect.stringContaining('the payments stand'),
       expect.any(Error),
     );
+  });
+
+  // Number('1e3') is 1000: a submit forged outside the card used to pay
+  // 1,000 sats for an amount the card would never let through.
+  test('a forged 1e3 amount sends nothing and gets the amount error', async () => {
+    jest.mocked(getWalletBalance).mockResolvedValue(5000);
+    const bot = new TeamsBot();
+    const submit = submitContext('card-forged-amount', '1e3');
+
+    await bot.run(submit.context);
+
+    expect(submit.sendActivity).toHaveBeenCalledWith(
+      "D'oh! You must specify a whole number between 1 and 10,000 Sats.",
+    );
+    expect(getUser).not.toHaveBeenCalled();
+    expect(createInvoice).not.toHaveBeenCalled();
+    expect(payInvoice).not.toHaveBeenCalled();
   });
 
   test('pays a different card to the same recipient normally', async () => {

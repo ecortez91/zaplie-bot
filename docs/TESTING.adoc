@@ -76,6 +76,13 @@ closing the gaps.
   client, an English counter-hint otherwise), that an English turn after a
   Spanish one in the same conversation overrides the stored Spanish hint, and
   that switching language never re-creates the agent.
+- `src/utils/satsAmount.test.ts` and `src/commands/zapBudget.test.ts` pin the
+  zap amount grammar and the forged forms the server refuses (`1e3`, `1.000`,
+  `+1`, `0x10`, padded, leading zeros, non-strings); the `zapAmountRegex`
+  block in `src/commands/sendZapCommand.test.ts` proves `parseSatsAmount`
+  accepts exactly what the card accepts at every tested cap, and
+  `src/teamsBot.test.ts` and `src/teamsBot.i18n.test.ts` pin that a forged
+  `1e3` submit pays nothing and gets the amount error in English and Spanish.
 - `src/services/paymentExtra.test.ts` and the `SendZap payment metadata` block
   in `src/commands/sendZapCommand.test.ts` pin the keyless payment metadata
   projection (no wallet keys or balances in LNbits `extra`).

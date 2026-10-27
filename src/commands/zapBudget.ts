@@ -1,9 +1,13 @@
 import { UserFacingError } from '../messages';
+import { parseSatsAmount } from '../utils/satsAmount';
 
 // Card inputs arrive as strings and the amount regex (built from the live
 // balance when the card is created) is client-only and forgeable, so the
 // amount and the cumulative budget must be enforced server-side before any
-// payment. liveBalance must be a fresh read: the
+// payment. The amount is parsed with the card's own digits rule
+// (parseSatsAmount), never Number(): on a forged submit Number() reads
+// '1.000' as 1 sat (an under-send) and '1e3' as 1,000 (an over-send).
+// liveBalance must be a fresh read: the
 // turn-state wallet snapshot never decrements across a multi-recipient loop.
 //
 // The errors carry message keys and raw numbers, not prose: the handler that
@@ -18,8 +22,8 @@ export function validateZapSubmit(
   liveBalance: number,
   rewardName: string,
 ): number {
-  const amount = Number(rawAmount);
-  if (!Number.isInteger(amount) || amount < 1 || amount > MAX_ZAP_SATS) {
+  const amount = parseSatsAmount(rawAmount, { max: MAX_ZAP_SATS });
+  if (amount === null) {
     throw new UserFacingError('amountInvalid', {
       max: MAX_ZAP_SATS,
       rewardName,

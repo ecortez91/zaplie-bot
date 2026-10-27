@@ -19,12 +19,15 @@ import { TurnContext } from 'botbuilder';
 import { SSOCommandMap } from './commands/SSOCommandMap';
 import { runConversationalTurn } from './services/foundryAgentService';
 import {
+  createInvoice,
+  getUser,
   getUserWallets,
   getUsers,
   getWalletBalance,
   getWallets,
+  payInvoice,
 } from './services/lnbitsService';
-import { en, es as esCopy } from './i18n';
+import { en, es as esCopy, t } from './i18n';
 import {
   DEFAULT_LEADERBOARD_WINDOW_DAYS,
   LEADERBOARD_PARTIAL_MESSAGE,
@@ -336,6 +339,40 @@ describe('TeamsBot answers a Spanish client in Spanish everywhere', () => {
     expect(sendActivity).toHaveBeenCalledWith(
       '¡Ups! Debes indicar un número entero entre 1 y 10.000 Sats.',
     );
+  });
+
+  test('a forged 1e3 amount sends nothing and gets the amount error in Spanish', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest.mocked(getWalletBalance).mockResolvedValue(5000);
+    const bot = new TeamsBot();
+    const { context, sendActivity } = makeContext({
+      replyToId: 'card-es-forged',
+      locale: 'es-ES',
+      value: {
+        action: 'submitZaps',
+        zapReceiverId: 'recipient-6',
+        zapMessage: 'gracias',
+        zapAmount: '1e3',
+      },
+    });
+    (context.turnState as Map<unknown, unknown>).set('user', zapSubmitter);
+
+    await bot.run(context);
+
+    expect(sendActivity).toHaveBeenCalledWith(
+      t('es-ES', 'userFacingError', {
+        message: t('es-ES', 'amountInvalid', {
+          max: 10000,
+          rewardName: 'Sats',
+        }),
+      }),
+    );
+    expect(sendActivity).toHaveBeenCalledWith(
+      '¡Ups! Debes indicar un número entero entre 1 y 10.000 Sats.',
+    );
+    expect(getUser).not.toHaveBeenCalled();
+    expect(createInvoice).not.toHaveBeenCalled();
+    expect(payInvoice).not.toHaveBeenCalled();
   });
 
   test('a budget refusal groups the total and the balance for the region', async () => {

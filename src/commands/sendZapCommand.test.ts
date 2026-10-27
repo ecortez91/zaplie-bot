@@ -25,6 +25,7 @@ import {
   payInvoice,
 } from '../services/lnbitsService';
 import { GENERIC_ERROR_MESSAGE } from '../messages';
+import { parseSatsAmount } from '../utils/satsAmount';
 
 jest.mock('../services/lnbitsService');
 
@@ -337,6 +338,34 @@ describe('zapAmountRegex', () => {
       expect([value, accepts(250, value)]).toEqual([value, false]);
     }
   });
+
+  // The server parses the submitted amount with parseSatsAmount; this is the
+  // proof that it accepts exactly what the card lets through, cap for cap.
+  test.each([1, 9, 10, 11, 99, 100, 250, 999, 1000, 4687, 10000, 14687])(
+    'parseSatsAmount accepts the same amounts as the card at a cap of %i',
+    cap => {
+      const values = [
+        ...Array.from({ length: cap + 13 }, (_, value) => String(value)),
+        '',
+        '0',
+        '007',
+        '1.5',
+        '-5',
+        '+5',
+        ' 5',
+        '5 ',
+        '1e3',
+        '0x10',
+        '1.000',
+      ];
+      for (const value of values) {
+        expect([value, parseSatsAmount(value, { max: cap }) !== null]).toEqual([
+          value,
+          accepts(cap, value),
+        ]);
+      }
+    },
+  );
 
   test('a cap below 1 accepts nothing', () => {
     for (const value of ['', '0', '1', '100']) {
