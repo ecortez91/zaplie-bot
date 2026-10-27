@@ -15,20 +15,23 @@ const {
   summarizeBudgetSpend,
 } = require('./automationPayments');
 const { dataPath } = require('./dataPaths');
-const { readRewardPolicy } = require('./rewardPolicy');
+const { readEffectiveBudget } = require('./rewardBudget');
 
 const router = express.Router();
 
 const TREASURY_USERNAME = process.env.TREASURY_USERNAME || 'automation';
 
-// The budget the bot enforces, for "spent this period". A missing or malformed
-// store shows no budget rather than failing the whole stats panel; the bot
-// fails closed on the same store independently.
+// The budget the bot enforces, for "spent this period": the REWARDS_BUDGET_*
+// overrides first, then the portal's budget, as the bot resolves it. A
+// malformed environment or store shows no budget rather than failing the
+// whole stats panel; the bot fails closed on the same config independently.
 const readBudget = () => {
   try {
-    const data = JSON.parse(fs.readFileSync(dataPath('data.json'), 'utf8'));
-    return readRewardPolicy(data).rewardPolicy.budget;
-  } catch (_error) {
+    return readEffectiveBudget(() =>
+      JSON.parse(fs.readFileSync(dataPath('data.json'), 'utf8')),
+    );
+  } catch (error) {
+    console.warn('Reward budget unavailable for stats:', error.message);
     return null;
   }
 };
