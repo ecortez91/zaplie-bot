@@ -119,6 +119,14 @@ describe('resolveAmountSats', () => {
     ).resolves.toBe(777);
   });
 
+  test('an event with no configured amount is a 503, not a default', async () => {
+    mockedGetRewardAmounts.mockResolvedValue({ githubIssueClosedSats: 500 });
+
+    await expect(
+      resolveAmountSats(parseRewardRequest(validReward)),
+    ).rejects.toMatchObject({ statusCode: 503 });
+  });
+
   test('rejects a retired event even when stale config still contains it', () => {
     mockedGetRewardAmounts.mockResolvedValue({ timesheetWeekSats: 800 });
 

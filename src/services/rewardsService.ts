@@ -170,9 +170,11 @@ export async function resolveAmountSats(
     ? rewardAmounts[configKey]
     : undefined;
   if (amountSats === undefined) {
+    // Not the caller's fault: an admin has not set this amount yet, so the
+    // service is unavailable for this event until they do (fail closed).
     throw new RewardError(
       `no configured amount for eventType '${eventType}'`,
-      400,
+      503,
     );
   }
   if (!isValidRewardAmount(amountSats)) {

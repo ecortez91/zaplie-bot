@@ -66,9 +66,11 @@ may display an unattributed sender there — known limitation).
 ### Idempotency
 
 Every request must carry an `Idempotency-Key` header: 1 to 256 printable ASCII
-characters, unique per reward. The template sends GitHub's `X-GitHub-Delivery`
-id, which stays the same when GitHub redelivers a webhook or a Logic App run is
-resubmitted. A missing key is rejected with
+characters, unique per reward. The template sends
+`github:pull_request:<pull_request.id>:merged`, which stays the same when GitHub
+redelivers a webhook or a Logic App run is resubmitted, and is the same key the
+bot's signed webhook (`POST /api/v1/github/webhook`) uses, so the Logic App and
+the webhook can never both pay for one merge. A missing key is rejected with
 `400 {"error":"Idempotency-Key header is required"}`, a malformed one with
 `400 {"error":"Idempotency-Key header is invalid"}`. The key is required, not
 derived from the payload, because two genuine rewards can have identical

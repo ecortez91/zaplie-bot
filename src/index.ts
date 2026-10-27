@@ -23,6 +23,7 @@ import { UserService } from './services/userService';
 import { FetchUserMiddleware } from './services/fetchUserMiddleware';
 import { RewardLedger } from './services/rewardLedger';
 import { createRewardsRouter } from './rewardsRoute';
+import { createGithubWebhookRouter } from './githubWebhookRoute';
 
 // Create adapter.
 // See https://aka.ms/about-bot-adapter to learn more about adapters.
@@ -76,6 +77,14 @@ const rewardLedger = new RewardLedger();
 // spdy, whose native http_parser binding no longer exists on Node >= 21.
 const server = express();
 server.disable('x-powered-by');
+// Before express.json(): the GitHub signature covers the raw body bytes, so
+// this route reads them itself. Disabled (503) until GITHUB_WEBHOOK_SECRET is set.
+server.use(createGithubWebhookRouter({ ledger: rewardLedger }));
+if (!process.env.GITHUB_WEBHOOK_SECRET) {
+  console.warn(
+    'GITHUB_WEBHOOK_SECRET is not set: POST /api/v1/github/webhook answers 503.',
+  );
+}
 server.use(express.json());
 server.get('/healthz', (_req, res) => {
   res.status(200).json({ status: 'ok' });

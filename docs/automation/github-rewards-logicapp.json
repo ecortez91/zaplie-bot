@@ -139,7 +139,7 @@
                     "headers": {
                       "Content-Type": "application/json",
                       "X-Api-Key": "@parameters('zaplieRewardsApiKey')",
-                      "Idempotency-Key": "@triggerOutputs()?['headers']?['X-GitHub-Delivery']"
+                      "Idempotency-Key": "github:pull_request:@{triggerBody()?['pull_request']?['id']}:merged"
                     },
                     "body": {
                       "recipient": "@triggerBody()?['pull_request']?['user']?['login']",
