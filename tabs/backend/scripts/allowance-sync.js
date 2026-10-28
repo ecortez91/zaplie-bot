@@ -22,6 +22,8 @@ const USAGE = `Usage: node backend/scripts/allowance-sync.js [options]
   --confirm-total <sats>  the preview's "total per period", echoed back
   --overwrite-drift       also overwrite schedules someone edited by hand
   --allow-underfunded     apply even if a Fund wallet holds less than one period
+  --allow-mass-delete     apply even if more than max(5, 10%) of the schedules
+                          would be deleted as leavers
   --json                  print the full result as JSON
   --show-policy           print the stored allowance policy and exit
   --set-policy <file>     validate a policy JSON file, store it in data.json and exit
@@ -30,7 +32,13 @@ const USAGE = `Usage: node backend/scripts/allowance-sync.js [options]
 `;
 
 const parseArgs = (argv) => {
-  const options = { mode: 'dry', json: false, overwriteDrift: false, allowUnderfunded: false };
+  const options = {
+    mode: 'dry',
+    json: false,
+    overwriteDrift: false,
+    allowUnderfunded: false,
+    allowMassDelete: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--show-policy') options.showPolicy = true;
@@ -42,6 +50,7 @@ const parseArgs = (argv) => {
     else if (arg === '--json') options.json = true;
     else if (arg === '--overwrite-drift') options.overwriteDrift = true;
     else if (arg === '--allow-underfunded') options.allowUnderfunded = true;
+    else if (arg === '--allow-mass-delete') options.allowMassDelete = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--confirm-total') {
       const value = argv[index + 1];
@@ -112,7 +121,12 @@ const formatResult = (result) => {
   lines.push(`Total per period: ${s.totalPerPeriodSats} sats (Fund holds ${s.fundBalanceSats} sats)`);
   for (const warning of result.warnings) lines.push(`WARNING: ${warning.message}`);
   for (const blocker of result.blockers) {
-    lines.push(`BLOCKED: ${blocker.message}${blocker.overridable ? ' (--allow-underfunded overrides)' : ''}`);
+    const hint = blocker.overridable
+      ? ' (--allow-underfunded overrides)'
+      : blocker.code === 'mass-delete'
+        ? ' (--allow-mass-delete overrides)'
+        : '';
+    lines.push(`BLOCKED: ${blocker.message}${hint}`);
   }
   if (result.mode === 'dry') {
     lines.push('');
@@ -174,6 +188,7 @@ const main = async (
         confirmTotalSats: options.confirmTotalSats,
         overwriteDrift: options.overwriteDrift,
         allowUnderfunded: options.allowUnderfunded,
+        allowMassDelete: options.allowMassDelete,
         by: 'cli',
       },
       {
@@ -187,6 +202,11 @@ const main = async (
     stdout.write(`${options.json ? JSON.stringify(result, null, 2) : formatResult(result)}\n`);
     return result.result?.errors || result.result?.aborted ? 1 : 0;
   } catch (error) {
+    if (error?.code === 'busy') {
+      // Another run (the portal, its timer, or another CLI) holds the lock.
+      stderr.write(`allowance sync not started: ${error.message}\n`);
+      return 3;
+    }
     stderr.write(`allowance sync failed: ${error.message}\n`);
     return 1;
   }

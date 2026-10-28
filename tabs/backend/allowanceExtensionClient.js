@@ -2,28 +2,39 @@
 // with the Fund wallet's admin key.
 //
 // D7: Zaplie never pays. The Fund key is the key of the wallet the extension
-// pays from, so this client refuses to send it anywhere but the allowance and
-// pay-link extension APIs and the read-only wallet endpoint. It never reaches
+// pays from, so this client sends it only to the exact method and path pairs
+// it uses: the allowance list and create, one allowance (read, update,
+// delete), health, and the read-only wallet endpoint. Nothing else under the
+// extension (not `.../retry`, which pays, nor `test-scheduler`), and never
 // /api/v1/payments. allowanceExtensionClient.test.js holds the allowlist.
 const { lnbitsRequest, maskKeys } = require('./lnbitsGatewayService');
 
 const FUND_KEY_ENV = 'ALLOWANCE_FUND_ADMINKEY';
-const FUND_KEY_PATHS = [
-  /^\/allowance\/api\/v1\/[A-Za-z0-9/_-]*(\?[A-Za-z0-9=&_-]*)?$/,
-  /^\/lnurlp\/api\/v1\/[A-Za-z0-9/_-]*(\?[A-Za-z0-9=&_-]*)?$/,
-];
+const ALLOWANCE_ID_SOURCE = '[A-Za-z0-9_-]{1,128}';
+const ALLOWANCE_ID_PATTERN = new RegExp(`^${ALLOWANCE_ID_SOURCE}$`);
+const ALLOWANCE_LIST_PATH = /^\/allowance\/api\/v1\/allowance$/;
+const ALLOWANCE_ONE_PATH = new RegExp(`^/allowance/api/v1/allowance/${ALLOWANCE_ID_SOURCE}$`);
 const WALLET_READ_PATH = '/api/v1/wallet';
+const FUND_KEY_ROUTES = [
+  ['GET', ALLOWANCE_LIST_PATH],
+  ['POST', ALLOWANCE_LIST_PATH],
+  ['GET', ALLOWANCE_ONE_PATH],
+  ['PUT', ALLOWANCE_ONE_PATH],
+  ['DELETE', ALLOWANCE_ONE_PATH],
+  ['GET', /^\/allowance\/api\/v1\/health$/],
+  ['GET', /^\/api\/v1\/wallet$/],
+];
 const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
-const ALLOWANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 class FundKeyPathError extends Error {}
 
 /** True when the Fund key may be sent to this method and path. */
 const isFundKeyPathAllowed = (method, path) => {
   if (typeof path !== 'string') return false;
-  if (path === WALLET_READ_PATH) return method === 'GET';
-  return FUND_KEY_PATHS.some((pattern) => pattern.test(path));
+  return FUND_KEY_ROUTES.some(
+    ([allowedMethod, pattern]) => allowedMethod === method && pattern.test(path),
+  );
 };
 
 /**

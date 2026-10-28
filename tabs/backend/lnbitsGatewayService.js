@@ -309,11 +309,75 @@ const sanitizePaymentPage = (payments, source) =>
     }
   });
 
+// LNbits 1.6 pages the Users API (ten accounts per request unless `limit` is
+// set) and orders nothing unless `sortby` is set, so one request silently drops
+// everyone past the first page. Read it the way the bot does
+// (src/services/lnbitsService.ts getUsers, docs/SOLUTION_DESIGN.adoc "LNbits
+// Integration"): ordered by id, 100 per request, `offset` advanced by the rows
+// received, until `total` is reached or a page comes back empty. A bare array
+// is an unpaged server that returned everything at once.
+const USER_LIST_PAGE_SIZE = 100;
+// 10,000 accounts is far beyond any team the portal serves: reaching it means
+// the server is ignoring `offset`, and a partial list is refused.
+const USER_LIST_MAX_PAGES = 100;
+
+/**
+ * Every LNbits user, with the `total` the server announced (null when it sent
+ * none) and whether the list is provably complete. Callers that act on who is
+ * missing from the list (the allowance sync's leavers) check `complete`.
+ */
+const readRawUserPages = async () => {
+  const users = [];
+  let total = null;
+  let previousFirstId;
+  for (let page = 0; page <= USER_LIST_MAX_PAGES; page += 1) {
+    const params = new URLSearchParams({
+      sortby: 'id',
+      direction: 'asc',
+      limit: String(USER_LIST_PAGE_SIZE),
+      offset: String(users.length),
+    });
+    const body = await lnbitsRequest(`/users/api/v1/user?${params}`);
+    if (Array.isArray(body)) {
+      if (page > 0) {
+        throw new LnbitsGatewayError('LNbits users response changed shape between pages');
+      }
+      return { users: body, total: body.length, complete: true };
+    }
+    if (!body || !Array.isArray(body.data)) {
+      throw new LnbitsGatewayError('LNbits users response is malformed');
+    }
+    if (body.total !== undefined && body.total !== null) {
+      if (!Number.isSafeInteger(body.total) || body.total < 0) {
+        throw new LnbitsGatewayError('LNbits users response has an invalid total');
+      }
+      total = body.total;
+    }
+    if (body.data.length === 0) {
+      return { users, total, complete: total === null || users.length >= total };
+    }
+    if (page === USER_LIST_MAX_PAGES) {
+      throw new LnbitsGatewayError('LNbits returned more users than expected; refusing a partial list');
+    }
+    if (body.data[0]?.id !== undefined && body.data[0]?.id === previousFirstId) {
+      throw new LnbitsGatewayError('LNbits ignored the users offset; refusing a partial list');
+    }
+    previousFirstId = body.data[0]?.id;
+    users.push(...body.data);
+    if (total !== null && users.length >= total) {
+      return { users, total, complete: true };
+    }
+  }
+  throw new LnbitsGatewayError('LNbits returned more users than expected; refusing a partial list');
+};
+
+// Every other caller (sign-in, the directory, the wallet index) needs the
+// whole list too: a person past the first page would be refused at sign-in,
+// or get a second LNbits user. A list short of `total` is an error for them.
 const listRawUsers = async () => {
-  const body = await lnbitsRequest('/users/api/v1/user');
-  const users = Array.isArray(body) ? body : body?.data;
-  if (!Array.isArray(users)) {
-    throw new LnbitsGatewayError('LNbits users response is malformed');
+  const { users, complete } = await readRawUserPages();
+  if (!complete) {
+    throw new LnbitsGatewayError('LNbits returned fewer users than it announced');
   }
   return users;
 };
@@ -916,6 +980,7 @@ module.exports = {
   getWalletPayLinks,
   listAllWallets,
   listRawUsers,
+  readRawUserPages,
   listUserWallets,
   listUserWalletsWithKeys,
   listUsers,

@@ -137,6 +137,23 @@ test('the CLI refuses --apply without --confirm-total and unknown options', () =
     json: false,
     overwriteDrift: false,
     allowUnderfunded: true,
+    allowMassDelete: false,
     confirmTotalSats: 0,
   });
+  assert.equal(parseArgs(['--allow-mass-delete']).allowMassDelete, true);
+});
+
+test('the CLI exits non-zero with a clear message while another sync holds the lock', async () => {
+  const applied = [];
+  const busy = deps(applied);
+  const held = busy.store.acquireLock();
+  assert.equal(held.acquired, true);
+  const stderr = capture();
+  const code = await main([], { stdout: capture(), stderr, deps: busy });
+  assert.equal(code, 3);
+  assert.match(stderr.text, /allowance sync not started: another allowance sync is already running \(pid \d+/);
+  assert.match(stderr.text, /allowance-sync\.lock/);
+  held.release();
+  assert.equal(await main([], { stdout: capture(), stderr: capture(), deps: busy }), 0);
+  assert.equal(fs.existsSync(busy.store.lockPath), false, 'the lock is released after a run');
 });

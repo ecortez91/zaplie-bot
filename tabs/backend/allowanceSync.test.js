@@ -190,6 +190,53 @@ test('planner table: create, update, recreate, delete, dedupe, drift, paused, le
       total: 25000,
     },
     {
+      // The extension keeps next_payment_date on update and pays an active
+      // row at once when it is past: recreate from the next anchor instead.
+      name: 'a paused row whose next payment is past is recreated, not reactivated',
+      allowances: [rowFor(OID_A, { active: false, next_payment_date: '2026-10-23T09:00:00+00:00' })],
+      state: {
+        byPerson: {
+          [OID_A]: written(rowFor(OID_A, { active: false, next_payment_date: '2026-10-23T09:00:00+00:00' })),
+        },
+      },
+      expect: ['recreate:reactivate-overdue'],
+      check: (result) => {
+        assert.equal(result.actions[0].allowanceId, 'r-aaaa');
+        assert.equal(result.actions[0].body.start_datetime, '2026-10-30T09:00:00.000Z');
+        assert.equal(result.actions[0].body.active, true);
+      },
+      total: 25000,
+    },
+    {
+      name: 'a paused row due within the lead is recreated too',
+      allowances: [rowFor(OID_A, { active: false, next_payment_date: '2026-10-28T12:03:00+00:00' })],
+      state: {
+        byPerson: {
+          [OID_A]: written(rowFor(OID_A, { active: false, next_payment_date: '2026-10-28T12:03:00+00:00' })),
+        },
+      },
+      expect: ['recreate:reactivate-overdue'],
+      total: 25000,
+    },
+    {
+      name: 'a paused row with no readable next payment date is recreated (fail closed)',
+      allowances: [rowFor(OID_A, { active: false, next_payment_date: null })],
+      state: { byPerson: { [OID_A]: written(rowFor(OID_A, { active: false, next_payment_date: null })) } },
+      expect: ['recreate:reactivate-overdue'],
+      total: 25000,
+    },
+    {
+      name: 'an in-flight duplicate is deferred, not deleted',
+      allowances: [
+        rowFor(OID_A, { id: 'r-new', created_at: '2026-10-28T11:00:00+00:00', pending_payment_hash: 'h' }),
+        rowFor(OID_A, { id: 'r-old', created_at: '2026-10-27T11:00:00+00:00' }),
+      ],
+      state: { byPerson: { [OID_A]: written(rowFor(OID_A, { id: 'r-old', created_at: '2026-10-27T11:00:00+00:00' })) } },
+      expect: ['defer:payment-in-flight', 'noop:'],
+      check: (result) => assert.equal(result.actions[0].allowanceId, 'r-new'),
+      total: 50000,
+    },
+    {
       name: 'a leaver (no LNbits user) is deleted',
       people: [person(OID_A)],
       allowances: [rowFor(OID_A), rowFor(OID_B, { id: 'r-bbbb' })],
@@ -350,6 +397,51 @@ test('planner: an empty LNbits user list never deletes every schedule', () => {
   assert.ok(result.blockers.some((blocker) => blocker.code === 'no-people'));
 });
 
+test('planner: an incomplete LNbits user list deletes no leaver and blocks apply', () => {
+  const allowances = [rowFor(OID_A), rowFor(OID_B, { id: 'r-bbbb' })];
+  const state = {
+    byPerson: { [OID_A]: written(rowFor(OID_A)), [OID_B]: written(rowFor(OID_B, { id: 'r-bbbb' })) },
+  };
+  const result = plan({ allowances, state, peopleComplete: false });
+  assert.deepEqual(kinds(result), ['defer:people-incomplete', 'noop:']);
+  assert.equal(result.summary.deletes, 0);
+  assert.deepEqual(result.blockers.map((blocker) => blocker.code), ['people-incomplete']);
+  // Excluded people are the admin's choice, not inferred from the list.
+  const excluded = plan({
+    people: [person(OID_A), person(OID_B)],
+    payLinks: { [`w-${OID_A.slice(0, 4)}`]: linkFor(OID_A), [`w-${OID_B.slice(0, 4)}`]: linkFor(OID_B) },
+    policy: { ...POLICY, excludedOids: [OID_B] },
+    allowances,
+    state,
+    peopleComplete: false,
+  });
+  assert.deepEqual(kinds(excluded), ['delete:excluded', 'noop:']);
+  assert.deepEqual(excluded.blockers, []);
+});
+
+test('planner: more leaver deletes than max(5, 10%) of the schedules blocks unless allowed', () => {
+  const oid = (index) => `dddddddd-0000-4000-8000-${String(index).padStart(12, '0')}`;
+  const leavers = Array.from({ length: 6 }, (_, index) => oid(index + 1));
+  const allowances = [rowFor(OID_A), ...leavers.map((o) => rowFor(o, { id: `r-${o.slice(-4)}` }))];
+  const state = {
+    byPerson: Object.fromEntries(
+      allowances.map((row) => [row.name.slice('zaplie:'.length), { allowanceId: row.id, written: snapshotOf(row) }]),
+    ),
+  };
+  const blocked = plan({ allowances, state });
+  assert.equal(blocked.summary.deletes, 6);
+  assert.deepEqual(blocked.blockers.map((blocker) => blocker.code), ['mass-delete']);
+  assert.equal(blocked.blockers[0].overridable, undefined, 'allowUnderfunded does not lift it');
+
+  const allowed = plan({ allowances, state, allowMassDelete: true });
+  assert.equal(allowed.summary.deletes, 6);
+  assert.deepEqual(allowed.blockers, []);
+
+  const five = plan({ allowances: allowances.slice(0, 6), state });
+  assert.equal(five.summary.deletes, 5);
+  assert.deepEqual(five.blockers, [], 'five leavers are within the floor');
+});
+
 test('planner output never contains a key', () => {
   const result = plan({ payLinks: { [`w-${OID_A.slice(0, 4)}`]: null } });
   const text = JSON.stringify(result);
@@ -436,7 +528,11 @@ const createWorld = ({ users, fundWallets = [{ id: 'fund-1', name: 'Fund', balan
       },
     };
   };
-  world.listUsers = async () => world.users;
+  world.listUsers = async () => ({
+    users: world.users,
+    total: world.total ?? world.users.length,
+    complete: world.total === undefined || world.users.length >= world.total,
+  });
   world.listWallets = async (userId) => world.wallets[userId] || [];
   world.listLinks = async (wallet) => world.links[wallet.id] || [];
   world.createLink = async (wallet, body) => {
@@ -759,4 +855,131 @@ test('run: only one sync at a time', async () => {
   );
   release();
   await first;
+});
+
+test('run: a user list short of its total deletes nobody and refuses apply', async () => {
+  const world = createWorld({ users: USERS });
+  const store = tempStore();
+  const data = { allowancePolicy: POLICY };
+  await runAllowanceSync({ mode: 'apply', confirmTotalSats: 50000 }, world.deps(data, store));
+  assert.equal(world.rows.length, 2);
+
+  // LNbits now pages: only the first account comes back, of the two announced.
+  world.users = USERS.slice(0, 1);
+  world.total = 2;
+  const preview = await runAllowanceSync({ mode: 'dry' }, world.deps(data, store));
+  assert.equal(preview.summary.deletes, 0);
+  assert.deepEqual(preview.blockers.map((blocker) => blocker.code), ['people-incomplete']);
+  const callsBefore = world.calls.length;
+  await assert.rejects(
+    () => runAllowanceSync({ mode: 'apply', confirmTotalSats: 50000 }, world.deps(data, store)),
+    (error) => error.status === 409 && error.code === 'people-incomplete',
+  );
+  assert.equal(world.calls.length, callsBefore);
+  assert.equal(world.rows.length, 2, 'no schedule was deleted');
+});
+
+test('run: lifting the kill switch after an anchor passed recreates from the next anchor', async () => {
+  const world = createWorld({ users: USERS });
+  const store = tempStore();
+  await runAllowanceSync({ mode: 'apply', confirmTotalSats: 50000 }, world.deps({ allowancePolicy: POLICY }, store));
+  const off = { allowancePolicy: { ...POLICY, enabled: false } };
+  await runAllowanceSync({ mode: 'apply', confirmTotalSats: 0 }, world.deps(off, store));
+  // The extension would have paid on the anchor; paused rows keep the date.
+  for (const row of world.rows) row.next_payment_date = '2026-10-23T09:00:00+00:00';
+
+  const back = await runAllowanceSync({ mode: 'dry' }, world.deps({ allowancePolicy: POLICY }, store));
+  assert.deepEqual(
+    back.actions.map((action) => `${action.kind}:${action.reason}`),
+    ['recreate:reactivate-overdue', 'recreate:reactivate-overdue'],
+  );
+  const applied = await runAllowanceSync(
+    { mode: 'apply', confirmTotalSats: 50000 },
+    world.deps({ allowancePolicy: POLICY }, store),
+  );
+  assert.equal(applied.result.errors, 0);
+  assert.ok(world.rows.every((row) => row.active === true));
+  assert.ok(
+    world.rows.every((row) => row.next_payment_date === '2026-10-30T09:00:00.000Z'),
+    'nothing is due before the next anchor',
+  );
+  assert.equal(world.calls.filter(([call]) => call === 'update').length, 2, 'only the two pauses');
+});
+
+test('apply: start_datetime is computed when the create is sent, not when planned', async () => {
+  const world = createWorld({ users: USERS.slice(0, 1) });
+  const planned = plan({ allowances: [] });
+  const create = planned.actions.find((action) => action.kind === 'create');
+  assert.equal(create.body.start_datetime, '2026-10-30T09:00:00.000Z');
+  const client = world.clientFactory('fundkey-0');
+  // The run reached the create past Friday's anchor less the lead.
+  const late = new Date('2026-10-30T08:57:00Z');
+  const { results } = await applyPlan(
+    { actions: [create] },
+    { clients: new Map([['fund-1', client]]), wallets: new Map(), now: () => late },
+  );
+  assert.equal(results[0].ok, true);
+  assert.equal(results[0].row.start_datetime, '2026-11-06T09:00:00.000Z');
+  assert.ok(Date.parse(results[0].row.start_datetime) >= late.getTime() + 60_000);
+});
+
+test('run: the lock file keeps a second process out, and a stale lock is taken over', async () => {
+  const world = createWorld({ users: USERS });
+  const store = tempStore();
+  const data = { allowancePolicy: POLICY };
+  // Another process (the CLI or the portal) holds a fresh lock.
+  fs.writeFileSync(
+    store.lockPath,
+    JSON.stringify({ pid: 4242, host: 'other', at: new Date().toISOString(), token: 'theirs' }),
+  );
+  await assert.rejects(
+    () => runAllowanceSync({ mode: 'dry' }, world.deps(data, store)),
+    (error) =>
+      error.status === 409 && error.code === 'busy' && /pid 4242 on other/.test(error.message),
+  );
+  assert.equal(JSON.parse(fs.readFileSync(store.lockPath, 'utf8')).token, 'theirs', 'left alone');
+
+  // The holder died 31 minutes ago: its lock is stale and is taken over.
+  fs.writeFileSync(
+    store.lockPath,
+    JSON.stringify({ pid: 4242, host: 'other', at: new Date(Date.now() - 31 * 60 * 1000).toISOString(), token: 'theirs' }),
+  );
+  const preview = await runAllowanceSync({ mode: 'dry' }, world.deps(data, store));
+  assert.equal(preview.summary.people, 2);
+  assert.equal(fs.existsSync(store.lockPath), false, 'released after the run');
+});
+
+test('store: the lock is exclusive, names its holder, and only its holder releases it', () => {
+  const store = tempStore();
+  const first = store.acquireLock();
+  assert.equal(first.acquired, true);
+  const holder = JSON.parse(fs.readFileSync(store.lockPath, 'utf8'));
+  assert.equal(holder.pid, process.pid);
+  assert.ok(Number.isFinite(Date.parse(holder.at)));
+  const second = store.acquireLock();
+  assert.equal(second.acquired, false);
+  assert.equal(second.holder.pid, process.pid);
+  assert.equal(second.holder.token, undefined, 'the token is not exposed');
+  second.release?.();
+  assert.equal(fs.existsSync(store.lockPath), true);
+  assert.equal(store.lockHolder().pid, process.pid);
+  first.release();
+  assert.equal(fs.existsSync(store.lockPath), false);
+  assert.equal(store.lockHolder(), null);
+
+  // A clock 31 minutes on makes a held lock stale.
+  let nowMs = Date.now();
+  const clocked = createAllowanceSyncStore({
+    statePath: store.statePath,
+    auditPath: store.auditPath,
+    clock: () => nowMs,
+  });
+  const held = clocked.acquireLock();
+  assert.equal(clocked.acquireLock().acquired, false);
+  nowMs += 31 * 60 * 1000;
+  const taken = clocked.acquireLock();
+  assert.equal(taken.acquired, true);
+  held.release();
+  assert.equal(fs.existsSync(clocked.lockPath), true, 'the old holder cannot release the new lock');
+  taken.release();
 });

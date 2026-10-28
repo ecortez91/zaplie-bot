@@ -38,14 +38,14 @@ const installFetch = (handler) => {
   return calls;
 };
 
-test('D7: the Fund key may only reach the allowance and lnurlp APIs and the wallet read', () => {
+test('D7: the Fund key may only reach the exact allowance routes the client uses and the wallet read', () => {
   const allowed = [
     ['GET', '/allowance/api/v1/allowance'],
     ['POST', '/allowance/api/v1/allowance'],
+    ['GET', '/allowance/api/v1/allowance/abc'],
     ['PUT', '/allowance/api/v1/allowance/abc'],
     ['DELETE', '/allowance/api/v1/allowance/abc'],
     ['GET', '/allowance/api/v1/health'],
-    ['GET', '/lnurlp/api/v1/links?all_wallets=false'],
     ['GET', '/api/v1/wallet'],
   ];
   for (const [method, path] of allowed) {
@@ -62,6 +62,17 @@ test('D7: the Fund key may only reach the allowance and lnurlp APIs and the wall
     ['GET', '/allowance/api/v1/../../api/v1/payments'],
     ['GET', '/allowancex/api/v1/allowance'],
     ['GET', '/lnurlp/api/v1/links?x=1#frag'],
+    // Admin actions under the extension: a retry pays, so none is allowed.
+    ['POST', '/allowance/api/v1/allowance/abc/retry'],
+    ['POST', '/allowance/api/v1/test-scheduler'],
+    ['GET', '/allowance/api/v1/test-scheduler'],
+    ['POST', '/allowance/api/v1/allowance/abc'],
+    ['PUT', '/allowance/api/v1/allowance'],
+    ['DELETE', '/allowance/api/v1/allowance'],
+    ['POST', '/allowance/api/v1/health'],
+    ['GET', '/allowance/api/v1/allowance?all_wallets=true'],
+    ['GET', '/lnurlp/api/v1/links?all_wallets=false'],
+    ['POST', '/lnurlp/api/v1/links'],
     ['GET', undefined],
   ];
   for (const [method, path] of refused) {

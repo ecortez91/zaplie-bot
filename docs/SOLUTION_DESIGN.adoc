@@ -635,9 +635,11 @@ them. Zaplie never pays (D7): it creates one pay link per Allowance wallet
 `Zaplie allowance (<name>)`), with that wallet's own admin key, and one
 schedule per person named `zaplie:<oid>` on the Fund wallet, with the memo
 `<policy memo> [zaplie-managed]`. The extension pays them from the Fund
-wallet. The Fund key (`ALLOWANCE_FUND_ADMINKEY`) only ever reaches
-`/allowance/api/v1/*`, `/lnurlp/api/v1/*` and `GET /api/v1/wallet`; a test
-holds that allowlist.
+wallet. The Fund key (`ALLOWANCE_FUND_ADMINKEY`) only ever reaches the exact
+routes the sync uses: `GET` and `POST /allowance/api/v1/allowance`, `GET`,
+`PUT` and `DELETE /allowance/api/v1/allowance/{id}`,
+`GET /allowance/api/v1/health` and `GET /api/v1/wallet` (never the
+extension's `retry` or `test-scheduler`); a test holds that allowlist.
 
 The sync (`tabs/backend/allowanceSync.js`) is a pure planner plus an apply
 step, run from `tabs/backend/scripts/allowance-sync.js`:
@@ -650,12 +652,27 @@ step, run from `tabs/backend/scripts/allowance-sync.js`:
 * a schedule edited or paused by hand (it differs from what Zaplie last wrote,
   kept in `allowance-sync.json`): reported as drift or paused, never
   overwritten unless the admin opts in;
-* leaver (no LNbits user, or in `excludedOids`): deleted;
-* a payment in flight: deferred to the next run;
+* leaver (no LNbits user, or in `excludedOids`): deleted. The LNbits user
+  list is read page by page (`sortby=id`, 100 per request, until `total`, as
+  the bot reads it); a list short of its `total` deletes no leaver and blocks
+  apply (`people-incomplete`), and more leaver deletes than max(5, 10% of
+  Zaplie's schedules) block apply unless the admin confirms them
+  (`mass-delete`);
+* a payment in flight (on the schedule or on a duplicate): deferred to the
+  next run;
+* a schedule Zaplie paused, reactivated: updated in place while its
+  `next_payment_date` is still ahead; once it is due (the extension keeps the
+  date on update and would pay at once), deleted and recreated from the next
+  anchor;
 * policy disabled: every Zaplie schedule is paused, nothing is created.
 
-Apply is refused unless it echoes the preview's total per period, and while a
-Fund wallet holds less than one period unless explicitly overridden.
+A create's `start_datetime` is computed when the request is sent, so a slow
+run never sends a start the extension refuses. Apply is refused unless it
+echoes the preview's total per period, and while a Fund wallet holds less than
+one period unless explicitly overridden. One run at a time across processes:
+`allowance-sync.lock` in the data directory (created exclusively, holder pid,
+host and time inside, taken over after 30 minutes); a second run gets 409
+`busy`.
 
 Admins preview and apply from *Automations → Weekly allowances*
 (`/api/allowances`: `GET /policy` for any signed-in user or the bot,
@@ -672,8 +689,9 @@ payments run Fund to Allowance, so they never pair as an Allowance-to-Private
 zap and stay out of the feed and the leaderboard; the Fund wallet must not be
 named `Allowance` or `Private` nor belong to a person, and the sync refuses
 one that is. The extension adds the amount each period; resetting a balance
-to the amount would be an extension feature. Re-enabling a schedule the
-extension considers overdue may pay the missed period at once.
+to the amount would be an extension feature. A paused period is never paid
+late: a recreated schedule starts at the next anchor, and its extension
+history starts again with it.
 
 === Bot copy follows the user's Teams language
 
