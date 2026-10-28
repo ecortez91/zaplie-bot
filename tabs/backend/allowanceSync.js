@@ -837,9 +837,10 @@ const gatherSnapshot = async ({
     }
   }
 
-  // { users, total, complete } from the paged reader. Complete only when the
-  // pages add up to the announced total (or an empty page ended an unannounced
-  // list); anything else, a bare array included, cannot prove who has left.
+  // { users, total, complete } from the paged reader. A paged list is complete
+  // only when the pages add up to the announced total (or an empty page ended
+  // an unannounced list). A bare array is an unpaged server's whole list and is
+  // trusted as complete. Anything short of complete cannot prove who has left.
   const listed = await listUsers();
   const users = listed?.users;
   if (!Array.isArray(users)) {
