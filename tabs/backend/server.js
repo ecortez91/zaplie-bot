@@ -14,6 +14,7 @@ const {
   validateRewardAmountPatch,
 } = require('./rewardAmounts');
 const { validateBotPersona, readStoredBotPersona } = require('./botPersona');
+const { validateRewardName, readStoredRewardName } = require('./rewardName');
 const { maxRewardSats } = require('./rewardAmounts');
 const {
   RewardPolicyError,
@@ -232,6 +233,7 @@ app.post('/api/reward-policy', requireAdmin, (req, res) => {
 // set, so the request is refused instead of silently half-honoured — the same
 // contract the payment routes state in lnbitsRoutes.js.
 const BOT_PERSONA_BODY_KEYS = new Set(['botPersona']);
+const REWARD_NAME_BODY_KEYS = new Set(['newRewardName']);
 
 const hasOnlyKeys = (body, allowed) =>
   typeof body === 'object' &&
@@ -273,10 +275,11 @@ app.post('/api/bot-persona', requireAdmin, (req, res) => {
 // it before sign-in and blocks rendering on it. The others disclose connected
 // repositories, payout policy and the assistant persona, so they take either a
 // verified MSAL token or the bot's shared token.
-// Endpoint to get the reward name
+// Endpoint to get the reward name. Sanitized on the way out, so a value
+// stored before validation existed reads as the default, not as itself.
 app.get('/api/reward-name', (req, res) => {
   const data = readData();
-  res.send({ rewardName: data.rewardName });
+  res.send({ rewardName: readStoredRewardName(data.rewardName) });
 });
 
 // Endpoint to get the connected repository allowlist
@@ -331,18 +334,23 @@ app.get('/api/reward-policy', requireSignedInOrBot, (req, res) => {
 });
 
 app.post('/api/reward-name', requireAdmin, (req, res) => {
-  const { newRewardName } = req.body;
-  if (newRewardName) {
-    const data = readData();
-    data.rewardName = newRewardName;
-    if (!writeData(data)) {
-      res.status(500).send({ message: 'Reward name could not be persisted' });
-      return;
-    }
-    res.send({ message: 'Reward name updated successfully', rewardName: data.rewardName });
-  } else {
-    res.status(400).send({ message: 'Invalid reward name' });
+  if (!hasOnlyKeys(req.body, REWARD_NAME_BODY_KEYS)) {
+    res.status(400).send({ message: 'newRewardName is the only accepted field' });
+    return;
   }
+
+  const validation = validateRewardName(req.body.newRewardName);
+  if (!validation.valid) {
+    res.status(400).send({ message: validation.message });
+    return;
+  }
+  const data = readData();
+  data.rewardName = validation.value;
+  if (!writeData(data)) {
+    res.status(500).send({ message: 'Reward name could not be persisted' });
+    return;
+  }
+  res.send({ message: 'Reward name updated successfully', rewardName: data.rewardName });
 });
 
 // Use the authentication middleware for API routes

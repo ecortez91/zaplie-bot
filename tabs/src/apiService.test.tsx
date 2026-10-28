@@ -1,5 +1,7 @@
 import axios from 'axios';
 import {
+  MAX_REWARD_NAME_LENGTH,
+  RewardNameError,
   getAutomations,
   getPeople,
   getRewardAmounts,
@@ -62,6 +64,55 @@ describe('reward name API', () => {
       'The reward name cannot be empty.',
     );
     expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  test('does not send a reward name over the limit', async () => {
+    expect(MAX_REWARD_NAME_LENGTH).toBe(32);
+    await expect(
+      updateRewardName('id-token', 'a'.repeat(MAX_REWARD_NAME_LENGTH + 1)),
+    ).rejects.toThrow('The reward name must be at most 32 characters.');
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  test('counts code points, so an emoji is one character', async () => {
+    const rewardName = `${'a'.repeat(MAX_REWARD_NAME_LENGTH - 1)}⚡`;
+    mockPost.mockResolvedValue({ data: { rewardName } });
+
+    await expect(updateRewardName('id-token', rewardName)).resolves.toEqual({
+      rewardName,
+    });
+  });
+
+  test.each(['sa\u0000ts', 'sa\nts', 'sa\tts', 'sa\u2028ts', '\nsats'])(
+    'does not send a reward name with a control character: %j',
+    async rewardName => {
+      await expect(updateRewardName('id-token', rewardName)).rejects.toThrow(
+        'The reward name must be one line of plain text, without control characters.',
+      );
+      expect(mockPost).not.toHaveBeenCalled();
+    },
+  );
+
+  test('surfaces the backend reason for a refused save', async () => {
+    mockPost.mockRejectedValue({
+      response: {
+        status: 400,
+        data: { message: 'The reward name must be at most 32 characters.' },
+      },
+    });
+
+    const attempt = updateRewardName('id-token', 'Points');
+    await expect(attempt).rejects.toThrow(
+      'The reward name must be at most 32 characters.',
+    );
+    await expect(attempt).rejects.toBeInstanceOf(RewardNameError);
+  });
+
+  test('passes other failures through unchanged', async () => {
+    const outage = new Error('Network Error');
+    mockPost.mockRejectedValue(outage);
+
+    await expect(updateRewardName('id-token', 'Points')).rejects.toBe(outage);
   });
 });
 

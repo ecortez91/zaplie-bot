@@ -466,8 +466,23 @@ any token whose membership cannot be read, gets 403 and nothing is created.
 |===
 
 The reward label is persisted by the Express backend
-(`GET/POST /api/reward-name` → `data.json` under `ZAPLIE_DATA_DIR`) and consumed by both
-the tabs (`RewardNameContext`) and the bot (`src/services/fetchRewardsName.ts`).
+(`GET/POST /api/reward-name` → `data.json` under `ZAPLIE_DATA_DIR`) and consumed by
+the tabs (`RewardNameContext`); the bot takes its label from `LNBITS_POINTS_LABEL`
+instead. `GET` is open, because the portal reads the label before sign-in; `POST`
+requires the `Zaplie.Admin` app role. `tabs/backend/rewardName.js` keeps the label
+plain: a string of 1 to 32 code points after trimming (an emoji counts once), on
+one line, with no control characters (C0, DEL, C1, tab or newline) and no
+U+2028/U+2029 line separators. A save that breaks a rule is a 400 whose `message`
+says which, and nothing is stored. A body with any key besides `newRewardName` is
+also a 400 (`newRewardName is the only accepted field`), the same contract as
+`/api/bot-persona` and the payment routes. The read applies the same rules to whatever is
+on disk and serves `sats` in place of an invalid stored value, so a name saved
+before the rules existed cannot reach the browser. The Settings field mirrors the
+rules (`MAX_REWARD_NAME_LENGTH` in `tabs/src/apiService.tsx`), shows the characters
+left, and explains a refusal instead of offering a retry. It hands the untrimmed
+value to `updateRewardName`, so a pasted tab or line separator at either end is
+refused rather than trimmed away, and it marks the field invalid only for a
+refused or blank name, not for a failed request.
 
 The assistant persona follows the same route: `GET /api/bot-persona` is readable
 by any signed-in user or the bot's shared token, `POST /api/bot-persona`
@@ -697,8 +712,7 @@ and manifest packaging across local/dev environments.
 - Conversation and user state are in-memory; a restart clears them. Zap
   submission and automation reward records are the exception: they persist
   under `ZAPLIE_DATA_DIR` so a restart cannot pay a recipient twice.
-- The reward-name API is guarded by a placeholder shared secret and a JSON
-  file rather than a real datastore.
+- The reward name is stored in a JSON file rather than a real datastore.
 - The Azure Functions are anonymous at the platform level and receive LNbits
   credentials per request.
 - The JSON stores under `ZAPLIE_DATA_DIR` are persistent on a single App

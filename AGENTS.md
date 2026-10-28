@@ -82,8 +82,8 @@ deployable components in one repository:
   second build of the same source serves `https://getzapl.ie/portal/`
   (`PUBLIC_URL=/portal`).
   `tabs/backend/server.js` is a tiny Express API that persists the renamable
-  reward label ("Sats") to `tabs/backend/data.json` and serves the production
-  build.
+  reward label ("Sats", validated by `tabs/backend/rewardName.js`) to
+  `tabs/backend/data.json` and serves the production build.
 - **Functions** (`getUsers`, `showUsers`, `sendZap`): anonymous HTTP triggers
   that take LNbits credentials per-request (Basic auth + `siteURL`/`adminkey`
   query params) — used for automation/Copilot scenarios.
@@ -181,9 +181,18 @@ table):
 
 - `src/setupProxy.js` references `NBITS_NODE_URL` (missing `L`) — likely dead
   code.
-- The reward-name API uses a placeholder shared secret (`your-secret-token`)
-  across `tabs/src/apiService.tsx`, `tabs/backend/authMiddleware.js`, and
-  `src/services/fetchRewardsName.ts`.
+- The reward-name API has two halves with different access: `GET
+  /api/reward-name` is open (the portal reads the label before sign-in) and
+  `POST /api/reward-name` needs a verified MSAL ID token with the
+  `Zaplie.Admin` role; neither takes the shared `TAB_BACKEND_TOKEN`. The name
+  is validated by `tabs/backend/rewardName.js` (1 to 32 code points, one line,
+  no control characters or U+2028/U+2029) on the write, which also refuses
+  any body key besides `newRewardName`, and the read serves
+  `sats` instead of any stored value that breaks those rules.
+  `tabs/src/apiService.tsx` (`updateRewardName`, `MAX_REWARD_NAME_LENGTH`)
+  keeps a copy of the rules so Settings can explain a refusal before sending;
+  two copies because the packages are separate, kept identical on purpose.
+  The bot does not read this API: its label comes from `LNBITS_POINTS_LABEL`.
 - Bot conversation state uses `MemoryStorage`: it is lost on restart and not
   multi-instance safe.
 - The zap-card ledger (`src/services/zapLedger.ts`) and the automation reward

@@ -2,6 +2,7 @@ import React, { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import RewardsNameSetting from './RewardsNameSetting';
 import { RewardNameContext } from './RewardNameContext';
+import { RewardNameError } from '../apiService';
 
 const mockUseMsal = jest.fn();
 const mockAcquireIdToken = jest.fn();
@@ -19,6 +20,7 @@ jest.mock('../services/adminRole', () => ({
 }));
 
 jest.mock('../apiService', () => ({
+  ...jest.requireActual('../apiService'),
   updateRewardName: (idToken: string, rewardName: string) =>
     mockUpdateRewardName(idToken, rewardName),
 }));
@@ -157,7 +159,10 @@ describe('RewardsNameSetting', () => {
     });
 
     await eventually(() => {
-      expect(mockUpdateRewardName).toHaveBeenCalledWith('id-token', 'Points');
+      expect(mockUpdateRewardName).toHaveBeenCalledWith(
+        'id-token',
+        '  Points  ',
+      );
     });
     expect(setRewardName).toHaveBeenCalledWith('Points');
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
@@ -192,6 +197,72 @@ describe('RewardsNameSetting', () => {
       (container.querySelector('input') as HTMLInputElement).disabled,
     ).toBe(false);
     expect(mockToastError).toHaveBeenCalledWith('Error updating reward name.');
+    // A failed request is not an invalid name, so the field is not flagged.
+    expect(
+      container.querySelector('input')?.getAttribute('aria-invalid'),
+    ).toBeNull();
+  });
+
+  test('passes the raw field value so a pasted control character is refused', async () => {
+    mockUpdateRewardName.mockResolvedValue({ rewardName: 'Zaps' });
+
+    await renderSetting({
+      rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
+      setRewardName: jest.fn(),
+      isLoading: false,
+      error: null,
+      retry: jest.fn(),
+    });
+
+    await act(async () => {
+      getButton('Edit').click();
+    });
+    const input = container.querySelector('input');
+    if (!input) throw new Error('Reward name input was not rendered.');
+    await act(async () => {
+      setInputValue(input, '\tZaps');
+    });
+    await act(async () => {
+      getButton('Save').click();
+    });
+
+    // trim() would drop the tab; updateRewardName checks before trimming.
+    await eventually(() => {
+      expect(mockUpdateRewardName).toHaveBeenCalledWith(
+        expect.any(String),
+        '\tZaps',
+      );
+    });
+  });
+
+  test('marks the field invalid when the name itself is blank', async () => {
+    await renderSetting({
+      rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
+      setRewardName: jest.fn(),
+      isLoading: false,
+      error: null,
+      retry: jest.fn(),
+    });
+
+    await act(async () => {
+      getButton('Edit').click();
+    });
+    const input = container.querySelector('input');
+    if (!input) throw new Error('Reward name input was not rendered.');
+    await act(async () => {
+      setInputValue(input, '   ');
+    });
+    await act(async () => {
+      getButton('Save').click();
+    });
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      'Enter a reward name before saving.',
+    );
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(mockUpdateRewardName).not.toHaveBeenCalled();
   });
 
   test('keeps an in-progress edit when a provider retry resolves', async () => {
@@ -224,5 +295,71 @@ describe('RewardsNameSetting', () => {
     });
 
     expect(container.querySelector('input')?.value).toBe('Karma');
+  });
+
+  test('shows why a reward name was refused instead of the generic retry', async () => {
+    const setRewardName = jest.fn();
+    mockUpdateRewardName.mockRejectedValue(
+      new RewardNameError('The reward name must be at most 32 characters.'),
+    );
+
+    await renderSetting({
+      rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
+      setRewardName,
+      isLoading: false,
+      error: null,
+      retry: jest.fn(),
+    });
+
+    await act(async () => {
+      getButton('Edit').click();
+    });
+    await act(async () => {
+      getButton('Save').click();
+    });
+    await eventually(() => {
+      expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+        'The reward name must be at most 32 characters.',
+      );
+    });
+    expect(setRewardName).not.toHaveBeenCalled();
+    expect(
+      (container.querySelector('input') as HTMLInputElement).disabled,
+    ).toBe(false);
+    expect(container.querySelector('input')?.getAttribute('aria-invalid')).toBe(
+      'true',
+    );
+  });
+
+  test('counts the characters left while editing, past the limit too', async () => {
+    await renderSetting({
+      rewardName: 'Sats',
+      rewardNameLabel: 'Sats',
+      setRewardName: jest.fn(),
+      isLoading: false,
+      error: null,
+      retry: jest.fn(),
+    });
+
+    await act(async () => {
+      getButton('Edit').click();
+    });
+    const count = () =>
+      container.querySelector('#reward-name-count')?.textContent;
+    expect(count()).toBe('28 characters left');
+
+    const input = container.querySelector('input');
+    if (!input) throw new Error('Reward name input was not rendered.');
+    // An emoji is one character, as the backend counts it.
+    await act(async () => {
+      setInputValue(input, '🎉'.repeat(32));
+    });
+    expect(count()).toBe('0 characters left');
+
+    await act(async () => {
+      setInputValue(input, 'a'.repeat(33));
+    });
+    expect(count()).toBe('1 character over the limit');
   });
 });
