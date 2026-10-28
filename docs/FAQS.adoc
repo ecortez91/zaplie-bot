@@ -23,11 +23,19 @@ name is used by both the web tabs and the bot's replies.
 
 === How do I send a Zap?
 
-Message the bot `send zap` in Teams, pick one or more recipients, add a
+Message the bot `send zap` in Teams, pick up to three recipients (the card
+says the limit; an administrator can change it), add a
 message and an amount (1 up to your Allowance balance, at most 10,000; the
 card refuses more before you can submit; with several recipients the total
 is checked when you submit), and submit. The card updates in place with the
 result and your remaining balance.
+
+=== Why can I only zap three people at a time?
+
+Teams gives the bot 15 seconds to answer a card, and each recipient is paid
+one after another, so a card with more people could run out of time and show
+you an error while the zaps were still going through. To thank more people,
+send a second card.
 
 === Why did sending to a colleague fail?
 

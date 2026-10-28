@@ -45,8 +45,24 @@ closing the gaps.
   `src/commands/zapRecipient.test.ts` pins that the `onPaid` step runs only
   after the ledger records the payment and cannot change the outcome;
   `src/teamsBot.test.ts` pins that the chat is opened after the receipt;
+  `src/teamsBot.submitDuration.test.ts` pins that the turn settles before
+  the recipient notifications do (the bot tracks them; tests wait with
+  `settleBackgroundWork`), that two recipients are both told after the
+  receipt, and that a failing or rejecting notifier never reaches the sender;
   `src/services/fetchUserMiddleware.proactive.test.ts` pins that the
   synthetic proactive event skips the Teams and LNbits lookups.
+- `src/commands/zapBudget.test.ts` pins the recipient cap
+  (`validateRecipientCount` and `ZAP_MAX_RECIPIENTS` parsing: default three,
+  an override, and `0`, `-1`, `1e1`, `3.0` or `abc` refused naming the
+  variable). `src/teamsBot.submitDuration.test.ts` pins that an over-cap card
+  pays nobody and touches neither the ledger nor LNbits (not even the balance
+  read), that the same refusal repeats on resubmit instead of "already
+  submitted", that a card at the cap pays everyone, that a malformed override
+  stops the bot from constructing, and that a self-zap is told first;
+  `src/teamsBot.test.ts` pins that the refusal records `chat.failed` at level
+  `warning`, not a `zap.*` event;
+  `src/teamsBot.i18n.test.ts` pins the Spanish refusal and
+  `src/commands/sendZapCommand.test.ts` the card's placeholder.
 - `src/services/rewardLedger.test.ts` covers the reward idempotency ledger:
   reserve, replay of each state, fingerprint conflicts, release of only a
   `processing` record, restart durability, ten concurrent reserves acquiring
@@ -230,6 +246,12 @@ New E2E tests should reference the feature `id` (e.g. `total-zaps`,
   crash exercise, stop after `processing` is durable and confirm the restarted
   bot does not call LNbits for that recipient. Reconcile LNbits before any
   record or orphan-lock repair; do not delete a barrier merely to retry.
+- *Bot recipient cap:* the `send zap` card says "Select up to 3 recipients"
+  ("Selecciona hasta 3 destinatarios" in a Spanish client). Pick four people
+  and submit: the reply is the cap message and LNbits shows no new payment.
+  Pick three: the receipt and the success line arrive with no Teams error
+  banner, and each recipient gets the 1:1 notice, possibly a second or two
+  after the sender's reply.
 - *Automation reward retries:* with the same setup, send one reward request
   twice with the same `Idempotency-Key` (see the smoke test in
   `docs/automation/README.md`). The second response must match the first,

@@ -1,4 +1,5 @@
 import { UserFacingError } from '../messages';
+import { positiveIntFromEnv } from '../services/envNumbers';
 import { parseSatsAmount } from '../utils/satsAmount';
 
 // Card inputs arrive as strings and the amount regex (built from the live
@@ -9,12 +10,33 @@ import { parseSatsAmount } from '../utils/satsAmount';
 // '1.000' as 1 sat (an under-send) and '1e3' as 1,000 (an over-send).
 // liveBalance must be a fresh read: the
 // turn-state wallet snapshot never decrements across a multi-recipient loop.
+// The recipient count is capped too: Teams ends a card submit's turn after 15
+// seconds, and every recipient is paid in sequence on that turn (four LNbits
+// calls and two ledger writes each), so one card pays a bounded number of
+// people (issue 444, docs/SOLUTION_DESIGN.adoc).
 //
 // The errors carry message keys and raw numbers, not prose: the handler that
 // catches them renders the text in the user's language and formats the
 // numbers for the user's region (never the server's).
 
 export const MAX_ZAP_SATS = 10000;
+
+export const ZAP_MAX_RECIPIENTS_ENV = 'ZAP_MAX_RECIPIENTS';
+export const DEFAULT_ZAP_MAX_RECIPIENTS = 3;
+
+// Read once per bot instance (constructor), so a malformed value refuses to
+// start the bot, like ZAPLIE_LEDGER_STALE_LOCK_MS, instead of failing every
+// submit with the generic error. 0 is refused too: it would make every zap
+// impossible. The card reads the same resolver, so the limit it advertises is
+// the one the submit enforces.
+export const resolveZapMaxRecipients = (): number =>
+  positiveIntFromEnv(ZAP_MAX_RECIPIENTS_ENV, DEFAULT_ZAP_MAX_RECIPIENTS);
+
+export function validateRecipientCount(count: number, max: number): void {
+  if (count > max) {
+    throw new UserFacingError('tooManyRecipients', { max, count });
+  }
+}
 
 export function validateZapSubmit(
   rawAmount: unknown,

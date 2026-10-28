@@ -366,6 +366,19 @@ created. Must be a positive integer; a failed grant is logged, not retried
   clamped
 | Bot
 
+| `ZAP_MAX_RECIPIENTS`
+| Most people one zap card may pay (default `3`). A whole number of `1` or
+  more; anything else makes the bot refuse to start. The card shows the limit
+  and the submit refuses more before reading the ledger or LNbits. Each
+  recipient costs four LNbits calls and two ledger writes on the sender's
+  turn, which Teams ends after 15 seconds, so raise it only after measuring a
+  submit in your tenant; from `4` up the estimated slow case crosses the
+  limit. Not declared in `infra/azure.bicep`, whose `appsettings` resource
+  replaces the whole collection, so a value set by hand with `az webapp
+  config appsettings set` is lost on the next `teamsapp provision`; set it
+  again afterwards
+| Bot
+
 | `REACT_APP_AAD_CLIENT_ID`, `REACT_APP_TENANT_ID`
 | MSAL configuration for the tabs SPA
 | Tabs

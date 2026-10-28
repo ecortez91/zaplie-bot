@@ -1,6 +1,11 @@
 import { UserFacingError } from '../messages';
-import { expect, describe, test } from '@jest/globals';
-import { validateZapSubmit } from './zapBudget';
+import { afterEach, expect, describe, test } from '@jest/globals';
+import {
+  ZAP_MAX_RECIPIENTS_ENV,
+  resolveZapMaxRecipients,
+  validateRecipientCount,
+  validateZapSubmit,
+} from './zapBudget';
 
 describe('validateZapSubmit', () => {
   test('returns the parsed amount for a valid single zap', () => {
@@ -149,5 +154,58 @@ describe('validateZapSubmit parses the amount like the card does', () => {
     expect(submit('1')).toBe(1);
     expect(submit('100')).toBe(100);
     expect(submit('10000')).toBe(10000);
+  });
+});
+
+// Teams answers a card submit within 15 seconds and every recipient is paid
+// in sequence on that turn, so one card pays a bounded number of people.
+describe('recipient cap', () => {
+  const original = process.env[ZAP_MAX_RECIPIENTS_ENV];
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env[ZAP_MAX_RECIPIENTS_ENV];
+    } else {
+      process.env[ZAP_MAX_RECIPIENTS_ENV] = original;
+    }
+  });
+
+  test('refuses one recipient over the cap with a message key and the numbers', () => {
+    let caught: unknown;
+    try {
+      validateRecipientCount(4, 3);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(UserFacingError);
+    const error = caught as UserFacingError;
+    expect(error.key).toBe('tooManyRecipients');
+    expect(error.params).toEqual({ max: 3, count: 4 });
+  });
+
+  test('allows a count at or under the cap', () => {
+    expect(() => validateRecipientCount(3, 3)).not.toThrow();
+    expect(() => validateRecipientCount(1, 3)).not.toThrow();
+  });
+
+  test('defaults to three when the variable is unset or blank', () => {
+    delete process.env[ZAP_MAX_RECIPIENTS_ENV];
+    expect(resolveZapMaxRecipients()).toBe(3);
+    process.env[ZAP_MAX_RECIPIENTS_ENV] = '';
+    expect(resolveZapMaxRecipients()).toBe(3);
+    process.env[ZAP_MAX_RECIPIENTS_ENV] = '   ';
+    expect(resolveZapMaxRecipients()).toBe(3);
+  });
+
+  test('reads an operator override', () => {
+    process.env[ZAP_MAX_RECIPIENTS_ENV] = '5';
+    expect(resolveZapMaxRecipients()).toBe(5);
+  });
+
+  test('refuses a malformed or zero override, naming the variable', () => {
+    for (const malformed of ['0', '-1', '1e1', '3.0', 'abc']) {
+      process.env[ZAP_MAX_RECIPIENTS_ENV] = malformed;
+      expect(() => resolveZapMaxRecipients()).toThrow(/ZAP_MAX_RECIPIENTS/);
+    }
   });
 });

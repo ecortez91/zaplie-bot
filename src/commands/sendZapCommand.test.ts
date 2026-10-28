@@ -691,6 +691,71 @@ describe('SendZap payment metadata', () => {
 // The card a Spanish client receives is Spanish end to end: form labels,
 // validation hints, the balance line, the button, and the receipt it turns
 // into. Wallet names, amounts and the reward label stay as they are.
+// Adaptive Cards 1.5 has no "at most N selections" on Input.ChoiceSet, so the
+// card can only advertise the recipient cap; the submit enforces it.
+describe('the zap card advertises the recipient cap', () => {
+  type ReceiverInput = { id?: string; placeholder?: string };
+  const originalCap = process.env.ZAP_MAX_RECIPIENTS;
+
+  const receiverInputFor = async (locale?: string) => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    jest.mocked(getUsers).mockResolvedValue([]);
+    jest.mocked(getWalletBalance).mockResolvedValue(1000 as never);
+    const { context, sendActivity } = makeContext();
+    (context as unknown as { activity: unknown }).activity = { locale };
+    (context.turnState as Map<unknown, unknown>).set('user', {
+      id: 'user-1',
+      allowanceWallet: { id: 'w-1', inkey: 'inkey-1', adminkey: 'adm-1' },
+    });
+
+    await new SendZapCommand().execute(context);
+
+    const [activity] = sendActivity.mock.calls[0] as unknown as [
+      { attachments: { content: CardElement }[] },
+    ];
+    const input = (activity.attachments[0].content.body ?? []).find(
+      element => (element as ReceiverInput).id === 'zapReceiverId',
+    ) as ReceiverInput | undefined;
+    if (!input) {
+      throw new Error('zapReceiverId input missing from the card');
+    }
+    return input;
+  };
+
+  afterEach(() => {
+    if (originalCap === undefined) {
+      delete process.env.ZAP_MAX_RECIPIENTS;
+    } else {
+      process.env.ZAP_MAX_RECIPIENTS = originalCap;
+    }
+    jest.restoreAllMocks();
+  });
+
+  test('says three by default', async () => {
+    delete process.env.ZAP_MAX_RECIPIENTS;
+
+    expect((await receiverInputFor()).placeholder).toBe(
+      'Select up to 3 recipients',
+    );
+  });
+
+  test('says the operator override', async () => {
+    process.env.ZAP_MAX_RECIPIENTS = '5';
+
+    expect((await receiverInputFor()).placeholder).toBe(
+      'Select up to 5 recipients',
+    );
+  });
+
+  test('says it in Spanish for a Spanish client', async () => {
+    delete process.env.ZAP_MAX_RECIPIENTS;
+
+    expect((await receiverInputFor('es-MX')).placeholder).toBe(
+      'Selecciona hasta 3 destinatarios',
+    );
+  });
+});
+
 describe('zap card and receipt in the user language', () => {
   afterEach(() => {
     jest.restoreAllMocks();
@@ -761,7 +826,7 @@ describe('zap card and receipt in the user language', () => {
     // pin it; the label-bearing strings are checked up to the label.
     for (const expected of [
       'Destinatario',
-      'Selecciona una o más carteras destinatarias',
+      'Selecciona hasta 3 destinatarios',
       'Debes seleccionar al menos a una persona',
       'Mensaje',
       '¡Gracias por ayudarme con la propuesta!',

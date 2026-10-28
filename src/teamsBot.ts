@@ -26,7 +26,11 @@ import {
   type ZapRecipient,
 } from './commands/zapRecipient';
 import { notifyZapRecipients } from './services/recipientNotifier';
-import { validateZapSubmit } from './commands/zapBudget';
+import {
+  resolveZapMaxRecipients,
+  validateRecipientCount,
+  validateZapSubmit,
+} from './commands/zapBudget';
 import { ShowMyBalanceCommand } from './commands/showMyBalanceCommand';
 import { ShowLeaderboardCommand } from './commands/showLeaderboardCommand';
 import {
@@ -84,6 +88,13 @@ export class TeamsBot extends TeamsActivityHandler {
   // Durable per-recipient protection against paying from the same card twice.
   // Construction fails outside development when ZAPLIE_DATA_DIR is absent.
   private zapLedger = new ZapLedger();
+  // Most people one card may pay. Resolved here so a malformed
+  // ZAP_MAX_RECIPIENTS stops the bot from starting.
+  private zapMaxRecipients = resolveZapMaxRecipients();
+  // Work that outlives the turn (recipient notifications). Tracked so tests
+  // can wait for it and so a shutdown hook could drain it; never awaited on
+  // the request path.
+  private backgroundWork = new Set<Promise<unknown>>();
 
   constructor() {
     super();
@@ -213,6 +224,11 @@ export class TeamsBot extends TeamsActivityHandler {
           if (currentUser.id && receiverIds.includes(currentUser.id)) {
             throw new UserFacingError('selfZap');
           }
+
+          // The whole card, before the ledger and the balance read: an
+          // over-cap submit costs no LNbits call, leaves no ledger record, and
+          // gets the same refusal when it is resubmitted (issue 444).
+          validateRecipientCount(receiverIds.length, this.zapMaxRecipients);
 
           const pendingReceiverIds = await getPendingRecipientIds(
             this.zapLedger,
@@ -368,16 +384,31 @@ export class TeamsBot extends TeamsActivityHandler {
           // Last, so a slow or refused Teams call never delays the receipt
           // above, and after markPaid by construction. Best effort: a few
           // recipients at a time, each bounded by a timeout, each with its
-          // own outcome; nothing here throws.
-          await notifyZapRecipients(
-            context,
-            paidReceivers.map(receiver => ({
-              recipient: receiver,
-              senderName: currentUser.displayName,
-              amount,
-              rewardName: globalRewardName,
-              message: zapMessage,
-            })),
+          // own outcome.
+          //
+          // Not awaited: Teams must get this turn's HTTP response within 15 s,
+          // and a notification is bounded by NOTIFY_TIMEOUT_MS per recipient
+          // plus a 429 retry, so a slow Teams call would otherwise push a
+          // 3-recipient submit past the limit (issue 444). The sender's
+          // receipt and success line are already sent, the ledger already
+          // says paid, and the notifier never throws by contract; the catch
+          // is for a bug in the notifier itself.
+          this.trackBackgroundWork(
+            notifyZapRecipients(
+              context,
+              paidReceivers.map(receiver => ({
+                recipient: receiver,
+                senderName: currentUser.displayName,
+                amount,
+                rewardName: globalRewardName,
+                message: zapMessage,
+              })),
+            ).catch(error => {
+              console.error(
+                'Recipient notifications failed after the turn ended; the payments stand.',
+                error,
+              );
+            }),
           );
         }
 
@@ -487,6 +518,18 @@ export class TeamsBot extends TeamsActivityHandler {
     } catch (error) {
       console.error('Error in run method:', error);
       await context.sendActivity(genericErrorMessage(context.activity.locale));
+    }
+  }
+
+  private trackBackgroundWork(work: Promise<unknown>): void {
+    const tracked = work.finally(() => this.backgroundWork.delete(tracked));
+    this.backgroundWork.add(tracked);
+  }
+
+  /** Resolves once every tracked background task has settled. For tests. */
+  async settleBackgroundWork(): Promise<void> {
+    while (this.backgroundWork.size > 0) {
+      await Promise.allSettled([...this.backgroundWork]);
     }
   }
 
