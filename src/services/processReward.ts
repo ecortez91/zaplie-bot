@@ -191,7 +191,7 @@ export const processReward = async (
   let recipient: ResolvedRewardRecipient | null;
   let amount: RewardAmount;
   let periodKey: string;
-  let budgetOutcome: BudgetReservation;
+  let budgetOutcome: BudgetReservation | null;
   try {
     // Restricted to GitHub. Generic flow identities need a separate
     // provider-aware contract before they can pay.
@@ -205,12 +205,19 @@ export const processReward = async (
     // No budget configured is a 503 here, with nothing paid.
     const budget = await getBudget();
     periodKey = rewardPeriodKey(now(), budget.period, budget.timezone);
-    budgetOutcome = await budgetLedger.reserve(
-      periodKey,
-      ledgerKey,
-      amountSats,
-      budget.capSats,
-    );
+    // An unlinked recipient is held as pending, and nothing pays pending yet:
+    // holding its sats would only shrink the period for linked people, and
+    // near the cap it would refuse a reward that pays nothing. Paying it
+    // later must reserve then.
+    budgetOutcome =
+      recipient === null
+        ? null
+        : await budgetLedger.reserve(
+            periodKey,
+            ledgerKey,
+            amountSats,
+            budget.capSats,
+          );
   } catch (error) {
     await release();
     return fail(error);
@@ -225,10 +232,12 @@ export const processReward = async (
       body: { error: 'reward budget exhausted for this period' },
     };
   }
-  // Only when no sats are known to have left the treasury: a failure before
-  // the payment, or a reward held as pending. A failure here keeps the
-  // reservation: it over-counts, never over-pays.
+  // Only for failures known to be before the payment left the bot. A
+  // failure here keeps the reservation: it over-counts, never over-pays.
   const releaseBudget = async (): Promise<void> => {
+    if (budgetOutcome === null) {
+      return;
+    }
     try {
       await budgetLedger.release(periodKey, ledgerKey);
     } catch (error) {
@@ -273,9 +282,6 @@ export const processReward = async (
   }
 
   if ('pending' in result) {
-    // Nothing pays a pending reward yet, so holding its sats would only
-    // shrink the period for linked people. Paying it later must reserve then.
-    await releaseBudget();
     const pendingBody: PendingRewardResponse = {
       status: 'pending',
       recipient: request.recipient,

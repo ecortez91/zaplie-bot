@@ -161,7 +161,8 @@ export const githubPullRequestReward = (
   if (
     !mergedBy ||
     typeof mergedBy.id !== 'number' ||
-    !Number.isSafeInteger(mergedBy.id)
+    !Number.isSafeInteger(mergedBy.id) ||
+    mergedBy.id <= 0
   ) {
     return { kind: 'invalid', error: 'pull_request.merged_by is missing' };
   }

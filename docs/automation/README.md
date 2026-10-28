@@ -110,15 +110,19 @@ For a merged pull request by a linked teammate:
    summed, and labels that match no level are ignored.
 3. **Cap**: base plus bonus must be at most `REWARDS_MAX_AMOUNT_SATS`, or
    nothing is paid.
-4. **Budget**: the amount is reserved in the current period (ISO week, Monday
-   to Sunday, or calendar month, in the configured time zone). The period is
-   taken when the bot processes the delivery, not from the merge time, so a
+4. **Budget**: for a linked author, the amount is reserved in the current
+   period (ISO week, Monday to Sunday, or calendar month, in the configured
+   time zone). The period is taken when the bot processes the delivery, not from the merge time, so a
    late or redelivered merge counts in the period it arrives in. If it would
    take the period over the cap the answer is 402 and nothing is paid.
 
 An unlinked author gets the org base plus the bonus, held as pending. Pending
 rewards do not count against the budget: nothing pays them automatically, so
-they would only shrink the period for linked people.
+they would only shrink the period for linked people. They never reserve, so
+one is still queued when the period is near or over its cap, and queued
+pending sats are not bounded by the cap. A pending write with an unknown
+outcome holds no budget either; its key stays `uncertain` (409 on every
+repeat) so it cannot be queued twice.
 
 Two merges earn nothing and answer 200 `{"status":"not-rewarded"}`:
 
@@ -147,11 +151,11 @@ is accepted for staff use and should be revisited before customers use it.
 | Body over 1 MB | 413 | No |
 | `ping`, any other event, or a PR closed without merging | 204 | No |
 | Merge more than 30 days old (replay protection) | 422 | No |
-| Merge with no `merged_by` | 400 | No |
+| Merge with no positive numeric `merged_by.id` | 400 | No |
 | Bot author, or the author merged it themselves | 200 `{"status":"not-rewarded",...}` | No |
 | Repository not connected | 403 | No |
 | No amount or no budget configured | 503 | No |
-| Over the period budget | 402 | No |
+| Over the period budget (linked author) | 402 | No |
 | Paid | 200 `{"status":"paid",...}` | Yes |
 | Author has not linked GitHub | 202 `{"status":"pending",...}` | Held |
 | The same pull request again (GitHub redelivery, or a resent capture) | The first answer, with `Idempotency-Replayed: true` | No |

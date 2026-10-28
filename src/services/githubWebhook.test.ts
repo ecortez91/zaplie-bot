@@ -184,6 +184,8 @@ describe('githubPullRequestReward', () => {
     ['null', null],
     ['without an id', { login: 'reviewer' }],
     ['with a string id', { login: 'reviewer', id: '9001' }],
+    ['with a zero id', { login: 'reviewer', id: 0 }],
+    ['with a negative id', { login: 'reviewer', id: -1 }],
   ])('a merge with merged_by %s is invalid', (_label, mergedBy) => {
     expect(
       githubPullRequestReward(merged({ merged_by: mergedBy }), now),

@@ -495,12 +495,14 @@ describe('POST /api/v1/github/webhook: events', () => {
 
   test('a merged PR by an unlinked author is queued as pending', async () => {
     mockedResolveRecipient.mockResolvedValue(null);
+    const reserve = jest.spyOn(budgetLedger, 'reserve');
     const url = await startServer();
 
     const response = await deliver(url);
 
     expect(response.status).toBe(202);
     expect(mockedCreatePendingReward).toHaveBeenCalledTimes(1);
+    expect(reserve).not.toHaveBeenCalled();
     expect(mockedPayInvoice).not.toHaveBeenCalled();
   });
 
@@ -540,20 +542,26 @@ describe('POST /api/v1/github/webhook: events', () => {
     },
   );
 
-  test('a signed merge without merged_by is a 400 and pays nothing', async () => {
-    const url = await startServer();
+  test.each([
+    ['null', null],
+    ['with a zero id', { login: 'reviewer', id: 0 }],
+  ])(
+    'a signed merge with merged_by %s is a 400 and pays nothing',
+    async (_label, mergedBy) => {
+      const url = await startServer();
 
-    const response = await deliver(url, {
-      body: {
-        ...mergedEvent,
-        pull_request: { ...mergedEvent.pull_request, merged_by: null },
-      },
-    });
+      const response = await deliver(url, {
+        body: {
+          ...mergedEvent,
+          pull_request: { ...mergedEvent.pull_request, merged_by: mergedBy },
+        },
+      });
 
-    expect(response.status).toBe(400);
-    expect(fs.existsSync(storePath)).toBe(false);
-    expect(mockedPayInvoice).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(400);
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(mockedPayInvoice).not.toHaveBeenCalled();
+    },
+  );
 
   test('an uncertain payment is never retried by a redelivery', async () => {
     mockedPayInvoice.mockRejectedValueOnce(new Error('socket hang up'));
