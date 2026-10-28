@@ -442,7 +442,10 @@ created. Must be a positive integer; a failed grant is logged, not retried
   360; `0` turns it off; a malformed value also turns it off). It only
   maintains a policy an admin has already previewed and applied, never
   applies over a block such as an underfunded Fund wallet, and applies a
-  disabled policy (which only pauses schedules) without waiting
+  disabled policy (which only pauses schedules) without waiting. The first
+  automatic run is one full interval after the backend starts (six hours by
+  default), not at start. It shares `allowance-sync.lock` with the CLI and
+  the panel, so it never runs at the same time as them
 | Portal backend
 
 | `ALLOWANCE_SYNC_DISABLED`

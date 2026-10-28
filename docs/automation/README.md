@@ -257,14 +257,22 @@ policy, the Fund balance, the extension's health and the last run. Only a
    with the **total per period** and any warning or block.
 3. **Apply N changes** applies exactly that preview: the server refuses it
    (409) if its own plan now has a different total, and the preview must be
-   run again. An underfunded Fund needs the explicit tick to go ahead.
+   run again. An underfunded Fund needs the explicit tick to go ahead, and so
+   does a mass delete of leavers ("These people have left LNbits"). An
+   incomplete LNbits user list cannot be overridden: preview again later.
+   While another sync holds the lock (the CLI or the automatic one), preview
+   and apply answer 409 `busy`; try again when it finishes.
 
 After that the portal keeps the schedules in step every
 `ALLOWANCE_SYNC_INTERVAL_MINUTES` (new people get theirs) for as long as the
-policy is the one an admin applied. A changed policy waits for an admin to
-preview and apply it; turning the policy off is applied automatically, since
-it only pauses schedules. The automatic sync never applies over a block and
-never overwrites a hand edit unless the policy's `overwriteDrift` says so.
+policy is the one an admin applied. The first automatic run is one full
+interval after the backend starts (six hours by default), not at start, so do
+not wait for it after a deploy: preview and apply by hand. A changed policy
+waits for an admin to preview and apply it; turning the policy off is applied
+automatically, since it only pauses schedules. The automatic sync never
+applies over a block and never overwrites a hand edit unless the policy's
+`overwriteDrift` says so. It takes the same lock as the CLI, so there is no
+need to stop it (`ALLOWANCE_SYNC_DISABLED`) while you run the CLI.
 
 ## Running the sync from the command line (the fallback)
 

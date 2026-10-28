@@ -682,7 +682,10 @@ Admins preview and apply from *Automations → Weekly allowances*
 so new people get theirs, but only for the policy an admin last applied with a
 confirmed total (`lastAdminApply` in `allowance-sync.json`). A changed policy
 waits for an admin; a disabled one is applied at once, since it only pauses.
-The timer never overrides a block or an underfunded Fund.
+The timer never overrides a block or an underfunded Fund. Its first tick is
+one interval after the backend starts. It takes `allowance-sync.lock` like
+every other run, so it never overlaps the CLI or an admin; a busy lock waits
+for the next tick, and the routes answer 409 `busy`.
 
 *Consequences:* A second run with nothing changed is all noop. Funding
 payments run Fund to Allowance, so they never pair as an Allowance-to-Private
