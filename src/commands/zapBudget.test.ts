@@ -90,3 +90,64 @@ describe('validateZapSubmit errors carry a message key', () => {
     expect(error.message).toBe(error.localized('en'));
   });
 });
+
+// The card only lets plain digits through; the server must apply the same
+// rule, because Number() turns a forged '1e3' into 1,000 sats and '1.000'
+// into 1. The balance is large so only the amount rule is in play.
+describe('validateZapSubmit parses the amount like the card does', () => {
+  const RANGE_ERROR = 'whole number between 1 and 10,000';
+  const submit = (rawAmount: unknown): number =>
+    validateZapSubmit(rawAmount, 1, 1_000_000, 'Sats');
+
+  test.each([
+    ['an exponent', '1e3'],
+    ['a thousands separator', '1.000'],
+    ['a plus sign', '+1'],
+    ['a hex prefix', '0x10'],
+    ['padding', ' 5 '],
+    ['a trailing newline', '5\n'],
+    ['leading zeros', '0010'],
+    ['a boolean', true],
+    ['an array', ['5']],
+    ['a JSON number', 100],
+    ['an empty string', ''],
+    ['a minus sign', '-5'],
+    ['zero', '0'],
+    ['a decimal', '1.5'],
+    ['one over the cap', '10001'],
+    ['a value past the safe integer range', '9007199254740993'],
+    ['a 401-digit string', '1' + '0'.repeat(400)],
+    ['null', null],
+    ['undefined', undefined],
+  ])('refuses %s', (_name, rawAmount) => {
+    let caught: unknown;
+    try {
+      submit(rawAmount);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(UserFacingError);
+    expect((caught as UserFacingError).message).toContain(RANGE_ERROR);
+  });
+
+  test('a forged amount gets the existing amountInvalid error, in Spanish too', () => {
+    let caught: unknown;
+    try {
+      submit('1e3');
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(UserFacingError);
+    const error = caught as UserFacingError;
+    expect(error.key).toBe('amountInvalid');
+    expect(error.localized('es-ES')).toBe(
+      'Debes indicar un número entero entre 1 y 10.000 Sats.',
+    );
+  });
+
+  test('plain digits give the same numbers as before', () => {
+    expect(submit('1')).toBe(1);
+    expect(submit('100')).toBe(100);
+    expect(submit('10000')).toBe(10000);
+  });
+});

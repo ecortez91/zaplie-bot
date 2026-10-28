@@ -239,3 +239,7 @@ checked against the plain-id pattern first (`normalizeRecipientIds` in
 `src/commands/zapRecipient.ts`, `USER_ID_PATTERN` in the portal gateway).
 Those calls carry the LNbits admin token, so a raw `../` would let a client
 steer them to any LNbits endpoint.
+
+User-typed amounts are parsed with `parseSatsAmount`
+(`src/utils/satsAmount.ts`), never `Number()` or `parseInt` alone; env
+ceilings with `positiveIntFromEnv`.

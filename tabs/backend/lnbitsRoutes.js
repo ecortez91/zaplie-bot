@@ -15,6 +15,8 @@ const validId = (value) => typeof value === 'string' && ID_PATTERN.test(value);
 
 // Only a real JSON number is an amount. `Number()` would turn `true` into 1 and
 // `['5']` into 5, which are not integer amount inputs.
+// The bot's card path parses the typed string with `src/utils/satsAmount.ts`;
+// this route never parses a string.
 const parseAmount = (value, maxSats) => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
     return null;
