@@ -77,6 +77,7 @@ export type GithubPullRequestReward =
   | { kind: 'ignored' }
   | { kind: 'invalid'; error: string }
   | { kind: 'too-old' }
+  | { kind: 'not-rewarded'; reason: string }
   | { kind: 'reward'; idempotencyKey: string; body: Record<string, unknown> };
 
 // A signature has no timestamp, so a captured delivery stays valid forever.
@@ -97,6 +98,15 @@ export const MAX_MERGE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
  * request merges once, so one key per pull request is exactly one reward.
  *
  * Only identity and location come from GitHub; the amount never does.
+ *
+ * Two merges earn nothing: a bot's (Dependabot and friends have no Zaplie
+ * person, so they would only queue pending rewards), and one the author
+ * merged themselves (anyone with write access could otherwise pay themselves
+ * a reward per trivial pull request). Auto-merge counts as the person who
+ * enabled it, so an author enabling it on their own pull request is refused.
+ * A merge queue merges as `github-merge-queue[bot]`, so who queued it is not
+ * in this event: there the guard cannot apply, and required reviews in
+ * branch protection must stand in for it.
  */
 export const githubPullRequestReward = (
   event: unknown,
@@ -128,6 +138,40 @@ export const githubPullRequestReward = (
     return { kind: 'too-old' };
   }
   const user = isRecord(pullRequest.user) ? pullRequest.user : {};
+  if (
+    user.type === 'Bot' ||
+    (typeof user.login === 'string' && user.login.endsWith('[bot]'))
+  ) {
+    return { kind: 'not-rewarded', reason: 'author is a bot' };
+  }
+  // Checked here, not only by parseRewardRequest, so the self-merge
+  // comparison below is always number against number.
+  if (
+    typeof user.id !== 'number' ||
+    !Number.isSafeInteger(user.id) ||
+    user.id <= 0
+  ) {
+    return { kind: 'invalid', error: 'pull_request.user.id is missing' };
+  }
+  // GitHub sets merged_by on every merged pull request; without it nobody
+  // can tell a self-merge apart, so the merge is refused.
+  const mergedBy = isRecord(pullRequest.merged_by)
+    ? pullRequest.merged_by
+    : undefined;
+  if (
+    !mergedBy ||
+    typeof mergedBy.id !== 'number' ||
+    !Number.isSafeInteger(mergedBy.id) ||
+    mergedBy.id <= 0
+  ) {
+    return { kind: 'invalid', error: 'pull_request.merged_by is missing' };
+  }
+  if (mergedBy.id === user.id) {
+    return {
+      kind: 'not-rewarded',
+      reason: 'author merged their own pull request',
+    };
+  }
   const repository = isRecord(event.repository) ? event.repository : {};
   const title = cleanTitle(pullRequest.title);
   const number = pullRequest.number;

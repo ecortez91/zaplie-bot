@@ -679,16 +679,57 @@ describe('POST /api/v1/rewards: budget cap', () => {
     await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(600);
   });
 
-  test('a pending reward counts against the budget', async () => {
+  test('a pending reward holds no budget, so it cannot crowd out paid ones', async () => {
+    // Nothing pays a pending reward yet: a reservation for it would only
+    // shrink the period for everyone who is linked.
+    deps.getRewardBudget.mockResolvedValue(budget(1000));
+    deps.resolveAmountSats.mockResolvedValue(amount(600));
+    mockedResolveRecipient.mockResolvedValueOnce(null);
+    const reserve = jest.spyOn(budgetLedger, 'reserve');
+    const url = await startServer({ now: () => WEEK_44 });
+
+    const pending = await post(url, { idempotencyKey: 'delivery-1' });
+    const paid = await post(url, { idempotencyKey: 'delivery-2' });
+
+    expect(pending.status).toBe(202);
+    expect(paid.status).toBe(200);
+    expect(reserve).toHaveBeenCalledTimes(1);
+    await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(600);
+  });
+
+  test('an unlinked author near the cap is still held as pending, not refused', async () => {
+    deps.getRewardBudget.mockResolvedValue(budget(1000));
+    deps.resolveAmountSats.mockResolvedValue(amount(600));
+    const reserve = jest.spyOn(budgetLedger, 'reserve');
+    const url = await startServer({ now: () => WEEK_44 });
+
+    const paid = await post(url, { idempotencyKey: 'delivery-1' });
+    mockedResolveRecipient.mockResolvedValueOnce(null);
+    const pending = await post(url, { idempotencyKey: 'delivery-2' });
+
+    expect(paid.status).toBe(200);
+    expect(pending.status).toBe(202);
+    expect(mockedCreatePendingReward).toHaveBeenCalledTimes(1);
+    expect(reserve).toHaveBeenCalledTimes(1);
+    await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(600);
+  });
+
+  test('a pending write with an unknown outcome holds no budget, only its key', async () => {
     deps.getRewardBudget.mockResolvedValue(budget(1000));
     deps.resolveAmountSats.mockResolvedValue(amount(600));
     mockedResolveRecipient.mockResolvedValue(null);
+    mockedCreatePendingReward.mockRejectedValueOnce(
+      new PendingRewardWriteUncertainError('portal returned 502'),
+    );
     const url = await startServer({ now: () => WEEK_44 });
 
     const response = await post(url);
 
-    expect(response.status).toBe(202);
-    await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(600);
+    expect(response.status).toBe(500);
+    await expect(budgetLedger.spent('week:2026-W44')).resolves.toBe(0);
+    await expect(ledger.get(rewardKey('delivery-1'))).resolves.toMatchObject({
+      state: 'uncertain',
+    });
   });
 
   test('a budget ledger failure is a 500 with the key released and nothing paid', async () => {

@@ -114,6 +114,13 @@ export const createGithubWebhookRouter = (
         case 'too-old':
           res.status(422).json({ error: 'merge is too old to reward' });
           return;
+        case 'not-rewarded':
+          // A 2xx: the delivery was understood, and redelivering it changes
+          // nothing. The reason shows in GitHub's Recent deliveries.
+          res
+            .status(200)
+            .json({ status: 'not-rewarded', reason: reward.reason });
+          return;
         case 'reward':
           sendRewardResult(
             res,

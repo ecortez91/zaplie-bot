@@ -110,14 +110,31 @@ For a merged pull request by a linked teammate:
    summed, and labels that match no level are ignored.
 3. **Cap**: base plus bonus must be at most `REWARDS_MAX_AMOUNT_SATS`, or
    nothing is paid.
-4. **Budget**: the amount is reserved in the current period (ISO week, Monday
-   to Sunday, or calendar month, in the configured time zone). The period is
-   taken when the bot processes the delivery, not from the merge time, so a
+4. **Budget**: for a linked author, the amount is reserved in the current
+   period (ISO week, Monday to Sunday, or calendar month, in the configured
+   time zone). The period is taken when the bot processes the delivery, not from the merge time, so a
    late or redelivered merge counts in the period it arrives in. If it would
    take the period over the cap the answer is 402 and nothing is paid.
 
 An unlinked author gets the org base plus the bonus, held as pending. Pending
-rewards count against the budget.
+rewards do not count against the budget: nothing pays them automatically, so
+they would only shrink the period for linked people. They never reserve, so
+one is still queued when the period is near or over its cap, and queued
+pending sats are not bounded by the cap. A pending write with an unknown
+outcome holds no budget either; its key stays `uncertain` (409 on every
+repeat) so it cannot be queued twice.
+
+Two merges earn nothing and answer 200 `{"status":"not-rewarded"}`:
+
+- **Bot authors** (GitHub `type: Bot`, or a login ending in `[bot]`, such as
+  Dependabot). They have no Zaplie person to pay.
+- **Self-merges**: the person who merged the pull request (`merged_by`, by
+  GitHub numeric id) is its author. Auto-merge counts as the person who
+  enabled it, so an author turning on auto-merge for their own pull request is
+  a self-merge. On a repository with a merge queue the merge is attributed to
+  `github-merge-queue[bot]`, so the bot cannot tell who queued it: the
+  self-merge guard does not apply there, and required reviews in branch
+  protection must stand in for it.
 
 Labels must be on the pull request **before** it merges. A label added later
 changes nothing: the reward for that pull request has already been decided,
@@ -134,9 +151,11 @@ is accepted for staff use and should be revisited before customers use it.
 | Body over 1 MB | 413 | No |
 | `ping`, any other event, or a PR closed without merging | 204 | No |
 | Merge more than 30 days old (replay protection) | 422 | No |
+| Merge with no positive numeric `merged_by.id` | 400 | No |
+| Bot author, or the author merged it themselves | 200 `{"status":"not-rewarded",...}` | No |
 | Repository not connected | 403 | No |
 | No amount or no budget configured | 503 | No |
-| Over the period budget | 402 | No |
+| Over the period budget (linked author) | 402 | No |
 | Paid | 200 `{"status":"paid",...}` | Yes |
 | Author has not linked GitHub | 202 `{"status":"pending",...}` | Held |
 | The same pull request again (GitHub redelivery, or a resent capture) | The first answer, with `Idempotency-Replayed: true` | No |
@@ -190,6 +209,10 @@ curl -s -X POST https://<bot-domain>/api/v1/rewards \
 `amountSats` is refused: the amount always comes from the settings. Each new
 `Idempotency-Key` is a new reward and counts against the budget. Sending the
 same key twice replays the first answer with `Idempotency-Replayed: true`.
+
+This path has no bot-author or self-merge guard: its body carries neither the
+author's type nor `merged_by`, so the caller must apply them. It is being
+retired for the signed webhook.
 
 ## Legacy: the Logic App template
 

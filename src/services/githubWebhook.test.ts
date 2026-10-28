@@ -54,7 +54,8 @@ describe('githubPullRequestReward', () => {
       title: 'Add the thing',
       merged: true,
       merged_at: '2026-10-28T11:59:00Z',
-      user: { login: 'octocat', id: 583231 },
+      user: { login: 'octocat', id: 583231, type: 'User' },
+      merged_by: { login: 'reviewer', id: 9001, type: 'User' },
       ...overrides,
     },
     repository: { full_name: 'octo-org/octo-repo' },
@@ -116,6 +117,79 @@ describe('githubPullRequestReward', () => {
       kind: 'invalid',
       error: 'pull_request.id is missing',
     });
+  });
+
+  test.each([
+    ['type Bot', { login: 'dependabot[bot]', id: 49699333, type: 'Bot' }],
+    [
+      'type Bot without a [bot] login',
+      { login: 'some-app', id: 1, type: 'Bot' },
+    ],
+    ['a [bot] login without a type', { login: 'renovate[bot]', id: 29139614 }],
+  ])('a merge authored by a bot (%s) is not rewarded', (_label, user) => {
+    expect(githubPullRequestReward(merged({ user }), now)).toEqual({
+      kind: 'not-rewarded',
+      reason: 'author is a bot',
+    });
+  });
+
+  test('a merge by its own author is not rewarded', () => {
+    expect(
+      githubPullRequestReward(
+        merged({ merged_by: { login: 'octocat', id: 583231, type: 'User' } }),
+        now,
+      ),
+    ).toEqual({
+      kind: 'not-rewarded',
+      reason: 'author merged their own pull request',
+    });
+  });
+
+  test('a merge by a renamed author is still a self-merge: the id decides', () => {
+    expect(
+      githubPullRequestReward(
+        merged({ merged_by: { login: 'octocat-new', id: 583231 } }),
+        now,
+      ),
+    ).toMatchObject({ kind: 'not-rewarded' });
+  });
+
+  test.each([
+    ['missing', undefined],
+    ['a string', '583231'],
+    ['zero', 0],
+  ])('a merge whose author id is %s is invalid', (_label, id) => {
+    expect(
+      githubPullRequestReward(merged({ user: { login: 'octocat', id } }), now),
+    ).toEqual({ kind: 'invalid', error: 'pull_request.user.id is missing' });
+  });
+
+  test('a merge-queue merge is rewarded: the guard knowingly cannot see who queued it', () => {
+    expect(
+      githubPullRequestReward(
+        merged({
+          merged_by: {
+            login: 'github-merge-queue[bot]',
+            id: 9919,
+            type: 'Bot',
+          },
+        }),
+        now,
+      ),
+    ).toMatchObject({ kind: 'reward' });
+  });
+
+  test.each([
+    ['missing', undefined],
+    ['null', null],
+    ['without an id', { login: 'reviewer' }],
+    ['with a string id', { login: 'reviewer', id: '9001' }],
+    ['with a zero id', { login: 'reviewer', id: 0 }],
+    ['with a negative id', { login: 'reviewer', id: -1 }],
+  ])('a merge with merged_by %s is invalid', (_label, mergedBy) => {
+    expect(
+      githubPullRequestReward(merged({ merged_by: mergedBy }), now),
+    ).toEqual({ kind: 'invalid', error: 'pull_request.merged_by is missing' });
   });
 
   test('a merge without merged_at is invalid', () => {

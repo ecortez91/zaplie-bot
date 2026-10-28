@@ -343,8 +343,8 @@ export async function payReward(
         source: reward.source,
       });
     } catch (error) {
-      // The portal may have stored it. A queued reward is paid when the
-      // recipient links, so a second copy would pay twice: never retry it.
+      // The portal may have stored it. A queued reward is paid by hand later,
+      // so a second copy would pay twice: never retry it.
       if (error instanceof PendingRewardWriteUncertainError) {
         throw new RewardPaymentUncertainError(
           'The pending reward write failed after being sent to the portal.',
