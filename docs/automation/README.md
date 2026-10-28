@@ -294,10 +294,29 @@ while IFS= read -r line; do export "$line"; done < <(tr '\0' '\n' < /proc/1/envi
 
 5. Run the preview again: every line should be `noop`.
 
+One sync runs at a time, across the CLI and the portal:
+`allowance-sync.lock` in the data directory names the run holding it (pid,
+host, time). While another run holds it, the CLI prints `allowance sync not
+started: another allowance sync is already running ...` and exits with code 3;
+run it again when that one finishes. A lock left by a process that died is
+taken over after 30 minutes.
+
 To stop all allowances, set `"enabled": false` with `--set-policy`, preview,
 and apply with the total the preview shows (0 unless hand-edited schedules
-remain active): every Zaplie schedule is paused, none is deleted. To leave someone out, add their Entra object id to `excludedOids`;
-their schedule is deleted on the next apply.
+remain active): every Zaplie schedule is paused, none is deleted. Turning it
+back on never pays a missed period: a paused schedule whose next payment date
+has passed is recreated from the next anchor (`recreate reactivate-overdue`),
+and one still ahead is reactivated in place.
+
+To leave someone out, add their Entra object id to `excludedOids`; their
+schedule is deleted on the next apply.
+
+Two blockers protect against deleting schedules by mistake. `BLOCKED: LNbits
+returned fewer users than it announced` (`people-incomplete`): the user list
+came back short, so nobody missing from it is treated as a leaver; preview
+again later. `BLOCKED: ... leaver schedules would be deleted` (`mass-delete`):
+more than max(5, 10%) of the schedules would go as leavers. Check that those
+people really left LNbits; only then apply with `--allow-mass-delete`.
 
 `drift` lines are schedules someone changed by hand in the extension; they are
 reported, not overwritten. `--overwrite-drift` puts them back to the policy.

@@ -414,8 +414,9 @@ created. Must be a positive integer; a failed grant is logged, not retried
   allowances from (the "Fund" wallet on the Zaplie account; never a wallet
   named `Allowance` or `Private`, never a person's). Comma-separated for more
   than one Fund wallet, in order (the extension allows 100 schedules per
-  wallet). Only ever sent to the allowance and lnurlp extension APIs and
-  `GET /api/v1/wallet`; never logged, stored or returned. Unset: the allowance
+  wallet). Only ever sent to the allowance extension's schedule, health and
+  `GET /api/v1/wallet` routes the sync uses; never logged, stored or returned.
+  Unset: the allowance
   sync can preview pay links only and refuses to apply (503)
 | Portal backend
 
