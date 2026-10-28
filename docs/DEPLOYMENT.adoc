@@ -692,9 +692,11 @@ Complete these once per new environment, right after the first deployment:
   `REWARDS_TREASURY_ADMINKEY`. Then follow `docs/automation/README.md` to set
   `GITHUB_WEBHOOK_SECRET`, the reward amount, the budget and each repository
   webhook; nothing pays until the amount and the budget are set. Weekly
-  allowance top-ups are handled by the LNbits
-  https://github.com/BenGWeeks/allowance[allowance extension], not by the
-  bot; wiring it up is tracked separately.
+  allowances are paid by the LNbits
+  https://github.com/BenGWeeks/allowance[allowance extension] from the Fund
+  wallet, not by the bot; the portal keeps the schedules in step
+  (*Automations → Weekly allowances*). Set `ALLOWANCE_FUND_ADMINKEY` and
+  follow `docs/automation/README.md`, "Weekly allowances".
 . *Rotate the burned LNbits credentials.* Historic CI builds injected
   `REACT_APP_LNBITS_PASSWORD` and `REACT_APP_LNBITS_ADMINKEY` into the
   portal's public JavaScript bundle, so any admin key or service-account

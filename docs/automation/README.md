@@ -272,7 +272,10 @@ waits for an admin to preview and apply it; turning the policy off is applied
 automatically, since it only pauses schedules. The automatic sync never
 applies over a block and never overwrites a hand edit unless the policy's
 `overwriteDrift` says so. It takes the same lock as the CLI, so there is no
-need to stop it (`ALLOWANCE_SYNC_DISABLED`) while you run the CLI.
+need to stop it (`ALLOWANCE_SYNC_DISABLED`) while you run the CLI. An
+unreadable or corrupt `data.json` stops the automatic sync and the portal's
+allowance routes with `policy-invalid` (nothing is written); it never reads as
+a disabled policy, so it never pauses the schedules.
 
 ## Running the sync from the command line (the fallback)
 

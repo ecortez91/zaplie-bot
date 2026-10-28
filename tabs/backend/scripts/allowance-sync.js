@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Weekly allowance sync from the command line: the operator's fallback until
-// the Automations panel can run it.
+// Weekly allowance sync from the command line, the same run as the
+// Automations panel's preview/apply, for operators without the portal or for
+// scripting.
 //
 //   node backend/scripts/allowance-sync.js                 # preview, changes nothing
 //   node backend/scripts/allowance-sync.js --apply --confirm-total <sats>

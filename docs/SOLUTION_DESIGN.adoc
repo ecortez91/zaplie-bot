@@ -607,8 +607,10 @@ and PR #310 document the defects).
 LNbits?") and PR #310 ("Can still remove the dead code."). Recurring
 allowance funding belongs to the LNbits
 https://github.com/BenGWeeks/allowance[allowance extension], which pays to a
-Lightning address on a schedule, so each Allowance wallet needs a Lightning
-address before that can be wired up (tracked separately). The bot only
+Lightning address on a schedule. Each Allowance wallet gets its LNURL pay link
+(Lightning address) from the allowance sync (`payLinkService.js`), which the
+Automations panel, the CLI and the timer run; see `docs/automation/README.md`,
+"Weekly allowances". The bot only
 attempts to fund a wallet once, when it is created: `applyInitialAllowance`
 skips the grant when `LNBITS_INITIAL_ALLOWANCE` is missing or not a positive
 integer, and `topUpWallet` logs a failed LNbits request instead of retrying,
