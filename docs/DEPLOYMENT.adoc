@@ -433,6 +433,50 @@ created. Must be a positive integer; a failed grant is logged, not retried
   rather than falling back to a wider ceiling
 | Portal backend
 
+| `ALLOWANCE_FUND_ADMINKEY`
+| Admin key of the LNbits wallet the allowance extension pays weekly
+  allowances from (the "Fund" wallet on the Zaplie account; never a wallet
+  named `Allowance` or `Private`, never a person's). Comma-separated for more
+  than one Fund wallet, in order (the extension allows 100 schedules per
+  wallet). Only ever sent to the allowance extension's schedule, health and
+  `GET /api/v1/wallet` routes the sync uses; never logged, stored or returned.
+  Unset: the allowance
+  sync can preview pay links only and refuses to apply (503)
+| Portal backend
+
+| `ALLOWANCE_MAX_AMOUNT_SATS`
+| Upper bound in sats for one person's allowance per period (default 100000).
+  A malformed value fails closed
+| Portal backend
+
+| `LNBITS_PUBLIC_HOST`
+| Public host of LNbits that Lightning addresses are served on (for example
+  `bank.knowall.ai`). Defaults to the host of `LNBITS_NODE_URL`. The extension
+  pays over public HTTPS, so it must not be an internal address
+| Portal backend
+
+| `ALLOWANCE_SYNC_CONCURRENCY`, `ALLOWANCE_PER_WALLET_LIMIT`, `ALLOWANCE_MAX_PEOPLE`
+| Optional tuning for the allowance sync: parallel LNbits calls (default 4),
+  schedules per Fund wallet (default 100, the extension's limit) and the most
+  people one policy may cover (default 1000; more refuses to apply)
+| Portal backend
+
+| `ALLOWANCE_SYNC_INTERVAL_MINUTES`
+| How often the portal backend runs the allowance sync on its own (default
+  360; `0` turns it off; a malformed value also turns it off). It only
+  maintains a policy an admin has already previewed and applied, never
+  applies over a block such as an underfunded Fund wallet, and applies a
+  disabled policy (which only pauses schedules) without waiting. The first
+  automatic run is one full interval after the backend starts (six hours by
+  default), not at start. It shares `allowance-sync.lock` with the CLI and
+  the panel, so it never runs at the same time as them
+| Portal backend
+
+| `ALLOWANCE_SYNC_DISABLED`
+| `true` stops the automatic allowance sync whatever the interval says.
+  Admins can still preview and apply from Automations
+| Portal backend
+
 | `AAD_TENANT_ID`, `AAD_CLIENT_ID`
 | Entra tenant and app client id used to validate MSAL idTokens
 | Portal backend
@@ -682,9 +726,11 @@ Complete these once per new environment, right after the first deployment:
   `REWARDS_TREASURY_ADMINKEY`. Then follow `docs/automation/README.md` to set
   `GITHUB_WEBHOOK_SECRET`, the reward amount, the budget and each repository
   webhook; nothing pays until the amount and the budget are set. Weekly
-  allowance top-ups are handled by the LNbits
-  https://github.com/BenGWeeks/allowance[allowance extension], not by the
-  bot; wiring it up is tracked separately.
+  allowances are paid by the LNbits
+  https://github.com/BenGWeeks/allowance[allowance extension] from the Fund
+  wallet, not by the bot; the portal keeps the schedules in step
+  (*Automations → Weekly allowances*). Set `ALLOWANCE_FUND_ADMINKEY` and
+  follow `docs/automation/README.md`, "Weekly allowances".
 . *Rotate the burned LNbits credentials.* Historic CI builds injected
   `REACT_APP_LNBITS_PASSWORD` and `REACT_APP_LNBITS_ADMINKEY` into the
   portal's public JavaScript bundle, so any admin key or service-account

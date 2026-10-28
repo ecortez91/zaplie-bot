@@ -16,8 +16,16 @@ import {
   updateRewardPolicy,
   RewardPolicyPatch,
   RewardPolicyResponse,
+  getAllowanceStatus,
+  updateAllowancePolicy,
+  previewAllowanceSync,
+  applyAllowanceSync,
+  AllowancePolicyPatch,
+  AllowanceStatus,
+  AllowanceSyncResult,
 } from '../apiService';
 import RewardPolicyPanel from './RewardPolicyPanel';
+import AllowancePanel from './AllowancePanel';
 import { loginRequest } from '../services/authConfig';
 import { acquireIdToken, isZaplieAdmin } from '../services/adminRole';
 import {
@@ -189,6 +197,10 @@ const AutomationsComponent: FunctionComponent = () => {
   // null until the setup status loads (or if it fails): the server still
   // answers 409 with the setup pointer, so only a known "not created" blocks.
   const [githubAppReady, setGithubAppReady] = useState<boolean | null>(null);
+  // Loaded on its own: an allowance backend problem must not blank the page.
+  const [allowanceStatus, setAllowanceStatus] =
+    useState<AllowanceStatus | null>(null);
+  const [allowanceError, setAllowanceError] = useState<string | null>(null);
 
   useGithubSetupReturnStatus();
 
@@ -234,7 +246,39 @@ const AutomationsComponent: FunctionComponent = () => {
     setCreatingKey(false);
     setSaving(false);
     setInstalling(false);
+    setAllowanceStatus(null);
+    setAllowanceError(null);
   }, [accountId]);
+
+  useEffect(() => {
+    const account = accounts[0];
+    if (!account) {
+      return;
+    }
+    const startedAs = accountId;
+    let cancelled = false;
+    const loadAllowances = async () => {
+      try {
+        const idToken = await acquireIdToken(instance, account);
+        const status = await getAllowanceStatus(idToken);
+        if (!cancelled && stillSameAccount(startedAs)) {
+          setAllowanceStatus(status);
+          setAllowanceError(null);
+        }
+      } catch (err) {
+        if (!cancelled && stillSameAccount(startedAs)) {
+          setAllowanceError(
+            serverMessage(err, 'Weekly allowances could not be loaded.'),
+          );
+        }
+      }
+    };
+    void loadAllowances();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId, instance]);
 
   useEffect(() => {
     // Same guard as the connections effect below: `accounts` gets a new
@@ -586,6 +630,64 @@ const AutomationsComponent: FunctionComponent = () => {
     setPolicyConfig(data);
     setAmounts(data.rewardAmounts);
     toast.success('Reward policy saved.');
+  };
+
+  const handleSaveAllowance = async (
+    patch: AllowancePolicyPatch,
+  ): Promise<void> => {
+    const startedAs = accountId;
+    let status: AllowanceStatus;
+    try {
+      const idToken = await acquireIdToken(instance, accounts[0]);
+      status = await updateAllowancePolicy(idToken, patch);
+    } catch (err) {
+      throw new Error(
+        serverMessage(err, 'Could not save the allowance policy.'),
+      );
+    }
+    if (!stillSameAccount(startedAs)) {
+      return;
+    }
+    setAllowanceStatus(status);
+    toast.success(
+      'Allowance policy saved. Preview and apply to put it into effect.',
+    );
+  };
+
+  const handlePreviewAllowances = async (options: {
+    overwriteDrift: boolean;
+  }): Promise<AllowanceSyncResult> => {
+    try {
+      const idToken = await acquireIdToken(instance, accounts[0]);
+      return await previewAllowanceSync(idToken, options);
+    } catch (err) {
+      throw new Error(serverMessage(err, 'Could not preview the sync.'));
+    }
+  };
+
+  const handleApplyAllowances = async (options: {
+    confirmTotalSats: number;
+    overwriteDrift: boolean;
+    allowUnderfunded: boolean;
+    allowMassDelete: boolean;
+  }): Promise<AllowanceSyncResult> => {
+    const startedAs = accountId;
+    let result: AllowanceSyncResult;
+    let idToken: string;
+    try {
+      idToken = await acquireIdToken(instance, accounts[0]);
+      result = await applyAllowanceSync(idToken, options);
+    } catch (err) {
+      throw new Error(serverMessage(err, 'Could not apply the sync.'));
+    }
+    if (stillSameAccount(startedAs)) {
+      try {
+        setAllowanceStatus(await getAllowanceStatus(idToken));
+      } catch {
+        // The apply happened; a stale status card is not worth an error.
+      }
+    }
+    return result;
   };
 
   const loadPeople = useCallback(async () => {
@@ -1168,6 +1270,31 @@ const AutomationsComponent: FunctionComponent = () => {
           onSave={handleSavePolicy}
         />
       ) : null}
+
+      <div className={styles.sectionHeader}>
+        <div>
+          <span className={styles.sectionKicker}>Admin controlled</span>
+          <h3 className={styles.sectionHeading}>Weekly allowances</h3>
+        </div>
+        <p>
+          The amount every Allowance wallet receives each period, paid by the
+          LNbits allowance extension.
+        </p>
+      </div>
+      {allowanceStatus ? (
+        <AllowancePanel
+          key={accountId}
+          isAdmin={isAdmin}
+          status={allowanceStatus}
+          onSave={handleSaveAllowance}
+          onPreview={handlePreviewAllowances}
+          onApply={handleApplyAllowances}
+        />
+      ) : allowanceError ? (
+        <p className={styles.errorText}>{allowanceError}</p>
+      ) : (
+        <p className={styles.subtitle}>Loading weekly allowances...</p>
+      )}
 
       <ToastContainer />
     </div>

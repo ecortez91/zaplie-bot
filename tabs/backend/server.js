@@ -7,6 +7,7 @@ const fs = require('fs');
 const authMiddleware = require('./authMiddleware'); // Import the authentication middleware
 const { dataPath } = require('./dataPaths');
 const { writeJsonSecure } = require('./secureJsonStore');
+const { readDataStrict } = require('./dataStore');
 const identityRoutes = require('./identityRoutes');
 const pendingRewardsStore = require('./pendingRewardsStore');
 const {
@@ -26,6 +27,9 @@ const {
   readRewardPolicyStructure,
   readStoredRewardAmounts,
 } = require('./rewardPolicy');
+const { createAllowanceRouter } = require('./allowanceRoutes');
+const { createAllowanceTimer } = require('./allowanceTimer');
+const { createAllowanceSyncStore } = require('./allowanceSyncStore');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -93,6 +97,11 @@ const readData = () => {
     return { rewardName: 'sats' }; // Default reward name
   }
 };
+
+// The allowance routes and timer read strictly: an unreadable data.json is an
+// error (policy-invalid), never the defaults above, which would read as a
+// disabled policy and pause every schedule.
+const readAllowanceData = readDataStrict(dataFilePath);
 
 // Function to write data to the JSON file
 const writeData = (data) => {
@@ -353,6 +362,15 @@ app.post('/api/reward-name', requireAdmin, (req, res) => {
   res.send({ message: 'Reward name updated successfully', rewardName: data.rewardName });
 });
 
+// Weekly allowances: the policy, the Fund status and the preview/apply sync.
+// Mounted before the shared-token middleware for the same reason as the
+// config routes above: reads take an MSAL token or the bot's, writes an admin's.
+const allowanceStore = createAllowanceSyncStore();
+app.use(
+  '/api/allowances',
+  createAllowanceRouter({ readData: readAllowanceData, writeData, store: allowanceStore }),
+);
+
 // Use the authentication middleware for API routes
 app.use('/api', authMiddleware);
 
@@ -398,6 +416,10 @@ if (require.main === module) {
   app.listen(port, () => {
     console.log(`Server is running on http://localhost:${port}`);
   });
+  // The timer shares the run lock file with the routes and the CLI. It reads
+  // data.json strictly, so an unreadable file is policy-invalid (the tick is
+  // skipped), never a disabled policy that would pause every schedule.
+  createAllowanceTimer({ readData: readAllowanceData, store: allowanceStore }).start();
 }
 
 module.exports = app;

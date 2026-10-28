@@ -143,12 +143,41 @@ const lnbitsRequest = async (path, options = {}) => {
     // gateway's own credentials failed, which is a 502 for the browser.
     const status =
       response.status === 400 || response.status === 404 ? response.status : 502;
-    throw new LnbitsGatewayError(
+    const error = new LnbitsGatewayError(
       `LNbits request failed with status ${response.status}`,
       status,
     );
+    // Server-side callers (the allowance sync) act on the real upstream
+    // status (409 conflict, 422 limit, 429 back-off); the router never sees it.
+    error.upstreamStatus = response.status;
+    if (options.readErrorDetail) {
+      error.upstreamDetail = await readErrorDetail(response);
+    }
+    throw error;
   }
   return safeJson(response);
+};
+
+// Anything that looks like an LNbits key (32 hex characters) is masked: an
+// error detail must never carry a credential into a log or a run summary.
+const KEY_LIKE = /[0-9a-f]{32,}/gi;
+const MAX_ERROR_DETAIL = 300;
+
+const maskKeys = (text) => String(text).replace(KEY_LIKE, '[redacted]');
+
+const readErrorDetail = async (response) => {
+  try {
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return '';
+    }
+    const body = await response.json();
+    const detail = body && typeof body === 'object' ? body.detail : body;
+    const text = typeof detail === 'string' ? detail : JSON.stringify(detail ?? '');
+    return maskKeys(text).slice(0, MAX_ERROR_DETAIL);
+  } catch (_error) {
+    return '';
+  }
 };
 
 const redactSensitive = (value, depth = 0) => {
@@ -280,11 +309,75 @@ const sanitizePaymentPage = (payments, source) =>
     }
   });
 
+// LNbits 1.6 pages the Users API (ten accounts per request unless `limit` is
+// set) and orders nothing unless `sortby` is set, so one request silently drops
+// everyone past the first page. Read it the way the bot does
+// (src/services/lnbitsService.ts getUsers, docs/SOLUTION_DESIGN.adoc "LNbits
+// Integration"): ordered by id, 100 per request, `offset` advanced by the rows
+// received, until `total` is reached or a page comes back empty. A bare array
+// is an unpaged server that returned everything at once.
+const USER_LIST_PAGE_SIZE = 100;
+// 10,000 accounts is far beyond any team the portal serves: reaching it means
+// the server is ignoring `offset`, and a partial list is refused.
+const USER_LIST_MAX_PAGES = 100;
+
+/**
+ * Every LNbits user, with the `total` the server announced (null when it sent
+ * none) and whether the list is provably complete. Callers that act on who is
+ * missing from the list (the allowance sync's leavers) check `complete`.
+ */
+const readRawUserPages = async () => {
+  const users = [];
+  let total = null;
+  let previousFirstId;
+  for (let page = 0; page <= USER_LIST_MAX_PAGES; page += 1) {
+    const params = new URLSearchParams({
+      sortby: 'id',
+      direction: 'asc',
+      limit: String(USER_LIST_PAGE_SIZE),
+      offset: String(users.length),
+    });
+    const body = await lnbitsRequest(`/users/api/v1/user?${params}`);
+    if (Array.isArray(body)) {
+      if (page > 0) {
+        throw new LnbitsGatewayError('LNbits users response changed shape between pages');
+      }
+      return { users: body, total: body.length, complete: true };
+    }
+    if (!body || !Array.isArray(body.data)) {
+      throw new LnbitsGatewayError('LNbits users response is malformed');
+    }
+    if (body.total !== undefined && body.total !== null) {
+      if (!Number.isSafeInteger(body.total) || body.total < 0) {
+        throw new LnbitsGatewayError('LNbits users response has an invalid total');
+      }
+      total = body.total;
+    }
+    if (body.data.length === 0) {
+      return { users, total, complete: total === null || users.length >= total };
+    }
+    if (page === USER_LIST_MAX_PAGES) {
+      throw new LnbitsGatewayError('LNbits returned more users than expected; refusing a partial list');
+    }
+    if (body.data[0]?.id !== undefined && body.data[0]?.id === previousFirstId) {
+      throw new LnbitsGatewayError('LNbits ignored the users offset; refusing a partial list');
+    }
+    previousFirstId = body.data[0]?.id;
+    users.push(...body.data);
+    if (total !== null && users.length >= total) {
+      return { users, total, complete: true };
+    }
+  }
+  throw new LnbitsGatewayError('LNbits returned more users than expected; refusing a partial list');
+};
+
+// Every other caller (sign-in, the directory, the wallet index) needs the
+// whole list too: a person past the first page would be refused at sign-in,
+// or get a second LNbits user. A list short of `total` is an error for them.
 const listRawUsers = async () => {
-  const body = await lnbitsRequest('/users/api/v1/user');
-  const users = Array.isArray(body) ? body : body?.data;
-  if (!Array.isArray(users)) {
-    throw new LnbitsGatewayError('LNbits users response is malformed');
+  const { users, complete } = await readRawUserPages();
+  if (!complete) {
+    throw new LnbitsGatewayError('LNbits returned fewer users than it announced');
   }
   return users;
 };
@@ -543,6 +636,40 @@ const getWalletPayLinks = async (walletId, aadObjectId) => {
     ),
   );
 };
+
+// Pay links on a wallet the server already holds keys for (the allowance sync
+// walks every Allowance wallet). Listing takes the invoice key; creating and
+// updating take the wallet's admin key, as the lnurlp extension requires.
+const listWalletPayLinksWithKey = async (wallet) => {
+  const links = await lnbitsRequest('/lnurlp/api/v1/links?all_wallets=false', {
+    walletKey: wallet.inkey,
+    readErrorDetail: true,
+  });
+  if (!Array.isArray(links)) {
+    throw new LnbitsGatewayError('LNbits pay links response is malformed');
+  }
+  return links.map(redactSensitive);
+};
+
+const createWalletPayLink = async (wallet, body) =>
+  redactSensitive(
+    await lnbitsRequest('/lnurlp/api/v1/links', {
+      method: 'POST',
+      walletKey: wallet.adminkey,
+      body,
+      readErrorDetail: true,
+    }),
+  );
+
+const updateWalletPayLink = async (wallet, linkId, body) =>
+  redactSensitive(
+    await lnbitsRequest(`/lnurlp/api/v1/links/${encodeURIComponent(linkId)}`, {
+      method: 'PUT',
+      walletKey: wallet.adminkey,
+      body,
+      readErrorDetail: true,
+    }),
+  );
 
 const createInvoice = async (wallet, amount, memo) => {
   const result = await lnbitsRequest('/api/v1/payments', {
@@ -843,6 +970,7 @@ module.exports = {
   createInvoice,
   createSendZap,
   createOwnedInvoice,
+  createWalletPayLink,
   ensureCaller,
   getAllPayments,
   getInvoicePayment,
@@ -852,9 +980,14 @@ module.exports = {
   getWalletPayLinks,
   listAllWallets,
   listRawUsers,
+  readRawUserPages,
   listUserWallets,
+  listUserWalletsWithKeys,
   listUsers,
+  listWalletPayLinksWithKey,
   listWalletPayments,
+  lnbitsRequest,
+  maskKeys,
   maxZapAmountSats,
   payOwnedInvoice,
   resetCachesForTests,
@@ -864,4 +997,5 @@ module.exports = {
   sanitizeBalanceMsat,
   sanitizeUser,
   sendZap,
+  updateWalletPayLink,
 };

@@ -141,6 +141,28 @@ describe('fetchZapActivity', () => {
     expect(result.transfers).toEqual([]);
   });
 
+  test('excludes allowance top-ups from the Fund wallet to an Allowance wallet', async () => {
+    // The allowance extension pays each person's Allowance wallet from the
+    // Fund wallet on the Zaplie account. That is funding, not a zap, so it
+    // must stay out of the feed and the leaderboard.
+    const zaplie = user('zaplie');
+    const alex = user('alex');
+    (getUsers as jest.Mock).mockResolvedValue([zaplie, alex]);
+    (getUserWallets as jest.Mock).mockImplementation(async (id: string) =>
+      id === 'zaplie'
+        ? [wallet('zaplie-fund', 'Fund', id)]
+        : [wallet('alex-a', 'Allowance', id), wallet('alex-p', 'Private', id)],
+    );
+    const topUpOut = payment('internal_topup', 'zaplie-fund', -25_000, 10);
+    const topUpIn = payment('topup', 'alex-a', 25_000, 10);
+    topUpOut.memo = 'Weekly allowance [zaplie-managed]';
+    topUpIn.memo = 'Zaplie allowance (alex)';
+    (getAllPayments as jest.Mock).mockResolvedValue([topUpOut, topUpIn]);
+
+    expect((await fetchZapActivity()).transfers).toEqual([]);
+    expect((await fetchVerifiedZapPayments()).payments).toEqual([]);
+  });
+
   test('pages until the requested window is covered', async () => {
     const alex = user('alex');
     const sam = user('sam');
