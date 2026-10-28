@@ -132,10 +132,20 @@ const click = async (text: string) => {
   });
 };
 
-const setValue = async (label: string, value: string) => {
-  const input = container.querySelector(`[aria-label="${label}"]`) as
+const control = (testId: string) =>
+  container.querySelector(`[data-testid="${testId}"]`) as
     HTMLInputElement | HTMLSelectElement | null;
-  if (!input) throw new Error(`no field "${label}"`);
+
+// The accessible name a labelled control gets: its own aria-label if it has
+// one, else the text of the <label> that wraps it.
+const nameOf = (element: Element | null): string =>
+  element?.getAttribute('aria-label') ??
+  element?.closest('label')?.textContent ??
+  '';
+
+const setValue = async (testId: string, value: string) => {
+  const input = control(testId);
+  if (!input) throw new Error(`no field "${testId}"`);
   const proto =
     input instanceof HTMLSelectElement
       ? HTMLSelectElement.prototype
@@ -151,11 +161,9 @@ const setValue = async (label: string, value: string) => {
   });
 };
 
-const toggle = async (label: string) => {
-  const input = container.querySelector(
-    `[aria-label="${label}"]`,
-  ) as HTMLInputElement | null;
-  if (!input) throw new Error(`no checkbox "${label}"`);
+const toggle = async (testId: string) => {
+  const input = control(testId);
+  if (!input) throw new Error(`no checkbox "${testId}"`);
   await act(async () => {
     input.click();
   });
@@ -268,7 +276,7 @@ describe('AllowancePanel', () => {
     await mount();
     await click('Preview sync');
     expect(buttonNamed('Apply 4 changes')?.disabled).toBe(true);
-    await toggle('Apply although underfunded');
+    await toggle('sync-allow-underfunded');
     expect(buttonNamed('Apply 4 changes')?.disabled).toBe(false);
     await click('Apply 4 changes');
     expect(onApply).toHaveBeenCalledWith(
@@ -298,7 +306,7 @@ describe('AllowancePanel', () => {
     await mount();
     await click('Preview sync');
     expect(buttonNamed('Apply 4 changes')?.disabled).toBe(true);
-    await toggle('Delete the leaver schedules');
+    await toggle('sync-allow-mass-delete');
     expect(buttonNamed('Apply 4 changes')?.disabled).toBe(false);
     await click('Apply 4 changes');
     expect(onApply).toHaveBeenCalledWith(
@@ -321,7 +329,7 @@ describe('AllowancePanel', () => {
     await click('Preview sync');
     expect(buttonNamed('Apply 4 changes')?.disabled).toBe(true);
     expect(
-      container.querySelector('[aria-label="Delete the leaver schedules"]'),
+      container.querySelector('[data-testid="sync-allow-mass-delete"]'),
     ).toBeNull();
   });
 
@@ -338,7 +346,7 @@ describe('AllowancePanel', () => {
     await mount();
     await click('Preview sync');
     expect(buttonNamed('Apply 4 changes')).toBeDefined();
-    await toggle('Overwrite hand edits');
+    await toggle('sync-overwrite-drift');
     expect(buttonNamed('Apply')).toBeUndefined();
     await click('Preview sync');
     expect(onPreview).toHaveBeenLastCalledWith({ overwriteDrift: true });
@@ -359,18 +367,18 @@ describe('AllowancePanel', () => {
 
   test('saving validates first: turning it on needs the whole schedule', async () => {
     await mount();
-    await toggle('Allowances on');
-    await setValue('Allowance amount in sats', '25000');
+    await toggle('allowance-enabled');
+    await setValue('allowance-amount', '25000');
     await click('Save policy');
     expect(onSave).not.toHaveBeenCalled();
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       'set the weekday, the time, the time zone',
     );
 
-    await setValue('Allowance weekday', '5');
-    await setValue('Allowance time', '09:00');
-    await setValue('Allowance time zone', 'Europe/London');
-    await setValue('Allowance memo', 'Weekly allowance');
+    await setValue('allowance-weekday', '5');
+    await setValue('allowance-time', '09:00');
+    await setValue('allowance-timezone', 'Europe/London');
+    await setValue('allowance-memo', 'Weekly allowance');
     await click('Save policy');
     expect(onSave).toHaveBeenCalledWith({
       enabled: true,
@@ -383,6 +391,59 @@ describe('AllowancePanel', () => {
       memo: 'Weekly allowance',
       payLink: { minSats: null, maxSats: null, commentChars: 0 },
     });
+  });
+
+  test('every control is named by its visible label text (WCAG 2.5.3)', async () => {
+    onPreview.mockResolvedValueOnce(
+      preview({
+        blockers: [
+          {
+            code: 'underfunded',
+            overridable: true,
+            message: 'Fund wallet Fund holds 1 sats, less than one period',
+          },
+          {
+            code: 'mass-delete',
+            message: '9 leaver schedules would be deleted, more than 5',
+          },
+        ],
+      }),
+    );
+    await mount();
+    const expectName = (testId: string, text: string) => {
+      const element = control(testId);
+      if (!element) throw new Error(`no control "${testId}"`);
+      expect(nameOf(element)).toContain(text);
+    };
+    expectName('allowance-enabled', 'Allowances off');
+    expectName('allowance-amount', 'Amount (sats)');
+    expectName('allowance-period', 'Period');
+    expectName('allowance-weekday', 'Day');
+    expectName('allowance-time', 'Time (HH:mm)');
+    expectName('allowance-timezone', 'Time zone');
+    expectName('allowance-memo', 'Memo');
+    expectName('allowance-min', 'Pay link min (sats)');
+    expectName('allowance-max', 'Pay link max (sats)');
+    expectName('allowance-comment-chars', 'Comment characters');
+    expectName('sync-overwrite-drift', 'Overwrite schedules edited by hand');
+
+    await toggle('allowance-enabled');
+    expectName('allowance-enabled', 'Allowances on');
+    await setValue('allowance-period', 'monthly');
+    expectName('allowance-day-of-month', 'Day of month');
+
+    await click('Preview sync');
+    expectName(
+      'sync-allow-underfunded',
+      'Apply although the Fund holds less than one period',
+    );
+    expectName(
+      'sync-allow-mass-delete',
+      'These people have left LNbits: delete their schedules',
+    );
+    expect(
+      container.querySelectorAll('input[aria-label], select[aria-label]'),
+    ).toHaveLength(0);
   });
 
   test('buildAllowancePatch refuses the hidden memo, an over-cap amount and a bad range', () => {

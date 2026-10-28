@@ -342,19 +342,21 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
             <label className={own.toggle}>
               <input
                 type="checkbox"
-                aria-label="Allowances on"
+                data-testid="allowance-enabled"
                 checked={draft.enabled}
                 onChange={e =>
                   setDraft({ ...draft, enabled: e.target.checked })
                 }
               />
-              <span>{draft.enabled ? 'On' : 'Off (schedules are paused)'}</span>
+              <span>
+                Allowances {draft.enabled ? 'on' : 'off (schedules are paused)'}
+              </span>
             </label>
             <div className={styles.row}>
               <label className={styles.field}>
                 <span>Amount (sats)</span>
                 <input
-                  aria-label="Allowance amount in sats"
+                  data-testid="allowance-amount"
                   inputMode="numeric"
                   placeholder="e.g. 25000"
                   value={draft.amount}
@@ -364,7 +366,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
               <label className={styles.field}>
                 <span>Period</span>
                 <select
-                  aria-label="Allowance period"
+                  data-testid="allowance-period"
                   value={draft.period}
                   onChange={e =>
                     setDraft({
@@ -382,7 +384,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
                 <label className={styles.field}>
                   <span>Day</span>
                   <select
-                    aria-label="Allowance weekday"
+                    data-testid="allowance-weekday"
                     value={draft.anchorWeekday}
                     onChange={e =>
                       setDraft({ ...draft, anchorWeekday: e.target.value })
@@ -400,7 +402,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
                 <label className={styles.field}>
                   <span>Day of month</span>
                   <input
-                    aria-label="Allowance day of month"
+                    data-testid="allowance-day-of-month"
                     inputMode="numeric"
                     placeholder="1-28"
                     value={draft.anchorDay}
@@ -415,7 +417,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
               <label className={styles.field}>
                 <span>Time (HH:mm)</span>
                 <input
-                  aria-label="Allowance time"
+                  data-testid="allowance-time"
                   placeholder="e.g. 09:00"
                   value={draft.anchorTime}
                   onChange={e =>
@@ -426,7 +428,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
               <label className={styles.field}>
                 <span>Time zone</span>
                 <input
-                  aria-label="Allowance time zone"
+                  data-testid="allowance-timezone"
                   placeholder="e.g. Europe/London"
                   value={draft.timezone}
                   onChange={e =>
@@ -438,7 +440,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
             <label className={styles.field}>
               <span>Memo</span>
               <input
-                aria-label="Allowance memo"
+                data-testid="allowance-memo"
                 value={draft.memo}
                 onChange={e => setDraft({ ...draft, memo: e.target.value })}
               />
@@ -447,7 +449,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
               <label className={styles.field}>
                 <span>Pay link min (sats)</span>
                 <input
-                  aria-label="Pay link minimum"
+                  data-testid="allowance-min"
                   inputMode="numeric"
                   placeholder="the amount"
                   value={draft.minSats}
@@ -459,7 +461,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
               <label className={styles.field}>
                 <span>Pay link max (sats)</span>
                 <input
-                  aria-label="Pay link maximum"
+                  data-testid="allowance-max"
                   inputMode="numeric"
                   placeholder="the amount"
                   value={draft.maxSats}
@@ -471,7 +473,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
               <label className={styles.field}>
                 <span>Comment characters</span>
                 <input
-                  aria-label="Pay link comment characters"
+                  data-testid="allowance-comment-chars"
                   inputMode="numeric"
                   value={draft.commentChars}
                   onChange={e =>
@@ -569,7 +571,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
           <label className={own.toggle}>
             <input
               type="checkbox"
-              aria-label="Overwrite hand edits"
+              data-testid="sync-overwrite-drift"
               checked={overwriteDrift}
               onChange={e => {
                 setOverwriteDrift(e.target.checked);
@@ -632,7 +634,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
                 <label className={own.toggle}>
                   <input
                     type="checkbox"
-                    aria-label="Apply although underfunded"
+                    data-testid="sync-allow-underfunded"
                     checked={allowUnderfunded}
                     onChange={e => setAllowUnderfunded(e.target.checked)}
                   />
@@ -645,7 +647,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
                 <label className={own.toggle}>
                   <input
                     type="checkbox"
-                    aria-label="Delete the leaver schedules"
+                    data-testid="sync-allow-mass-delete"
                     checked={allowMassDelete}
                     onChange={e => setAllowMassDelete(e.target.checked)}
                   />
