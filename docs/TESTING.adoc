@@ -105,8 +105,10 @@ npm run coverage:ratchet
   control character without calling the API, counts an emoji once, and turns
   the backend's 400 into a `RewardNameError` with its reason;
   `RewardsNameSetting.test.tsx` checks that the field shows that reason
-  instead of the generic retry, counts the characters left (past the limit
-  too), and that a valid save still updates the shared context
+  instead of the generic retry, is marked invalid for a refused or blank name
+  but not a failed request, passes the raw value (a leading tab is not
+  trimmed away), counts the characters left (past the limit too), and that a
+  valid save still updates the shared context
 - Run:
 
 [source,bash]
@@ -154,8 +156,8 @@ npm test                               # watch mode
    newline or U+2028/U+2029 anywhere) and the read's fallback to `sats` for
    an invalid stored value, logging the reason but never the value.
 ** `configRoutes.test.js` (reward name): an admin save of an object, array,
-   number, blank, 33-code-point or control-character name is a 400 that leaves
-   the store unchanged; a padded name is saved trimmed and read back; a
+   number, blank, 33-code-point or control-character name, or a body with an
+   unknown key, is a 400 that leaves the store unchanged; a padded name is saved trimmed and read back; a
    32-code-point name with an emoji is accepted; a pre-existing invalid stored
    value reads as `sats`.
 - `server.js` only calls `listen()` when run directly, so each test file can

@@ -198,6 +198,20 @@ test('a missing reward name is a 400 that says why', async () => {
   assert.equal(res.body.message, 'The reward name must be text.');
 });
 
+test('an unknown reward-name body key is refused rather than quietly ignored', async () => {
+  writeRewardNameStore({ rewardName: 'Points' });
+  const res = await post('/api/reward-name', `Bearer ${ADMIN_TOKEN}`, {
+    newRewardName: 'Zaps',
+    botPersona: 'Be upbeat.',
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.body.message, /only accepted field/);
+
+  // The refused write never reached the store.
+  const read = await get('/api/reward-name');
+  assert.deepEqual(read.body, { rewardName: 'Points' });
+});
+
 test('an admin saves a padded reward name and the open read returns it trimmed', async () => {
   const res = await post('/api/reward-name', `Bearer ${ADMIN_TOKEN}`, {
     newRewardName: '  Zaps  ',

@@ -468,11 +468,16 @@ requires the `Zaplie.Admin` app role. `tabs/backend/rewardName.js` keeps the lab
 plain: a string of 1 to 32 code points after trimming (an emoji counts once), on
 one line, with no control characters (C0, DEL, C1, tab or newline) and no
 U+2028/U+2029 line separators. A save that breaks a rule is a 400 whose `message`
-says which, and nothing is stored. The read applies the same rules to whatever is
+says which, and nothing is stored. A body with any key besides `newRewardName` is
+also a 400 (`newRewardName is the only accepted field`), the same contract as
+`/api/bot-persona` and the payment routes. The read applies the same rules to whatever is
 on disk and serves `sats` in place of an invalid stored value, so a name saved
 before the rules existed cannot reach the browser. The Settings field mirrors the
 rules (`MAX_REWARD_NAME_LENGTH` in `tabs/src/apiService.tsx`), shows the characters
-left, and explains a refusal instead of offering a retry.
+left, and explains a refusal instead of offering a retry. It hands the untrimmed
+value to `updateRewardName`, so a pasted tab or line separator at either end is
+refused rather than trimmed away, and it marks the field invalid only for a
+refused or blank name, not for a failed request.
 
 The assistant persona follows the same route: `GET /api/bot-persona` is readable
 by any signed-in user or the bot's shared token, `POST /api/bot-persona`

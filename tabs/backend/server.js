@@ -233,6 +233,7 @@ app.post('/api/reward-policy', requireAdmin, (req, res) => {
 // set, so the request is refused instead of silently half-honoured — the same
 // contract the payment routes state in lnbitsRoutes.js.
 const BOT_PERSONA_BODY_KEYS = new Set(['botPersona']);
+const REWARD_NAME_BODY_KEYS = new Set(['newRewardName']);
 
 const hasOnlyKeys = (body, allowed) =>
   typeof body === 'object' &&
@@ -333,7 +334,12 @@ app.get('/api/reward-policy', requireSignedInOrBot, (req, res) => {
 });
 
 app.post('/api/reward-name', requireAdmin, (req, res) => {
-  const validation = validateRewardName(req.body?.newRewardName);
+  if (!hasOnlyKeys(req.body, REWARD_NAME_BODY_KEYS)) {
+    res.status(400).send({ message: 'newRewardName is the only accepted field' });
+    return;
+  }
+
+  const validation = validateRewardName(req.body.newRewardName);
   if (!validation.valid) {
     res.status(400).send({ message: validation.message });
     return;

@@ -27,6 +27,7 @@ const RewardsNameSetting: FunctionComponent = () => {
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveErrorIsInvalidName, setSaveErrorIsInvalidName] = useState(false);
   const {
     rewardName,
     setRewardName,
@@ -55,6 +56,7 @@ const RewardsNameSetting: FunctionComponent = () => {
     const normalizedRewardName = currency.trim();
     if (!normalizedRewardName) {
       setSaveError('Enter a reward name before saving.');
+      setSaveErrorIsInvalidName(true);
       return;
     }
 
@@ -68,7 +70,9 @@ const RewardsNameSetting: FunctionComponent = () => {
       }
       const data = await updateRewardName(
         await acquireIdToken(instance, account),
-        normalizedRewardName,
+        // The raw value: updateRewardName refuses a control character before
+        // trimming, and trim() here would quietly drop one at either end.
+        currency,
       );
       setCurrency(data.rewardName);
       setRewardName(data.rewardName);
@@ -78,11 +82,14 @@ const RewardsNameSetting: FunctionComponent = () => {
       toast.success('Reward name has been updated successfully!');
     } catch (error) {
       // A refused name says what to change; anything else is worth a retry.
+      const refused = error instanceof RewardNameError;
       setSaveError(
-        error instanceof RewardNameError
+        refused
           ? error.message
           : "We couldn't save the reward name. Try again.",
       );
+      // Only a refused name marks the field invalid, not a failed request.
+      setSaveErrorIsInvalidName(refused);
       toast.error('Error updating reward name.');
     } finally {
       setSaving(false);
@@ -135,7 +142,9 @@ const RewardsNameSetting: FunctionComponent = () => {
                 className={`${styles.textBox} ${isEditing ? styles.editing : ''}`}
                 title="Reward name"
                 placeholder="Enter reward name"
-                aria-invalid={saveError ? 'true' : undefined}
+                aria-invalid={
+                  saveError && saveErrorIsInvalidName ? 'true' : undefined
+                }
                 aria-describedby={isEditing ? 'reward-name-count' : undefined}
               />
               {isAdmin &&

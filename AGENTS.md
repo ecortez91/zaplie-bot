@@ -186,7 +186,8 @@ table):
   `POST /api/reward-name` needs a verified MSAL ID token with the
   `Zaplie.Admin` role; neither takes the shared `TAB_BACKEND_TOKEN`. The name
   is validated by `tabs/backend/rewardName.js` (1 to 32 code points, one line,
-  no control characters or U+2028/U+2029) on the write, and the read serves
+  no control characters or U+2028/U+2029) on the write, which also refuses
+  any body key besides `newRewardName`, and the read serves
   `sats` instead of any stored value that breaks those rules.
   `tabs/src/apiService.tsx` (`updateRewardName`, `MAX_REWARD_NAME_LENGTH`)
   keeps a copy of the rules so Settings can explain a refusal before sending;
