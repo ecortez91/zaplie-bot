@@ -108,8 +108,24 @@ const createAllowanceRouter = ({
     }
   };
 
+  // An unreadable data.json is the same 500: it must never stand in for "no
+  // policy", which reads as a disabled one, and nothing is written over it.
+  // The detail (which may name the path) stays in the server log.
+  const readStoredData = () => {
+    try {
+      return readData();
+    } catch (error) {
+      console.error('Allowance data could not be read:', error?.message || error);
+      throw new AllowanceSyncError(
+        'the stored allowance policy could not be read',
+        500,
+        'policy-invalid',
+      );
+    }
+  };
+
   const status = async () => {
-    const policy = readStoredPolicy(readData());
+    const policy = readStoredPolicy(readStoredData());
     const state = store.read();
     return {
       policy,
@@ -134,7 +150,7 @@ const createAllowanceRouter = ({
   router.post('/policy', requireAdmin, async (req, res) => {
     let next;
     try {
-      const data = readData();
+      const data = readStoredData();
       next = applyAllowancePolicyPatch(readStoredPolicy(data), req.body, {
         by: await callerOid(req),
       });

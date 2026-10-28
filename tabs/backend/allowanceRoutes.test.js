@@ -55,6 +55,7 @@ const POLICY = {
 };
 
 let data = {};
+let readFails = null;
 let writes = 0;
 let syncCalls = [];
 let syncImpl = async () => ({ mode: 'dry', summary: { totalPerPeriodSats: 0 } });
@@ -75,7 +76,10 @@ app.use(express.json());
 app.use(
   '/api/allowances',
   createAllowanceRouter({
-    readData: () => JSON.parse(JSON.stringify(data)),
+    readData: () => {
+      if (readFails) throw readFails;
+      return JSON.parse(JSON.stringify(data));
+    },
     writeData: (next) => {
       data = next;
       writes += 1;
@@ -333,6 +337,23 @@ test('a stored policy that no longer validates is a 500, not a 400', async () =>
     assert.equal(read.body.code, 'policy-invalid');
   } finally {
     data = saved;
+  }
+});
+
+test('an unreadable data.json is a 500 policy-invalid and POST /policy writes nothing', async () => {
+  const before = writes;
+  readFails = Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' });
+  try {
+    const read = await call('GET', '/api/allowances/policy', user);
+    assert.equal(read.status, 500);
+    assert.equal(read.body.code, 'policy-invalid');
+    assert.ok(!read.body.message.includes('EIO'), 'the read error stays in the server log');
+    const saved = await call('POST', '/api/allowances/policy', admin, { ...POLICY, enabled: false });
+    assert.equal(saved.status, 500);
+    assert.equal(saved.body.code, 'policy-invalid');
+    assert.equal(writes, before);
+  } finally {
+    readFails = null;
   }
 });
 

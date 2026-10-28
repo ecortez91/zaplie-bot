@@ -29,11 +29,11 @@ const preview = (summary = {}, blockers = []) => ({
   blockers,
 });
 
-const timer = ({ policy = POLICY, state = {}, env = ENV, runs } = {}) => {
+const timer = ({ policy = POLICY, state = {}, env = ENV, runs, readData } = {}) => {
   const calls = [];
   const queue = [...(runs || [])];
   const instance = createAllowanceTimer({
-    readData: () => ({ allowancePolicy: policy }),
+    readData: readData || (() => ({ allowancePolicy: policy })),
     store: memoryStore(state),
     env,
     log: quiet,
@@ -72,6 +72,16 @@ test('the timer does nothing when off, without a Fund key, or with an invalid po
     assert.deepEqual(await instance.tick(), { skipped: reason });
     assert.equal(calls.length, 0);
   }
+});
+
+test('an unreadable data.json is policy-invalid: the timer never runs a sync', async () => {
+  const { instance, calls } = timer({
+    readData: () => {
+      throw new SyntaxError('Unexpected token n in JSON at position 1');
+    },
+  });
+  assert.deepEqual(await instance.tick(), { skipped: 'policy-invalid' });
+  assert.equal(calls.length, 0);
 });
 
 test('an enabled policy waits until a person has applied that exact policy', async () => {

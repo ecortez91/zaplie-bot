@@ -7,6 +7,7 @@ const fs = require('fs');
 const authMiddleware = require('./authMiddleware'); // Import the authentication middleware
 const { dataPath } = require('./dataPaths');
 const { writeJsonSecure } = require('./secureJsonStore');
+const { readDataStrict } = require('./dataStore');
 const identityRoutes = require('./identityRoutes');
 const pendingRewardsStore = require('./pendingRewardsStore');
 const {
@@ -95,6 +96,11 @@ const readData = () => {
     return { rewardName: 'sats' }; // Default reward name
   }
 };
+
+// The allowance routes and timer read strictly: an unreadable data.json is an
+// error (policy-invalid), never the defaults above, which would read as a
+// disabled policy and pause every schedule.
+const readAllowanceData = readDataStrict(dataFilePath);
 
 // Function to write data to the JSON file
 const writeData = (data) => {
@@ -354,7 +360,7 @@ app.post('/api/reward-name', requireAdmin, (req, res) => {
 const allowanceStore = createAllowanceSyncStore();
 app.use(
   '/api/allowances',
-  createAllowanceRouter({ readData, writeData, store: allowanceStore }),
+  createAllowanceRouter({ readData: readAllowanceData, writeData, store: allowanceStore }),
 );
 
 // Use the authentication middleware for API routes
@@ -402,9 +408,10 @@ if (require.main === module) {
   app.listen(port, () => {
     console.log(`Server is running on http://localhost:${port}`);
   });
-  // One process, one timer: the sync's in-process lock covers this instance
-  // only, like the gateway's other in-memory state.
-  createAllowanceTimer({ readData, store: allowanceStore }).start();
+  // The timer shares the run lock file with the routes and the CLI. It reads
+  // data.json strictly, so an unreadable file is policy-invalid (the tick is
+  // skipped), never a disabled policy that would pause every schedule.
+  createAllowanceTimer({ readData: readAllowanceData, store: allowanceStore }).start();
 }
 
 module.exports = app;
