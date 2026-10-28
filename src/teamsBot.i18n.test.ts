@@ -398,6 +398,30 @@ describe('TeamsBot answers a Spanish client in Spanish everywhere', () => {
     );
   });
 
+  test('a card over the recipient cap is refused in Spanish before any payment', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const bot = new TeamsBot();
+    const { context, sendActivity } = makeContext({
+      replyToId: 'card-es-cap',
+      locale: 'es-MX',
+      value: {
+        action: 'submitZaps',
+        zapReceiverId: 'recipient-7,recipient-8,recipient-9,recipient-10',
+        zapMessage: 'gracias',
+        zapAmount: '10',
+      },
+    });
+    (context.turnState as Map<unknown, unknown>).set('user', zapSubmitter);
+
+    await bot.run(context);
+
+    expect(sendActivity).toHaveBeenCalledWith(
+      '¡Ups! Puedes enviar un zap a un máximo de 3 personas por tarjeta y seleccionaste 4. No se envió ningún zap; elige 3 o menos e inténtalo de nuevo.',
+    );
+    expect(getUser).not.toHaveBeenCalled();
+    expect(payInvoice).not.toHaveBeenCalled();
+  });
+
   test('greets a Spanish client in Spanish, including a Spanish greeting', async () => {
     config.foundryProjectEndpoint = undefined;
     config.foundryModel = undefined;

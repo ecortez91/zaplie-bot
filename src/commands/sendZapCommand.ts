@@ -9,7 +9,7 @@ import {
 import { UserService } from '../services/userService';
 import { genericErrorMessage } from '../messages';
 import { LocaleTag, formatNumber, t } from '../i18n';
-import { MAX_ZAP_SATS } from './zapBudget';
+import { MAX_ZAP_SATS, resolveZapMaxRecipients } from './zapBudget';
 import {
   ZapPaymentExtra,
   toPaymentExtraWallet,
@@ -31,7 +31,12 @@ export class SendZapCommand extends SSOCommand {
       // fail a turn, and the error path below runs for any failure. The raw
       // tag is kept so the card's numbers follow the client's region.
       const locale = context.activity?.locale;
-      const card = await createZapCard(currentUser, globalRewardName, locale);
+      const card = await createZapCard(
+        currentUser,
+        globalRewardName,
+        locale,
+        resolveZapMaxRecipients(),
+      );
       console.log('createZapCard:', card); // Log the card content
 
       // Create the message with the adaptive card
@@ -397,6 +402,7 @@ async function createZapCard(
   sender: User,
   globalRewardName: string,
   locale: LocaleTag,
+  maxRecipients: number,
 ) {
   console.log('Creating Zap Card ...');
   const walletChoices = await populateWalletChoices();
@@ -411,11 +417,17 @@ async function createZapCard(
   }
 
   const cardBody = [
+    // Adaptive Cards 1.5 has no "at most N selections" on Input.ChoiceSet, so
+    // the placeholder only advertises the recipient cap; it is forgeable like
+    // every client-side rule, and the submit handler enforces it with
+    // validateRecipientCount before any ledger or LNbits call.
     {
       type: 'Input.ChoiceSet',
       label: t(locale, 'cardReceiverLabel'),
       id: 'zapReceiverId',
-      placeholder: t(locale, 'cardReceiverPlaceholder'),
+      placeholder: t(locale, 'cardReceiverPlaceholder', {
+        max: maxRecipients,
+      }),
       choices: walletChoices,
       isRequired: true,
       isMultiSelect: true,

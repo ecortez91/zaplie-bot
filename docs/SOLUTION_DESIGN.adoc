@@ -103,7 +103,7 @@ in a static `SSOCommandMap` keyed by lower-case message text:
 
 | `send zap`
 | `src/commands/sendZapCommand.ts`
-| Presents an Adaptive Card (schema 1.5) with a multi-select recipient picker, message, and amount (1 up to the live Allowance balance, at most 10,000, refused by the card above that and checked again on submit with the same whole-digits rule (ASCII digits, no sign, no leading zero, `parseSatsAmount` in `src/utils/satsAmount.ts`), so a forged submit cannot pass `1e3`, `1.000` or `0x10`); on submit, pays each recipient and updates the card in place with results and remaining balance
+| Presents an Adaptive Card (schema 1.5) with a multi-select recipient picker (up to `ZAP_MAX_RECIPIENTS` people, default three; the card advertises the limit and the submit enforces it before any ledger or LNbits call, because Teams must receive the bot's response within 15 seconds), message, and amount (1 up to the live Allowance balance, at most 10,000, refused by the card above that and checked again on submit with the same whole-digits rule (ASCII digits, no sign, no leading zero, `parseSatsAmount` in `src/utils/satsAmount.ts`), so a forged submit cannot pass `1e3`, `1.000` or `0x10`); on submit, pays each recipient and updates the card in place with results and remaining balance
 
 | `show my balance`
 | `src/commands/showMyBalanceCommand.ts`
@@ -185,6 +185,36 @@ Three server-side clients speak to the LNbits REST API:
   teammate.
 - `functions/services/lnbitsService.ts` — request-scoped variant; the LNbits
   base URL and credentials arrive with each HTTP request.
+
+=== Submit Duration
+
+Teams ends the bot's turn for a card submit after 15 seconds: if the HTTP
+response to `POST /api/messages` has not gone out by then, the sender sees an
+error even though the payments carry on server-side, and a resubmit is
+refused as already submitted. Everything the submit handler awaits counts
+against that budget, and the recipients are paid one after another. Each
+recipient costs four LNbits calls (`getUser`, which also reads the user's
+wallets, then `createInvoice` and `payInvoice`) and two ledger transitions
+(`tryAcquire`, `markPaid`), each of them a lock and an fsync-bound atomic
+write on the `%HOME%` share. Around the loop sit a fixed cost (the middleware's
+member lookup and LNbits user setup, the pending-recipient ledger read and the
+live balance read) and the receipt (a balance read, the card update and the
+success line).
+
+Estimates, not measurements: an LNbits round trip of 150 to 500 ms, a ledger
+transition of 50 to 300 ms and a Bot Framework call of 200 to 600 ms put one
+recipient at about 1.0 s typical and 2.6 s slow, and the fixed cost and the
+receipt at about 2.3 s typical and 4.7 s slow. Three recipients therefore take
+about 5.3 s typical and 12.5 s slow; four would reach about 15.1 s slow. That
+is why `ZAP_MAX_RECIPIENTS` defaults to three: `validateRecipientCount`
+(`src/commands/zapBudget.ts`) refuses a larger card with `tooManyRecipients`
+right after the self-zap check, before the ledger read and the balance read,
+so an over-cap submit costs no LNbits call, leaves no ledger record, and gets
+the same refusal when resubmitted. The count is the whole card after
+de-duplication, not only the recipients still pending. Recipient
+notifications are no longer part of the turn (see Recipient Notifications).
+None of this bounds a single LNbits call that stalls: those calls have no
+request timeout of their own.
 
 === Bot Zap Submission Ledger
 
@@ -353,9 +383,17 @@ involved; the only requirement is that the app is installed for the
 recipient, in their personal scope or through a team or group chat that has
 the app and them as a member, which is also what lets them use the bot.
 
+The notifications are not awaited by the sender's turn: the HTTP response to
+Teams goes out once the receipt and the success line are sent, and the
+notifier finishes in the background of the same process (`TeamsBot` tracks
+the promise so tests can settle it with `settleBackgroundWork`). A process
+restart in that window loses the notice, which is consistent with best
+effort; the payment and the ledger record are already complete.
+
 The step runs after the ledger record and after the receipt, so a slow Teams
 call can neither leave a settled payment unrecorded nor withhold the sender's
-confirmation, and it is best effort by contract: it returns `notified`,
+confirmation nor delay the turn's response to Teams, and it is best effort by
+contract: it returns `notified`,
 `unreachable` or `failed`, never throws, and every failure is logged with the
 recipient's id (or display name when the LNbits account has no id). Teams
 answers a person it cannot address with a 400 (`MemberNotFoundInConversation`
@@ -387,7 +425,8 @@ and error code together (400 `MemberNotFoundInConversation` or `BadSyntax`,
 status with another code is an error, not a friendly warning. The memo in the
 notice is the sender's text collapsed to one line and cut at
 `ZAP_MEMO_PREVIEW_MAX` (200) characters, because the card's own length limit
-is client-side.
+is client-side. Since the notifier left the turn, those bounds cap background
+work, not the turn.
 
 === Web Tabs
 

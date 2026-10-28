@@ -21,9 +21,10 @@ deployable components in one repository:
   handled by `CloudAdapter`. `src/teamsBot.ts` extends `TeamsActivityHandler`
   and routes text commands via the `SSOCommandMap` registry
   (`src/commands/SSOCommandMap.ts`). Commands: `send zap`, `show my balance`,
-  `show leaderboard`. (`withdraw my zaps` exists as a stub in
-  `src/commands/withdrawFundsCommand.ts` but is not registered or listed in the
-  manifests until withdrawals work — issue #293.) Adaptive card submits arrive
+  `show leaderboard`; a `send zap` card pays at most `ZAP_MAX_RECIPIENTS`
+  people (default three, Teams' 15-second turn limit). (`withdraw my zaps`
+  exists as a stub in `src/commands/withdrawFundsCommand.ts` but is not
+  registered or listed in the manifests until withdrawals work — issue #293.) Adaptive card submits arrive
   with `activity.value.action === 'submitZaps'`.
 - **Assistant instructions** (`src/services/foundryAgentService.ts`): the
   Foundry agent's instructions are `FIXED_GUARDRAILS` (tool honesty, withdrawals
@@ -62,7 +63,9 @@ deployable components in one repository:
   ledger records a zap as paid and the sender's receipt is updated, the bot
   opens the recipient's personal chat on demand (`createConversationAsync`,
   by AAD object id) and sends a one-line notice. Best effort by contract: it
-  returns an outcome and never throws into the payment path.
+  returns an outcome and never throws into the payment path. Not awaited by
+  the sender's turn (Teams' 15-second response limit); tracked on the bot
+  instance so tests can settle it (`settleBackgroundWork`).
 - **LNbits integration**: `src/services/lnbitsService.ts` (bot),
   `tabs/src/services/lnbits/` (browser: `auth`, `cache`, `users`, `wallets`,
   `payments`, `rewards`), and
@@ -164,6 +167,8 @@ table):
   `LNBITS_PASSWORD`, `LNBITS_ADMINKEY`, `LNBITS_INITIAL_ALLOWANCE`,
   `LEADERBOARD_WINDOW_DAYS` (1 to 365; also the assistant's default window),
   `LEADERBOARD_TOP_N` (1 to 100; values outside either range fail closed),
+  `ZAP_MAX_RECIPIENTS` (1 or more, default 3; a malformed value stops the
+  bot at startup),
   plus
   `APPLICATIONINSIGHTS_CONNECTION_STRING` and `AGENT_ID` for the Agents Portal
   telemetry (`src/services/pulse.ts`; titles and subjects are fixed strings,
@@ -254,4 +259,4 @@ steer them to any LNbits endpoint.
 
 User-typed amounts are parsed with `parseSatsAmount`
 (`src/utils/satsAmount.ts`), never `Number()` or `parseInt` alone; env
-ceilings with `positiveIntFromEnv`.
+ceilings with `positiveIntFromEnv` (including `ZAP_MAX_RECIPIENTS`).

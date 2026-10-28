@@ -39,6 +39,8 @@ export const en = {
   noRecipients: 'No valid recipients were selected, so no zaps were sent.',
   zapNeedsMessage: 'Your zap needs a message, so no zaps were sent.',
   selfZap: 'You cannot zap yourself, so no zaps were sent.',
+  tooManyRecipients:
+    'You can zap up to {{max}} people from one card, and {{count}} were selected. No zaps were sent — pick {{max}} or fewer and try again.',
   submitStillChecking:
     'One or more payments from this zap still need checking, so nothing was retried.',
   submitAlreadyHandled:
@@ -67,7 +69,7 @@ export const en = {
   signInFailed:
     'Sign-in could not be completed. Type "{{command}}" to try again.',
   cardReceiverLabel: 'Receiver',
-  cardReceiverPlaceholder: 'Select one or more recipient wallets',
+  cardReceiverPlaceholder: 'Select up to {{max}} recipients',
   cardReceiverError: 'You must select at least one person to zap',
   cardMessageLabel: 'Message',
   cardMessagePlaceholder: 'Thanks for helping me with the proposal!',
@@ -140,6 +142,8 @@ export const es: Record<MessageKey, string> = {
     'Tu zap necesita un mensaje, así que no se envió ningún zap.',
   selfZap:
     'No puedes enviarte un zap a ti mismo, así que no se envió ningún zap.',
+  tooManyRecipients:
+    'Puedes enviar un zap a un máximo de {{max}} personas por tarjeta y seleccionaste {{count}}. No se envió ningún zap; elige {{max}} o menos e inténtalo de nuevo.',
   submitStillChecking:
     'Uno o más pagos de este zap todavía están por confirmar, así que no se reintentó nada.',
   submitAlreadyHandled:
@@ -169,7 +173,7 @@ export const es: Record<MessageKey, string> = {
   signInFailed:
     'No se pudo completar el inicio de sesión. Escribe "{{command}}" para intentarlo de nuevo.',
   cardReceiverLabel: 'Destinatario',
-  cardReceiverPlaceholder: 'Selecciona una o más carteras destinatarias',
+  cardReceiverPlaceholder: 'Selecciona hasta {{max}} destinatarios',
   cardReceiverError: 'Debes seleccionar al menos a una persona',
   cardMessageLabel: 'Mensaje',
   cardMessagePlaceholder: '¡Gracias por ayudarme con la propuesta!',
