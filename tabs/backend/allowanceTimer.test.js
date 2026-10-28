@@ -150,3 +150,32 @@ test('start honours the off switch and does not start twice', () => {
   assert.equal(on.start(), false);
   on.stop();
 });
+
+test('with the real sync, a lock held by the CLI makes the tick wait, touching nothing', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { createAllowanceSyncStore } = require('./allowanceSyncStore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'allowance-timer-'));
+  const store = createAllowanceSyncStore({
+    statePath: path.join(dir, 'state.json'),
+    auditPath: path.join(dir, 'audit.jsonl'),
+  });
+  const cli = store.acquireLock();
+  assert.equal(cli.acquired, true);
+  const warnings = [];
+  const instance = createAllowanceTimer({
+    // A disabled policy is applied without waiting for an admin.
+    readData: () => ({ allowancePolicy: { ...POLICY, enabled: false } }),
+    store,
+    env: ENV,
+    log: { log: () => {}, warn: (line) => warnings.push(line) },
+  });
+  try {
+    assert.deepEqual(await instance.tick(), { skipped: 'busy' });
+    assert.match(warnings[0], /busy/);
+    assert.equal(fs.existsSync(store.statePath), false, 'nothing was written');
+  } finally {
+    cli.release();
+  }
+});

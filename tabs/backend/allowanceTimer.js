@@ -9,10 +9,14 @@
 //   waits for them;
 // - a disabled policy is applied (it only pauses schedules and creates
 //   nothing), so the kill switch takes effect without anyone present;
-// - anything that blocks an apply (underfunded included) stops it; the timer
-//   never overrides a block and never overwrites a hand edit the policy does
-//   not already allow overwriting.
-// The sync's own lock keeps it from overlapping an admin's run.
+// - anything that blocks an apply (underfunded, mass-delete and
+//   people-incomplete included) stops it; the timer never overrides a block
+//   and never overwrites a hand edit the policy does not already allow
+//   overwriting.
+// The sync's lock (allowance-sync.lock in the data directory) keeps it from
+// overlapping an admin's run in this process or the CLI in another one; a
+// busy lock is left for the next tick. The first tick is one full interval
+// after start, not at start.
 const { isPolicyActive, readAllowancePolicy } = require('./allowancePolicy');
 const { readFundKeys } = require('./allowanceExtensionClient');
 const { TIMER_ACTOR, runAllowanceSync } = require('./allowanceSync');

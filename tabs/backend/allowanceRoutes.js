@@ -22,7 +22,8 @@ const {
 const { createAllowanceSyncStore } = require('./allowanceSyncStore');
 const { timerSettings } = require('./allowanceTimer');
 
-const SYNC_BODY_KEYS = new Set(['confirmTotalSats', 'overwriteDrift', 'allowUnderfunded']);
+const SYNC_FLAGS = ['overwriteDrift', 'allowUnderfunded', 'allowMassDelete'];
+const SYNC_BODY_KEYS = new Set(['confirmTotalSats', ...SYNC_FLAGS]);
 const RECENT_RUNS = 50;
 
 const isPlainObject = (value) =>
@@ -116,7 +117,8 @@ const createAllowanceRouter = ({
       fund: await fundStatus(),
       lastRun: state.lastRun || null,
       lastAdminApply: state.lastAdminApply || null,
-      running: isSyncRunning(),
+      // This process, or another one (the CLI) holding allowance-sync.lock.
+      running: isSyncRunning() || Boolean(store.lockHolder()),
       timer: timerSettings(env),
     };
   };
@@ -160,10 +162,12 @@ const createAllowanceRouter = ({
     }
     const body = req.body ?? {};
     if (!isPlainObject(body) || !Object.keys(body).every((key) => SYNC_BODY_KEYS.has(key))) {
-      res.status(400).send({ message: 'only confirmTotalSats, overwriteDrift and allowUnderfunded are accepted' });
+      res.status(400).send({
+        message: 'only confirmTotalSats, overwriteDrift, allowUnderfunded and allowMassDelete are accepted',
+      });
       return;
     }
-    for (const flag of ['overwriteDrift', 'allowUnderfunded']) {
+    for (const flag of SYNC_FLAGS) {
       if (body[flag] !== undefined && typeof body[flag] !== 'boolean') {
         res.status(400).send({ message: `${flag} must be true or false` });
         return;
@@ -179,6 +183,7 @@ const createAllowanceRouter = ({
         confirmTotalSats: body.confirmTotalSats,
         overwriteDrift: body.overwriteDrift === true,
         allowUnderfunded: body.allowUnderfunded === true,
+        allowMassDelete: body.allowMassDelete === true,
         by: await callerOid(req),
       }, { readData, store, env });
       res.send(result);

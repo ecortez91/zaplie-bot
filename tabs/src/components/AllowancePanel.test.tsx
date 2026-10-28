@@ -244,6 +244,7 @@ describe('AllowancePanel', () => {
       confirmTotalSats: 50000,
       overwriteDrift: false,
       allowUnderfunded: false,
+      allowMassDelete: false,
     });
     expect(
       container.querySelector('[data-testid="allowance-applied"]')?.textContent,
@@ -281,6 +282,47 @@ describe('AllowancePanel', () => {
     );
     await click('Preview sync');
     expect(buttonNamed('Apply 4 changes')?.disabled).toBe(true);
+  });
+
+  test('a mass delete of leavers needs its own tick; an incomplete user list cannot be overridden', async () => {
+    onPreview.mockResolvedValueOnce(
+      preview({
+        blockers: [
+          {
+            code: 'mass-delete',
+            message: '9 leaver schedules would be deleted, more than 5',
+          },
+        ],
+      }),
+    );
+    await mount();
+    await click('Preview sync');
+    expect(buttonNamed('Apply 4 changes')?.disabled).toBe(true);
+    await toggle('Delete the leaver schedules');
+    expect(buttonNamed('Apply 4 changes')?.disabled).toBe(false);
+    await click('Apply 4 changes');
+    expect(onApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowMassDelete: true,
+        allowUnderfunded: false,
+      }),
+    );
+
+    onPreview.mockResolvedValueOnce(
+      preview({
+        blockers: [
+          {
+            code: 'people-incomplete',
+            message: 'LNbits returned fewer users than it announced',
+          },
+        ],
+      }),
+    );
+    await click('Preview sync');
+    expect(buttonNamed('Apply 4 changes')?.disabled).toBe(true);
+    expect(
+      container.querySelector('[aria-label="Delete the leaver schedules"]'),
+    ).toBeNull();
   });
 
   test('nothing to change means nothing to apply', async () => {

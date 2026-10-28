@@ -208,6 +208,17 @@ test('POST /sync: a preview passes the admin through; apply errors keep their st
   assert.equal(syncCalls[0].options.by, ADMIN_OID);
   assert.equal(syncCalls[0].options.overwriteDrift, true);
   assert.equal(syncCalls[0].options.allowUnderfunded, false);
+  assert.equal(syncCalls[0].options.allowMassDelete, false);
+
+  await call('POST', '/api/allowances/sync?mode=apply', admin, {
+    confirmTotalSats: 50000,
+    allowMassDelete: true,
+  });
+  assert.equal(syncCalls[1].options.allowMassDelete, true);
+  assert.equal(
+    (await call('POST', '/api/allowances/sync?mode=dry', admin, { allowMassDelete: 1 })).status,
+    400,
+  );
 
   syncImpl = async () => {
     throw new AllowanceSyncError('confirmTotalSats does not match the plan', 409, 'confirm-mismatch');
@@ -258,6 +269,48 @@ test('POST /sync with the real sync: apply without a Fund key is a 503', async (
     base = previousBase;
     await new Promise((resolve) => realServer.close(resolve));
   }
+});
+
+test('POST /sync with the real sync: another process holding the lock is a 409 busy', async () => {
+  const { runAllowanceSync } = require('./allowanceSync');
+  const realApp = express();
+  realApp.use(express.json());
+  realApp.use(
+    '/api/allowances',
+    createAllowanceRouter({
+      readData: () => ({ allowancePolicy: POLICY }),
+      writeData: () => true,
+      store,
+      env: {},
+      runSync: runAllowanceSync,
+      fundStatus: async () => ({ configured: false, wallets: [], health: null }),
+    }),
+  );
+  const realServer = await new Promise((resolve) => {
+    const started = realApp.listen(0, () => resolve(started));
+  });
+  const previousBase = base;
+  base = `http://127.0.0.1:${realServer.address().port}`;
+  // The CLI, in another process, holds allowance-sync.lock.
+  fs.writeFileSync(
+    store.lockPath,
+    JSON.stringify({ pid: 4242, host: 'cli-host', at: new Date().toISOString(), token: 'cli' }),
+  );
+  try {
+    const status = await call('GET', '/api/allowances/policy', user);
+    assert.equal(status.body.running, true);
+    for (const mode of ['dry', 'apply']) {
+      const result = await call('POST', `/api/allowances/sync?mode=${mode}`, admin, { confirmTotalSats: 0 });
+      assert.equal(result.status, 409, mode);
+      assert.equal(result.body.code, 'busy');
+      assert.match(result.body.message, /pid 4242 on cli-host/);
+    }
+  } finally {
+    fs.rmSync(store.lockPath, { force: true });
+    base = previousBase;
+    await new Promise((resolve) => realServer.close(resolve));
+  }
+  assert.equal((await call('GET', '/api/allowances/policy', user)).body.running, false);
 });
 
 test('GET /runs: admin only, newest first', async () => {

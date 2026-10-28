@@ -555,6 +555,7 @@ export const applyAllowanceSync = async (
     confirmTotalSats: number;
     overwriteDrift: boolean;
     allowUnderfunded: boolean;
+    allowMassDelete: boolean;
   },
 ): Promise<AllowanceSyncResult> => {
   const response = await axios.post(

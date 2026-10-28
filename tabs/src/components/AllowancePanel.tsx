@@ -51,6 +51,7 @@ export interface AllowancePanelProps {
     confirmTotalSats: number;
     overwriteDrift: boolean;
     allowUnderfunded: boolean;
+    allowMassDelete: boolean;
   }) => Promise<AllowanceSyncResult>;
 }
 
@@ -216,6 +217,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
   const [busy, setBusy] = useState<'preview' | 'apply' | null>(null);
   const [overwriteDrift, setOverwriteDrift] = useState(false);
   const [allowUnderfunded, setAllowUnderfunded] = useState(false);
+  const [allowMassDelete, setAllowMassDelete] = useState(false);
   const [preview, setPreview] = useState<AllowanceSyncResult | null>(null);
   const [applied, setApplied] = useState<AllowanceSyncResult | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -262,6 +264,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
     setBusy('preview');
     setApplied(null);
     setAllowUnderfunded(false);
+    setAllowMassDelete(false);
     try {
       setPreview(await onPreview({ overwriteDrift }));
     } catch (error) {
@@ -283,6 +286,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
         confirmTotalSats: preview.summary.totalPerPeriodSats,
         overwriteDrift,
         allowUnderfunded,
+        allowMassDelete,
       });
       setApplied(result);
     } catch (error) {
@@ -295,8 +299,13 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
     }
   };
 
+  // Many leavers at once usually means a short LNbits list, not a real
+  // exodus: the admin confirms it with its own tick, as for underfunded.
+  const massDelete = (preview?.blockers ?? []).some(
+    blocker => blocker.code === 'mass-delete',
+  );
   const hardBlockers = (preview?.blockers ?? []).filter(
-    blocker => !blocker.overridable,
+    blocker => !blocker.overridable && blocker.code !== 'mass-delete',
   );
   const underfunded = (preview?.blockers ?? []).some(
     blocker => blocker.overridable,
@@ -306,6 +315,7 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
     preview.summary.changes > 0 &&
     hardBlockers.length === 0 &&
     (!underfunded || allowUnderfunded) &&
+    (!massDelete || allowMassDelete) &&
     busy === null;
 
   const health = fund.health;
@@ -628,6 +638,19 @@ const AllowancePanel: FunctionComponent<AllowancePanelProps> = ({
                   />
                   <span>
                     Apply although the Fund holds less than one period
+                  </span>
+                </label>
+              ) : null}
+              {massDelete ? (
+                <label className={own.toggle}>
+                  <input
+                    type="checkbox"
+                    aria-label="Delete the leaver schedules"
+                    checked={allowMassDelete}
+                    onChange={e => setAllowMassDelete(e.target.checked)}
+                  />
+                  <span>
+                    These people have left LNbits: delete their schedules
                   </span>
                 </label>
               ) : null}

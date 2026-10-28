@@ -669,6 +669,7 @@ const AutomationsComponent: FunctionComponent = () => {
     confirmTotalSats: number;
     overwriteDrift: boolean;
     allowUnderfunded: boolean;
+    allowMassDelete: boolean;
   }): Promise<AllowanceSyncResult> => {
     const startedAs = accountId;
     let result: AllowanceSyncResult;
