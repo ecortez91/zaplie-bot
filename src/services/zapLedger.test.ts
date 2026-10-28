@@ -9,6 +9,7 @@ import {
   ZapLedgerError,
   zapKey,
 } from './zapLedger';
+import { STALE_LOCK_ENV } from './ledgerFile';
 
 const tempDirectories: string[] = [];
 
@@ -222,7 +223,10 @@ describe('ZapLedger durability and concurrency', () => {
     fs.unlinkSync(ledger.lockPath);
   });
 
-  test('a crash-left lock times out closed and is never evicted by age', async () => {
+  test('a crash-left lock that appears after startup still times out closed', async () => {
+    // The runtime acquire path never evicts by age: recovery happens only when
+    // a ledger is constructed, so a lock that shows up while the bot is running
+    // keeps failing closed exactly as before.
     const storePath = newStorePath();
     const ledger = new ZapLedger({
       storePath,
@@ -697,5 +701,194 @@ describe('ZapLedger validation and privacy', () => {
     expect(() => resolveZapLedgerStorePath({}, workingDirectory)).toThrow(
       ZapLedgerError,
     );
+  });
+});
+
+describe('ZapLedger startup lock recovery', () => {
+  const originalStaleLockEnv = process.env[STALE_LOCK_ENV];
+  const ownerToken = 'ab'.repeat(32);
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    if (originalStaleLockEnv === undefined) {
+      delete process.env[STALE_LOCK_ENV];
+    } else {
+      process.env[STALE_LOCK_ENV] = originalStaleLockEnv;
+    }
+  });
+
+  const writeLock = (storePath: string, ageMs: number): string => {
+    const lockPath = `${storePath}.lock`;
+    fs.writeFileSync(lockPath, ownerToken, { mode: 0o600 });
+    const mtime = new Date(Date.now() - ageMs);
+    fs.utimesSync(lockPath, mtime, mtime);
+    return lockPath;
+  };
+
+  const writeStore = (
+    storePath: string,
+    records: Record<string, { state: string; at: number }>,
+  ): void => {
+    fs.writeFileSync(
+      storePath,
+      `${JSON.stringify({ version: 1, records }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+  };
+
+  const errorLines = (spy: { mock: { calls: unknown[][] } }): string[] =>
+    spy.mock.calls.map(call => call.map(String).join(' '));
+
+  test('a crash-left lock older than the threshold is removed at startup', async () => {
+    const storePath = newStorePath();
+    const lockPath = writeLock(storePath, 60_000);
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const ledger = new ZapLedger({ storePath, staleLockMs: 30_000 });
+
+    expect(fs.existsSync(lockPath)).toBe(false);
+    await expect(ledger.tryAcquire(key('alice'))).resolves.toBe(true);
+    const lines = errorLines(errors);
+    expect(lines.some(line => line.includes('removed as crash-left'))).toBe(
+      true,
+    );
+    // The owner token is shortened, never logged whole.
+    expect(lines.some(line => line.includes('abababab'))).toBe(true);
+    expect(lines.some(line => line.includes(ownerToken))).toBe(false);
+    // No graveyard file is left on the share.
+    expect(
+      fs
+        .readdirSync(path.dirname(storePath))
+        .filter(name => name.includes('.stale.')),
+    ).toEqual([]);
+  });
+
+  test('a young lock is left alone at startup and still times out closed', async () => {
+    const storePath = newStorePath();
+    const lockPath = writeLock(storePath, 5_000);
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const ledger = new ZapLedger({
+      storePath,
+      staleLockMs: 30_000,
+      lockRetryMs: 5,
+      lockTimeoutMs: 25,
+    });
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+    expect(fs.readFileSync(lockPath, 'utf8')).toBe(ownerToken);
+    expect(
+      errorLines(errors).some(line =>
+        line.includes('may belong to a live process'),
+      ),
+    ).toBe(true);
+    await expect(ledger.tryAcquire(key('alice'))).rejects.toThrow(
+      'Zap ledger lock timed out',
+    );
+    expect(fs.existsSync(lockPath)).toBe(true);
+  });
+
+  test('staleLockMs: 0 never touches the lock', () => {
+    const storePath = newStorePath();
+    const lockPath = writeLock(storePath, 24 * 60 * 60 * 1000);
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    new ZapLedger({ storePath, staleLockMs: 0 });
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+    expect(fs.readFileSync(lockPath, 'utf8')).toBe(ownerToken);
+    expect(errors).not.toHaveBeenCalled();
+  });
+
+  test('a processing record left by a crash survives lock recovery and still blocks the recipient', async () => {
+    // The money-safety proof: recovery frees the lock, never the record. The
+    // interrupted recipient may already have been paid at LNbits.
+    const storePath = newStorePath();
+    writeStore(storePath, { [key('alice')]: { state: 'processing', at: 1 } });
+    const lockPath = writeLock(storePath, 60_000);
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const ledger = new ZapLedger({ storePath, staleLockMs: 30_000 });
+
+    expect(fs.existsSync(lockPath)).toBe(false);
+    await expect(ledger.tryAcquire(key('alice'))).resolves.toBe(false);
+    await expect(ledger.get(key('alice'))).resolves.toMatchObject({
+      state: 'processing',
+    });
+    // Another recipient is not held hostage by the interrupted one.
+    await expect(ledger.tryAcquire(key('bob'))).resolves.toBe(true);
+  });
+
+  test('the startup log names processing and unknown records', () => {
+    const storePath = newStorePath();
+    writeStore(storePath, {
+      [key('alice')]: { state: 'processing', at: 1 },
+      [key('bob')]: { state: 'unknown', at: 2 },
+    });
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    new ZapLedger({ storePath, staleLockMs: 30_000 });
+
+    expect(errors).toHaveBeenCalledTimes(1);
+    const [line] = errorLines(errors);
+    expect(line).toContain('holds 2 `processing` or `unknown`');
+    expect(line).toContain('docs/DEPLOYMENT.adoc');
+    // One line, no keys: the record keys are digests of Teams identifiers.
+    expect(line).not.toContain(key('alice'));
+    expect(line).not.toContain(key('bob'));
+  });
+
+  test('a store with only paid records logs nothing at startup', async () => {
+    const storePath = newStorePath();
+    const first = new ZapLedger({ storePath });
+    await first.tryAcquire(key('alice'));
+    await first.markPaid(key('alice'), 'hash-alice');
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    new ZapLedger({ storePath });
+
+    expect(errors).not.toHaveBeenCalled();
+  });
+
+  test('ZAPLIE_LEDGER_STALE_LOCK_MS is parsed strictly', () => {
+    const storePath = newStorePath();
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    process.env[STALE_LOCK_ENV] = 'abc';
+    expect(() => new ZapLedger({ storePath })).toThrow(ZapLedgerError);
+    expect(() => new ZapLedger({ storePath })).toThrow(STALE_LOCK_ENV);
+    for (const malformed of ['1e3', '-1', '30000.0', '0x10']) {
+      process.env[STALE_LOCK_ENV] = malformed;
+      expect(() => new ZapLedger({ storePath })).toThrow(STALE_LOCK_ENV);
+    }
+
+    // Blank uses the 30 s default: a 60 s lock goes, a 5 s lock stays.
+    process.env[STALE_LOCK_ENV] = '  ';
+    const oldLock = writeLock(storePath, 60_000);
+    new ZapLedger({ storePath });
+    expect(fs.existsSync(oldLock)).toBe(false);
+    const youngLock = writeLock(storePath, 5_000);
+    new ZapLedger({ storePath });
+    expect(fs.existsSync(youngLock)).toBe(true);
+    fs.unlinkSync(youngLock);
+
+    // 0 disables recovery entirely.
+    process.env[STALE_LOCK_ENV] = '0';
+    const keptLock = writeLock(storePath, 24 * 60 * 60 * 1000);
+    new ZapLedger({ storePath });
+    expect(fs.existsSync(keptLock)).toBe(true);
+    fs.unlinkSync(keptLock);
+
+    // A configured value is honoured.
+    process.env[STALE_LOCK_ENV] = '120000';
+    const underThreshold = writeLock(storePath, 60_000);
+    new ZapLedger({ storePath });
+    expect(fs.existsSync(underThreshold)).toBe(true);
+  });
+
+  test('an invalid staleLockMs option is rejected', () => {
+    expect(
+      () => new ZapLedger({ storePath: newStorePath(), staleLockMs: -1 }),
+    ).toThrow('Zap ledger stale lock threshold is invalid');
   });
 });

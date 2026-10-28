@@ -6,6 +6,8 @@ import {
   ensureDataDirectory,
   isErrnoException,
   LedgerFile,
+  recoverStaleLock,
+  resolveStaleLockMs,
   sweepStaleTemporaries,
   validateDuration,
   withStoreLock,
@@ -83,6 +85,9 @@ export interface RewardLedgerOptions {
   settleLockTimeoutMs?: number;
   // How long a `paid` or `pending` record is kept. 0 disables pruning.
   retentionMs?: number;
+  // At startup a lock file older than this is removed as crash-left. Defaults
+  // to ZAPLIE_LEDGER_STALE_LOCK_MS, else 30 s. 0 disables it.
+  staleLockMs?: number;
   now?: () => number;
 }
 
@@ -357,6 +362,11 @@ export class RewardLedger {
       'Reward ledger retention window',
       options.retentionMs ?? DEFAULT_RETENTION_MS,
     );
+    const staleLockMs = resolveStaleLockMs(
+      RewardLedgerError,
+      'Reward ledger stale lock threshold',
+      options.staleLockMs,
+    );
     this.now = options.now ?? Date.now;
     this.file = {
       storePath: this.storePath,
@@ -365,9 +375,12 @@ export class RewardLedger {
       lockTimeoutImpact: 'every reward request fails',
       lockRetryMs,
       errorType: RewardLedgerError,
+      activityChannel: 'api',
     };
     ensureDataDirectory(this.file);
     sweepStaleTemporaries(this.storePath, this.timestamp());
+    // Same startup lock recovery as the zap ledger; records are untouched.
+    recoverStaleLock(this.file, this.timestamp(), staleLockMs);
     // Fail at startup, not on the first payment, if the store is unreadable.
     readStore(this.storePath);
   }

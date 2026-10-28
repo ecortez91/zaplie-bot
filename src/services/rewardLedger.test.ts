@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, test } from '@jest/globals';
+import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import {
   resolveRewardLedgerStorePath,
   RewardLedger,
@@ -446,5 +446,45 @@ describe('rewardKey and rewardFingerprint', () => {
     ]);
     expect(fingerprints.size).toBe(5);
     expect(rewardFingerprint(base)).toBe(rewardFingerprint({ ...base }));
+  });
+});
+
+describe('RewardLedger startup lock recovery', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('a crash-left lock older than the threshold is removed at startup', async () => {
+    const storePath = newStorePath();
+    const lockPath = `${storePath}.lock`;
+    fs.writeFileSync(lockPath, 'ab'.repeat(32), { mode: 0o600 });
+    const mtime = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockPath, mtime, mtime);
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const ledger = new RewardLedger({ storePath, staleLockMs: 30_000 });
+
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(String(errors.mock.calls[0][0])).toContain('Reward ledger lock');
+    await expect(ledger.reserve(KEY, FINGERPRINT)).resolves.toEqual({
+      kind: 'acquired',
+    });
+  });
+
+  test('a young lock is left alone at startup', () => {
+    const storePath = newStorePath();
+    const lockPath = `${storePath}.lock`;
+    fs.writeFileSync(lockPath, 'ab'.repeat(32), { mode: 0o600 });
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    new RewardLedger({ storePath, staleLockMs: 30_000 });
+
+    expect(fs.existsSync(lockPath)).toBe(true);
+  });
+
+  test('an invalid staleLockMs option is rejected', () => {
+    expect(
+      () => new RewardLedger({ storePath: newStorePath(), staleLockMs: -1 }),
+    ).toThrow('Reward ledger stale lock threshold is invalid');
   });
 });

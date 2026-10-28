@@ -216,18 +216,42 @@ Back up and restore the data directory as an application-consistent unit:
   webhook is redelivered. Never delete or rewrite `processing`, `unknown` or
   `uncertain` records merely to make a retry succeed.
 
-The bot deliberately never evicts a ledger's `.lock` file by age: ownership
-is uncertain, and an eviction rule that guessed wrong could re-enable a payment
-that already settled. Treat a crash-left lock as a *manual outage*: while
-`bot-zap-ledger.json.lock` is present every zap submission fails, and while
-`bot-reward-ledger.json.lock` or `bot-reward-budget.json.lock` is present
-every reward request fails, after the
-five-second lock timeout with an error naming this procedure. It stays that way
-until an operator clears it. After an unclean shutdown, stop/drain every bot
-process, inspect the canonical store, reconcile any `processing`, `unknown` or
-`uncertain` record with LNbits, and only then remove the orphaned lock. Store
-corruption, an unreadable data directory, or lock acquisition failure prevents
-payment.
+A ledger's `.lock` is only ever held across local file I/O (a read, a JSON
+serialise and one synced rename), so a healthy hold lasts milliseconds. A lock
+survives only when the process dies holding it, typically an App Service
+restart (platform maintenance, scale, `az webapp deploy`, an Always On
+recycle) that kills the bot mid-transition. The rule is:
+
+* *At startup* each ledger removes its own `.lock` if it is older than
+  `ZAPLIE_LEDGER_STALE_LOCK_MS` (default 30 seconds; `0` turns this off) and
+  logs `... was <n>s old at startup and has been removed as crash-left`. A
+  younger lock is left alone and logged as
+  `... is <n>s old and may belong to a live process; leaving it`. The lock is
+  moved aside with a rename and its inode checked on both sides, so a lock a
+  live process re-took in the meantime is put back, never deleted. If the
+  lock cannot be inspected at all, the bot refuses to start. If recovery logs
+  `could not be put back`, the token is in the named `.stale.` file; move it
+  back to `.lock` only if no `.lock` exists, then restart.
+* *At runtime* nothing is evicted. While `bot-zap-ledger.json.lock` is
+  present every zap submission fails, and while `bot-reward-ledger.json.lock`
+  or `bot-reward-budget.json.lock` is present every reward request fails,
+  after the five-second lock timeout with an error naming this procedure. Each
+  timeout is also recorded as a `ledger.lock_timeout` activity (subject
+  `ledger-lock`) so an alert can fire on it (see <<Telemetry>>).
+* *Records are never cleared automatically.* Recovery frees the lock, not the
+  payment: a `processing`, `unknown` or `uncertain` record left by the same
+  crash keeps blocking that payment. At startup the zap ledger logs how many
+  `processing` or `unknown` records it holds (a count, never the keys); each
+  one needs reconciling with LNbits.
+
+Manual recovery, when the startup rule did not apply (the lock was younger
+than the threshold at boot, recovery is turned off, or a lock appeared while
+the bot was running): restart the bot once more after 30 seconds, or
+stop/drain every bot process, inspect the canonical store, reconcile any
+`processing`, `unknown` or `uncertain` record with LNbits, and only then
+remove the orphaned `.lock` (never the `.json`). Never delete or rewrite a
+record merely to make a retry succeed. Store corruption, an unreadable data
+directory, or lock acquisition failure prevents payment.
 
 Each ledger sweeps its own `.tmp` files older than an hour once, when the bot
 starts, so a crash between writing a temporary and renaming it cannot
@@ -476,6 +500,15 @@ created. Must be a positive integer; a failed grant is logged, not retried
   both — a component that does not read it yet simply ignores it.
 | Bot, Portal backend
 
+| `ZAPLIE_LEDGER_STALE_LOCK_MS`
+| At startup, a ledger `.lock` file older than this many milliseconds is
+  removed as crash-left (see <<Persistent application state>>). Default
+  `30000` (30 seconds); `0` turns startup recovery off. A whole number of `0`
+  or more: anything else makes the bot refuse to start. Raise it only for a
+  share where a single ledger write can take seconds. Applies to the zap,
+  reward and reward budget ledgers alike; nothing is ever evicted at runtime
+| Bot
+
 | `APPLICATIONINSIGHTS_CONNECTION_STRING`
 | Connection string of the environment's Application Insights (`appi-zaplie`
   in `ka-zaplie-prod`, `appi-zaplie-test` in `ka-zaplie-test`). The bot sends
@@ -577,6 +610,7 @@ any other free text:
 | `zap.queued` | info | An automation reward waits for the recipient to connect a wallet
 | `chat.answered` | success / info | A command ran (subject is the command), the assistant replied, or the command guide was shown
 | `chat.failed` | error / warning | A message could not be handled (error) or was turned down with a reason (warning); the assistant failed and the command guide was sent instead (warning, subject `assistant-unavailable`); also the adapter's turn error handler
+| `ledger.lock_timeout` | error | A ledger transition timed out waiting for the store's `.lock` (subject `ledger-lock`; channel `teams` for the zap ledger, `api` for the reward ledgers). Alert on it: until the lock is cleared every zap or reward fails (see <<Persistent application state>>)
 |===
 
 Telemetry is best effort: the library never throws and every call is wrapped,
