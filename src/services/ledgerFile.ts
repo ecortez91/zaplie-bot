@@ -152,10 +152,13 @@ export const resolveStaleLockMs = (
 
 export type StaleLockRecovery = 'none' | 'kept' | 'removed';
 
-// For tests only: runs between the last ownership check and the rename, which
-// is the window a live process could re-take the lock in.
+// For tests only: `beforeRename` runs between the last ownership check and the
+// rename, which is the window a live process could re-take the lock in.
 export interface StaleLockHooks {
   beforeRename?: () => void;
+  // Runs between the rename and the put-back, which is the window a third
+  // process could take the lock path in.
+  beforeRestore?: () => void;
 }
 
 const OWNER_TOKEN_PREFIX = /^[a-f0-9]{8}/;
@@ -187,8 +190,8 @@ const sameFile = (left: fs.Stats, right: fs.Stats): boolean =>
  *
  * The lock is moved aside with a rename, which is atomic per inode, and the
  * inode is checked on both sides: if a live process re-took the lock in the
- * gap, the moved file is put back with link(), which never clobbers a newer
- * lock.
+ * gap, the moved file is put back with an exclusive create, which never
+ * clobbers a newer lock.
  *
  * @returns `none` (no lock, or recovery disabled), `kept` (too young, or
  *   replaced by a live process), or `removed`
@@ -251,15 +254,33 @@ export const recoverStaleLock = (
 
     const moved = fs.statSync(graveyard);
     if (!sameFile(moved, observed)) {
-      // The path was re-created in the gap and we moved a live lock. Put it
-      // back; link() refuses to clobber a lock taken in the meantime.
+      // The path was re-created in the gap and we moved a live lock. Put the
+      // token back with an exclusive create: it refuses to clobber a lock taken
+      // in the meantime, and unlike link() it works on the SMB share App
+      // Service mounts at /home. The holder's release compares the token text,
+      // so a copy satisfies it.
+      hooks.beforeRestore?.();
       try {
-        fs.linkSync(graveyard, file.lockPath);
-      } catch {
-        // A newer holder owns the path, so the moved file is somebody's live
-        // lock and not ours to delete. Its holder's release fails closed on
-        // the ownership check instead.
-        return 'kept';
+        fs.writeFileSync(file.lockPath, fs.readFileSync(graveyard), {
+          flag: 'wx',
+          mode: 0o600,
+        });
+      } catch (error) {
+        if (isErrnoException(error) && error.code === 'EEXIST') {
+          // A newer holder owns the path. The moved file is referenced by
+          // nothing (release reads lockPath, never this path), so it is a
+          // leftover, not a lock. The displaced holder's release fails closed
+          // on the ownership check.
+          fs.unlinkSync(graveyard);
+          return 'kept';
+        }
+        console.error(
+          `${file.label} lock ${file.lockPath} was re-taken by a live process ` +
+            `during startup recovery and could not be put back; its token is in ` +
+            `${graveyard}. Refusing to start: follow the lock recovery procedure ` +
+            'in docs/DEPLOYMENT.adoc.',
+        );
+        throw error;
       }
       fs.unlinkSync(graveyard);
       return 'kept';

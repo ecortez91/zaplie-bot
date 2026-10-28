@@ -17,6 +17,9 @@ class TestLedgerError extends Error {
 
 const tempDirectories: string[] = [];
 const ownerToken = 'cd'.repeat(32);
+// The `fs` namespace import is read-only, but ledgerFile reads each function
+// through it at call time, so spies go on the module object itself.
+const nodeFs = jest.requireActual<typeof fs>('fs');
 
 const newFile = (): LedgerFile => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'zaplie-lockfile-'));
@@ -118,6 +121,97 @@ describe('recoverStaleLock', () => {
         .readdirSync(path.dirname(file.lockPath))
         .filter(name => name.includes('.stale.')),
     ).toEqual([]);
+  });
+
+  test('a re-taken lock is put back on a share without hard links', () => {
+    const file = newFile();
+    const now = Date.now();
+    writeLock(file.lockPath, now - 60_000);
+    const liveToken = 'ef'.repeat(32);
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    // Azure Files SMB, the /home share App Service mounts, refuses link().
+    jest.spyOn(nodeFs, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    });
+
+    const result = recoverStaleLock(file, now, 30_000, {
+      beforeRename: () => {
+        fs.unlinkSync(file.lockPath);
+        fs.writeFileSync(file.lockPath, liveToken, { mode: 0o600 });
+      },
+    });
+
+    expect(result).toBe('kept');
+    expect(fs.readFileSync(file.lockPath, 'utf8')).toBe(liveToken);
+    expect(
+      fs
+        .readdirSync(path.dirname(file.lockPath))
+        .filter(name => name.includes('.stale.')),
+    ).toEqual([]);
+  });
+
+  test('a lock re-taken again during the put-back is left to its holder', () => {
+    const file = newFile();
+    const now = Date.now();
+    writeLock(file.lockPath, now - 60_000);
+    const liveToken = 'ef'.repeat(32);
+    const thirdToken = '12'.repeat(32);
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = recoverStaleLock(file, now, 30_000, {
+      beforeRename: () => {
+        fs.unlinkSync(file.lockPath);
+        fs.writeFileSync(file.lockPath, liveToken, { mode: 0o600 });
+      },
+      beforeRestore: () =>
+        fs.writeFileSync(file.lockPath, thirdToken, { mode: 0o600 }),
+    });
+
+    expect(result).toBe('kept');
+    expect(fs.readFileSync(file.lockPath, 'utf8')).toBe(thirdToken);
+    expect(
+      fs
+        .readdirSync(path.dirname(file.lockPath))
+        .filter(name => name.includes('.stale.')),
+    ).toEqual([]);
+  });
+
+  test('a put-back that fails for another reason stops startup', () => {
+    const file = newFile();
+    const now = Date.now();
+    writeLock(file.lockPath, now - 60_000);
+    const liveToken = 'ef'.repeat(32);
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    let thrown: unknown;
+    try {
+      recoverStaleLock(file, now, 30_000, {
+        beforeRename: () => {
+          fs.unlinkSync(file.lockPath);
+          fs.writeFileSync(file.lockPath, liveToken, { mode: 0o600 });
+        },
+        // Installed here so the test's own lock writes above are unaffected:
+        // the put-back is the only write left in recoverStaleLock.
+        beforeRestore: () => {
+          jest.spyOn(nodeFs, 'writeFileSync').mockImplementationOnce(() => {
+            throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+          });
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TestLedgerError);
+    expect((thrown as Error).message).toBe(
+      'Test ledger lock could not be inspected at startup',
+    );
+    const graveyard = fs
+      .readdirSync(path.dirname(file.lockPath))
+      .find(name => name.includes('.stale.'));
+    expect(graveyard).toBeDefined();
+    const line = errors.mock.calls.map(call => String(call[0])).join('\n');
+    expect(line).toContain('could not be put back');
+    expect(line).toContain(String(graveyard));
   });
 
   test('a lock that disappears before the rename is not an error', () => {

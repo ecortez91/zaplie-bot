@@ -219,7 +219,8 @@ nothing is evicted: a lock that appears while the bot runs fails every
 transition closed after the five-second timeout until an operator follows the
 recovery procedure in `docs/DEPLOYMENT.adoc`. Recovery frees the lock, never a
 record: a `processing` or `unknown` entry left by the crash still blocks its
-recipient, and the startup log counts them for reconciliation. Writes also sweep this store's own temporary files once they are older
+recipient, and the startup log counts them for reconciliation.
+At startup each ledger also sweeps its own temporary files once they are older
 than an hour, so a crash between write and rename cannot accumulate snapshots. Lock,
 schema, startup-read, and persistence failures all fail closed. Writes use a
 unique mode-`0600` `bot-zap-ledger.json.<pid>.<random>.tmp` file in the same

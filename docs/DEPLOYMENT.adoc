@@ -229,7 +229,9 @@ recycle) that kills the bot mid-transition. The rule is:
   `... is <n>s old and may belong to a live process; leaving it`. The lock is
   moved aside with a rename and its inode checked on both sides, so a lock a
   live process re-took in the meantime is put back, never deleted. If the
-  lock cannot be inspected at all, the bot refuses to start.
+  lock cannot be inspected at all, the bot refuses to start. If recovery logs
+  `could not be put back`, the token is in the named `.stale.` file; move it
+  back to `.lock` only if no `.lock` exists, then restart.
 * *At runtime* nothing is evicted. While `bot-zap-ledger.json.lock` is
   present every zap submission fails, and while `bot-reward-ledger.json.lock`
   or `bot-reward-budget.json.lock` is present every reward request fails,

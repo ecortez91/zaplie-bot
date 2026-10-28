@@ -9,6 +9,7 @@ import {
   ZapLedgerError,
   zapKey,
 } from './zapLedger';
+import { STALE_LOCK_ENV } from './ledgerFile';
 
 const tempDirectories: string[] = [];
 
@@ -704,7 +705,6 @@ describe('ZapLedger validation and privacy', () => {
 });
 
 describe('ZapLedger startup lock recovery', () => {
-  const STALE_LOCK_ENV = 'ZAPLIE_LEDGER_STALE_LOCK_MS';
   const originalStaleLockEnv = process.env[STALE_LOCK_ENV];
   const ownerToken = 'ab'.repeat(32);
 
@@ -831,7 +831,7 @@ describe('ZapLedger startup lock recovery', () => {
 
     expect(errors).toHaveBeenCalledTimes(1);
     const [line] = errorLines(errors);
-    expect(line).toContain('2');
+    expect(line).toContain('holds 2 `processing` or `unknown`');
     expect(line).toContain('docs/DEPLOYMENT.adoc');
     // One line, no keys: the record keys are digests of Teams identifiers.
     expect(line).not.toContain(key('alice'));
