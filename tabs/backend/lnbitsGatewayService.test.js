@@ -10,6 +10,7 @@ const {
   getWalletBalance,
   maxZapAmountSats,
   listUsers,
+  readRawUserPages,
   listWalletPayments,
   redactSensitive,
   resetCachesForTests,
@@ -910,4 +911,82 @@ test('a portal-provisioned user is listed by the name stored in extra.display_na
       .displayName,
     'jack',
   );
+});
+
+// LNbits 1.6 pages the Users API (ten per request by default) and orders
+// nothing unless asked: the portal reads every page, as the bot does.
+const installPagedUsers = (allUsers, { total = allUsers.length, cap = Infinity } = {}) => {
+  process.env.LNBITS_NODE_URL = 'https://lnbits.test';
+  process.env.LNBITS_USERNAME = 'service';
+  process.env.LNBITS_PASSWORD = 'secret';
+  resetCachesForTests();
+  const requests = [];
+  global.fetch = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === '/api/v1/auth') {
+      return jsonResponse({ access_token: 'token' });
+    }
+    if (parsed.pathname === '/users/api/v1/user') {
+      requests.push(Object.fromEntries(parsed.searchParams));
+      const offset = Number(parsed.searchParams.get('offset') || 0);
+      const limit = Math.min(Number(parsed.searchParams.get('limit') || 10), cap);
+      return jsonResponse({ data: allUsers.slice(offset, offset + limit), total });
+    }
+    throw new Error(`unexpected LNbits path ${parsed.pathname}`);
+  };
+  return requests;
+};
+
+const manyUsers = (count) =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `user-${String(index).padStart(4, '0')}`,
+    external_id: `oid-${index}`,
+  }));
+
+test('the user list is read page by page, ordered by id, until the total', async () => {
+  const everyone = manyUsers(250);
+  const requests = installPagedUsers(everyone);
+  const page = await readRawUserPages();
+  assert.equal(page.users.length, 250);
+  assert.equal(page.total, 250);
+  assert.equal(page.complete, true);
+  assert.deepEqual(
+    requests.map((query) => [query.sortby, query.limit, query.offset]),
+    [
+      ['id', '100', '0'],
+      ['id', '100', '100'],
+      ['id', '100', '200'],
+    ],
+  );
+  assert.equal((await listUsers()).length, 250);
+});
+
+test('a server that caps the page size is still read to the end', async () => {
+  installPagedUsers(manyUsers(25), { cap: 10 });
+  const page = await readRawUserPages();
+  assert.equal(page.users.length, 25);
+  assert.equal(page.complete, true);
+});
+
+test('a list that ends short of its total is reported incomplete, and refused to other callers', async () => {
+  installPagedUsers(manyUsers(10), { total: 12 });
+  const page = await readRawUserPages();
+  assert.equal(page.users.length, 10);
+  assert.equal(page.total, 12);
+  assert.equal(page.complete, false);
+  await assert.rejects(listUsers(), /fewer users than it announced/);
+});
+
+test('a server that ignores offset is refused, not read as a partial list', async () => {
+  process.env.LNBITS_NODE_URL = 'https://lnbits.test';
+  process.env.LNBITS_USERNAME = 'service';
+  process.env.LNBITS_PASSWORD = 'secret';
+  resetCachesForTests();
+  const first = manyUsers(10);
+  global.fetch = async (url) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/api/v1/auth') return jsonResponse({ access_token: 'token' });
+    return jsonResponse({ data: first });
+  };
+  await assert.rejects(readRawUserPages(), /ignored the users offset/);
 });

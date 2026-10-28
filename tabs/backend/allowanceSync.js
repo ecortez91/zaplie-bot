@@ -18,7 +18,7 @@
 // - Zaplie never pays: the Fund key only reaches the extension APIs.
 const {
   createWalletPayLink,
-  listRawUsers,
+  readRawUserPages,
   listUserWalletsWithKeys,
   listWalletPayLinksWithKey,
   updateWalletPayLink,
@@ -41,7 +41,7 @@ const {
   updateBody,
   allowanceUsername,
 } = require('./payLinkService');
-const { nextAnchor, startMatchesAnchor } = require('./allowanceSchedule');
+const { MIN_LEAD_MS, nextAnchor, startMatchesAnchor } = require('./allowanceSchedule');
 
 const NAME_PREFIX = 'zaplie:';
 const MANAGED_TAG = '[zaplie-managed]';
@@ -50,6 +50,10 @@ const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_PER_WALLET_LIMIT = 100;
 const DEFAULT_MAX_PEOPLE = 1000;
 const RESERVED_FUND_NAMES = new Set(['allowance', 'private']);
+// More leaver deletes than this in one run is a blocker unless the admin
+// passes allowMassDelete: max(5, 10% of Zaplie's schedules).
+const MASS_DELETE_MIN = 5;
+const MASS_DELETE_SHARE = 0.1;
 const MUTABLE_FIELDS = ['lightning_address', 'amount', 'currency', 'memo', 'active'];
 const SNAPSHOT_FIELDS = [
   ...MUTABLE_FIELDS,
@@ -130,9 +134,15 @@ const oldestFirst = (a, b) =>
  * @param input.allowances every schedule the Fund key(s) can see
  * @param input.fund { configured, wallets: [{ id, name, balanceSats }] }
  * @param input.state the sync store (byPerson: what Zaplie last wrote)
+ * @param input.peopleComplete false when the LNbits user list is provably
+ *   short of its announced total: nobody missing from it is a leaver then
+ * @param input.allowMassDelete the admin's explicit consent to delete more
+ *   leavers than the mass-delete guard allows
  */
 const planAllowanceSync = ({
   people,
+  peopleComplete = true,
+  allowMassDelete = false,
   payLinks = {},
   allowances,
   fund,
@@ -201,6 +211,10 @@ const planAllowanceSync = ({
       if (!fundIds.has(extra.wallet)) {
         actions.push({ kind: 'skip', oid, reason: 'unmanaged-fund-wallet', ...rowRef(extra) });
         keepLoad(extra);
+      } else if (enabled && isInFlight(extra)) {
+        // Deleting it would drop the claim the extension is reconciling.
+        actions.push({ kind: 'defer', oid, reason: 'payment-in-flight', ...rowRef(extra) });
+        keepLoad(extra);
       } else if (enabled) {
         actions.push({ kind: 'delete', oid, reason: 'duplicate', ...rowRef(extra) });
         walletCounts.set(extra.wallet, walletCounts.get(extra.wallet) - 1);
@@ -225,6 +239,8 @@ const planAllowanceSync = ({
   const inScope = [...peopleByOid.values()].filter((person) => !excluded.has(person.oid));
 
   // Leavers: schedules for nobody in scope (gone from LNbits, or excluded).
+  let leaverDeletes = 0;
+  let incompleteLeavers = 0;
   for (const [oid, row] of primaryByOid) {
     const person = peopleByOid.get(oid);
     if (person && !excluded.has(oid)) continue;
@@ -248,6 +264,13 @@ const planAllowanceSync = ({
       }
       continue;
     }
+    if (reason === 'leaver' && peopleComplete === false) {
+      // Missing from a list that is short of its total is not proof of leaving.
+      actions.push({ kind: 'defer', oid, reason: 'people-incomplete', ...rowRef(row) });
+      keepLoad(row);
+      incompleteLeavers += 1;
+      continue;
+    }
     if (isInFlight(row)) {
       actions.push({ kind: 'defer', oid, reason: 'payment-in-flight', ...rowRef(row) });
       keepLoad(row);
@@ -261,6 +284,24 @@ const planAllowanceSync = ({
     }
     actions.push({ kind: 'delete', oid, reason, ...rowRef(row) });
     walletCounts.set(row.wallet, walletCounts.get(row.wallet) - 1);
+    if (reason === 'leaver') leaverDeletes += 1;
+  }
+
+  if (incompleteLeavers > 0) {
+    blockers.push({
+      code: 'people-incomplete',
+      message: `LNbits returned fewer users than it announced; ${incompleteLeavers} schedule(s) would look like leavers, so nothing is deleted`,
+    });
+  }
+  const massDeleteLimit = Math.max(
+    MASS_DELETE_MIN,
+    Math.floor(primaryByOid.size * MASS_DELETE_SHARE),
+  );
+  if (leaverDeletes > massDeleteLimit && !allowMassDelete) {
+    blockers.push({
+      code: 'mass-delete',
+      message: `${leaverDeletes} leaver schedules would be deleted, more than ${massDeleteLimit} (max of ${MASS_DELETE_MIN} and 10% of ${primaryByOid.size}); check the LNbits user list, or confirm with allowMassDelete`,
+    });
   }
 
   if (enabled && inScope.length > maxPeople) {
@@ -283,7 +324,19 @@ const planAllowanceSync = ({
   }
 
   const range = enabled ? payLinkRange(policy) : null;
+  // The start shown in the preview. applyPlan recomputes it from `anchor`
+  // when each create is sent, so a slow run never sends a start the extension
+  // would refuse as less than a minute ahead.
   const startIso = enabled ? nextAnchor(policy, now).toISOString() : null;
+  const anchor = enabled
+    ? {
+        period: policy.period,
+        anchorWeekday: policy.anchorWeekday,
+        anchorDay: policy.anchorDay,
+        anchorTime: policy.anchorTime,
+        timezone: policy.timezone,
+      }
+    : null;
   const memo = enabled ? managedMemo(policy) : null;
 
   const pickFundWallet = () => {
@@ -377,6 +430,7 @@ const planAllowanceSync = ({
         kind: 'create',
         fundWalletId,
         body: createBody,
+        anchor,
         amountSats: policy.amountSats,
       });
       addLoad(fundWalletId, policy.amountSats);
@@ -429,13 +483,24 @@ const planAllowanceSync = ({
       continue;
     }
 
-    if (!scheduleOk) {
+    // Reactivating keeps the row's next_payment_date, and the extension pays
+    // as soon as an active row is at or past it (tasks.py process_allowance;
+    // crud.update_allowance never moves it). A row paused across an anchor
+    // would pay at once, then again on the next anchor. Recreate it from the
+    // next anchor instead. An unreadable date is treated as due.
+    const reactivating = current.active === false && desired.active === true;
+    const dueAt = Date.parse(row.next_payment_date);
+    const overdue =
+      reactivating && !(Number.isFinite(dueAt) && dueAt > now.getTime() + MIN_LEAD_MS);
+
+    if (!scheduleOk || overdue) {
       // Wallet, start, frequency and time zone cannot change in place.
       actions.push({
         ...base,
         kind: 'recreate',
-        reason: 'schedule-changed',
+        reason: scheduleOk ? 'reactivate-overdue' : 'schedule-changed',
         body: createBody,
+        anchor,
         amountSats: policy.amountSats,
         ...rowRef(row),
       });
@@ -561,6 +626,7 @@ const applyPlan = async (
     createLink = createWalletPayLink,
     updateLink = updateWalletPayLink,
     concurrency = DEFAULT_CONCURRENCY,
+    now = () => new Date(),
   },
 ) => {
   const results = [];
@@ -598,13 +664,20 @@ const applyPlan = async (
     return { drift: true, row, note: 'changed while syncing; reported, not retried' };
   };
 
+  // The start is computed when the request is sent, not when the plan was
+  // made: gathering, the deletes and LNbits back-off can outlast the lead.
+  const bodyAtSend = (action) =>
+    action.anchor
+      ? { ...action.body, start_datetime: nextAnchor(action.anchor, now()).toISOString() }
+      : action.body;
+
   const createOn = async (action) => {
     const order = [action.fundWalletId, ...fundOrder.filter((id) => id !== action.fundWalletId)];
     let lastError = null;
     for (const walletId of order) {
       if (full.has(walletId) || !clients.has(walletId)) continue;
       try {
-        const row = await clients.get(walletId).createAllowance(action.body);
+        const row = await clients.get(walletId).createAllowance(bodyAtSend(action));
         return { row, fundWalletId: walletId };
       } catch (error) {
         if (!isLimitError(error)) throw error;
@@ -722,7 +795,7 @@ const gatherSnapshot = async ({
   policy,
   env = process.env,
   concurrency = DEFAULT_CONCURRENCY,
-  listUsers = listRawUsers,
+  listUsers = readRawUserPages,
   listWallets = listUserWalletsWithKeys,
   listLinks = listWalletPayLinksWithKey,
   clientFactory = createAllowanceExtensionClient,
@@ -763,7 +836,18 @@ const gatherSnapshot = async ({
     }
   }
 
-  const people = peopleFromUsers(await listUsers());
+  // { users, total, complete } from the paged reader. Complete only when the
+  // pages add up to the announced total (or an empty page ended an unannounced
+  // list); anything else, a bare array included, cannot prove who has left.
+  const listed = await listUsers();
+  const users = listed?.users;
+  if (!Array.isArray(users)) {
+    throw new AllowanceSyncError('the LNbits user list is malformed', 502, 'users-unreadable');
+  }
+  const announced = Number.isSafeInteger(listed.total) ? listed.total : null;
+  const peopleComplete =
+    listed.complete === true && (announced === null || users.length >= announced);
+  const people = peopleFromUsers(users);
   const wallets = new Map();
   const payLinks = {};
   const fundIds = new Set(fundOrder);
@@ -816,6 +900,7 @@ const gatherSnapshot = async ({
         walletId: walletId || null,
         walletIssue: walletIssue || null,
       })),
+      peopleComplete,
       payLinks,
       allowances,
       fund: { configured: clients.size > 0, wallets: fundWallets },
@@ -861,6 +946,7 @@ const runAllowanceSync = async (
     confirmTotalSats,
     overwriteDrift = false,
     allowUnderfunded = false,
+    allowMassDelete = false,
     by = 'unknown',
   } = {},
   {
@@ -877,6 +963,22 @@ const runAllowanceSync = async (
   }
   if (running) {
     throw new AllowanceSyncError('an allowance sync is already running', 409, 'busy');
+  }
+  // `running` covers this process; the lock file covers the CLI and the
+  // portal (and its timer) running at once, which could both plan "no row"
+  // for a new person and both create one.
+  const lock = store.acquireLock();
+  if (!lock.acquired) {
+    const holder = lock.holder || {};
+    const where = holder.pid
+      ? ` (pid ${holder.pid}${holder.host ? ` on ${holder.host}` : ''} since ${holder.at || 'unknown'})`
+      : '';
+    throw new AllowanceSyncError(
+      `another allowance sync is already running${where}; try again when it finishes. ` +
+        `A lock older than 30 minutes is taken over: ${store.lockPath}`,
+      409,
+      'busy',
+    );
   }
   running = true;
   try {
@@ -908,6 +1010,7 @@ const runAllowanceSync = async (
       now: startedAt,
       publicHost: publicLnbitsHost(env),
       overwriteDrift,
+      allowMassDelete,
       perWalletLimit: envInt(env, 'ALLOWANCE_PER_WALLET_LIMIT', DEFAULT_PER_WALLET_LIMIT),
       maxPeople: envInt(env, 'ALLOWANCE_MAX_PEOPLE', DEFAULT_MAX_PEOPLE),
     });
@@ -956,6 +1059,7 @@ const runAllowanceSync = async (
       fundOrder: gathered.fundOrder,
       wallets: gathered.wallets,
       concurrency,
+      now,
     });
 
     const finishedAt = now();
@@ -1053,6 +1157,7 @@ const runAllowanceSync = async (
     return { ...preview, result: runSummary, errors: results.filter((r) => !r.ok).map((r) => ({ ...publicAction(r.action), error: r.error })) };
   } finally {
     running = false;
+    lock.release();
   }
 };
 
